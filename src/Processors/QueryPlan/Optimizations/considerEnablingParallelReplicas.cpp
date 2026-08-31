@@ -91,11 +91,10 @@ QueryPlan::Node * findTopNodeOfReplicasPlan(QueryPlan::Node * plan_with_parallel
                 /// rather than one of each kind - `Expression -> CreatingSets -> Expression` used to
                 /// leave the search stranded on the second `Expression`.
                 ///
-                /// Only steps that pass their rows through unchanged belong here. A `Limit` or a
-                /// `Sorting` must not: the replicas ship what comes out of them, so looking past one
-                /// would instrument a node carrying more rows than the replicas would actually send.
-                /// Both already report `supportsDataflowStatisticsCollection`, so they can be matched
-                /// on their own terms.
+                /// Only steps that pass their rows through unchanged belong here.
+                /// E.g. `DelayedCreatingSetsStep`. Technically, `ExpressionStep` doesn't qualify,
+                /// but it is safe most of the time, and not skipping it would harm more queries by
+                /// not applying the optimization rather than save from a few false positives.
                 while (node->children.size() == 1
                        && (typeid_cast<const ExpressionStep *>(node->step.get())
                            || typeid_cast<const FilterStep *>(node->step.get())
