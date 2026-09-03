@@ -631,7 +631,7 @@ nuraft::raft_params buildRaftParams(const CoordinationSettings & coordination_se
             log,
             "Both nuraft_max_uncommitted_log_entries and slow_member_backpressure_max_uncommitted_log_entries are 0, so "
             "nothing bounds the log while the slow member backpressure is switched on with `bpon`: the leader keeps "
-            "appending while the commit index is held at the slowest replica. Set at least one of them before using it.");
+            "appending while the commit index is held at the slowest voting replica. Set at least one of them before using it.");
     params.append_entries_backward_probe_throttle_threshold_ = getValueOrMaxInt32AndLogWarning(
         coordination_settings[CoordinationSetting::nuraft_append_entries_backward_probe_throttle_threshold],
         "nuraft_append_entries_backward_probe_throttle_threshold",

@@ -682,11 +682,12 @@ String SlowMemberBackpressureOnCommand::run()
                "`zk_server_state` identifies, to see whether it took effect.";
 
     /// Both caveats matter to whoever just typed this and neither is visible
-    /// from `mntr`: writes now go at the speed of the slowest replica, and the
-    /// setting does not survive a leader change.
+    /// from `mntr`: writes now go at the speed of the slowest voting replica,
+    /// and the setting does not survive a leader change.
     return "Slow member backpressure is ON. Writes now commit at the speed of "
-           "the slowest reachable replica. A new leader switches it off, so "
-           "send this again after a leader change.";
+           "the slowest reachable voting replica; replicas with "
+           "`can_become_leader` off are not waited for. A new leader switches "
+           "it off, so send this again after a leader change.";
 }
 
 String SlowMemberBackpressureOffCommand::run()

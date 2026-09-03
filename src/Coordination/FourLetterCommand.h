@@ -427,7 +427,8 @@ struct FeatureFlagsCommand : public IFourLetterCommand
 /// Ask the leader to wait for replicas that cannot keep up: while on, it does
 /// not advance the commit index past any replica it can reach, so a replica
 /// that fell behind can close the gap instead of drifting until it needs a
-/// snapshot. Writes then go at the speed of the slowest replica.
+/// snapshot. Writes then go at the speed of the slowest voting replica; a
+/// replica with `can_become_leader` off does not vote and is not waited for.
 struct SlowMemberBackpressureOnCommand : public IFourLetterCommand
 {
     explicit SlowMemberBackpressureOnCommand(KeeperDispatcher & keeper_dispatcher_)
