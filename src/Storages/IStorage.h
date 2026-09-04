@@ -124,6 +124,11 @@ public:
     /// each row, which is not necessarily the name of this storage.
     virtual bool readsFromOtherTables() const { return false; }
 
+    /// Storages whose rows this storage returns as its own on read, e.g. the target of `Alias`,
+    /// `MaterializedView` or `Buffer`. Their row policies apply to reads from this storage as well.
+    /// `Merge` is not listed here: it resolves the policies of its children itself, per child.
+    virtual std::vector<StoragePtr> getUnderlyingStorages() const { return {}; }
+
     /// Returns true if the storage is a view of a table or another view.
     virtual bool isView() const { return false; }
 
