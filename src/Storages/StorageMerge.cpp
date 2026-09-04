@@ -2,7 +2,7 @@
 #include <functional>
 #include <iterator>
 #include <Access/ContextAccess.h>
-#include <Access/EnabledRowPolicies.h>
+#include <Storages/getEffectiveRowPolicyFilter.h>
 #include <Analyzer/ConstantNode.h>
 #include <Analyzer/ColumnNode.h>
 #include <Analyzer/FunctionNode.h>
@@ -1190,25 +1190,8 @@ std::vector<ReadFromMerge::ChildPlan> ReadFromMerge::createChildrenPlans(SelectQ
             /// We should remember it to not include this column in the result.
             bool is_smallest_column_requested = false;
 
-            const auto & database_name = std::get<0>(table);
-            const auto & table_name = std::get<3>(table);
-            auto row_policy_filter_ptr = modified_context->getRowPolicyFilter(
-                database_name,
-                table_name,
-                RowPolicyFilterType::SELECT_FILTER);
-            /// `Merge` reads matched tables directly, so include the target policy when a matched table is an `Alias`.
-            if (const auto * alias = storage->as<StorageAlias>())
-            {
-                const auto target_storage_id = alias->getTargetTable()->getStorageID();
-                auto target_row_policy_filter = modified_context->getRowPolicyFilter(
-                    target_storage_id.getDatabaseName(),
-                    target_storage_id.getTableName(),
-                    RowPolicyFilterType::SELECT_FILTER);
-                row_policy_filter_ptr = combineRowPolicyFilters(
-                    std::move(row_policy_filter_ptr), std::move(target_row_policy_filter));
-            }
-
-            if (row_policy_filter_ptr && !row_policy_filter_ptr->isAlwaysTrue())
+            auto row_policy_filter_ptr = getEffectiveRowPolicyFilter(*storage, modified_context);
+            if (row_policy_filter_ptr)
             {
                 row_policy_data_opt = RowPolicyData(row_policy_filter_ptr, storage, modified_context);
                 row_policy_data_opt->extendNames(real_column_names);
