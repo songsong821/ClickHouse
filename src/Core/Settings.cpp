@@ -4095,7 +4095,7 @@ A value of `0` means no reservation.
 This setting takes effect only if MEMORY RESERVATION resource is created.
 )", EXPERIMENTAL) \
     DECLARE(Int32, memory_eviction_score, 0, R"(
-Used in workload scheduling. Controls the order in which queries' memory reservations are evicted when their workload is under memory pressure. Among the queries that can free memory, a query with a higher `memory_eviction_score` is evicted before a query with a lower one; queries with an equal `memory_eviction_score` are evicted largest-reservation-first. The value may be negative to make a query less likely to be evicted.
+Used in workload scheduling. Controls the order in which queries' memory reservations are evicted when their workload is under memory pressure. Among the queries that can free memory, a query with a higher `memory_eviction_score` is evicted before a query with a lower one; queries with an equal `memory_eviction_score` are evicted largest-reservation-first. A query whose own reservation cannot fit within the workload limit even if every other reservation is evicted is stopped to fail its own request, regardless of score. The value may be negative to make a query less likely to be evicted.
 A value of `0` (the default) means the score does not influence the eviction order; queries are then evicted largest-reservation-first among those that can free memory.
 This setting takes effect only if MEMORY RESERVATION resource is created.
 )", EXPERIMENTAL) \
