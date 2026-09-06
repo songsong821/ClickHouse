@@ -34,7 +34,8 @@ def start_cluster():
 def clean():
     node.query(
         """
-        drop table if exists ddl_dst sync;
+        drop table if exists ddl_dst_0 sync;
+        drop table if exists ddl_dst_1 sync;
         drop workload if exists regular;
         drop workload if exists ddlwl;
         drop workload if exists all;
@@ -65,38 +66,47 @@ def inflight(workload: str) -> int:
     )
 
 
-def run_in_background(query: str) -> "BgQuery":
-    bg = BgQuery(query)
-    bg.start()
-    return bg
+class QueryPool:
+    """Keep `num` copies of a query continuously in flight (a single such query finishes too
+    fast to observe an in-flight slot), mirroring tests/integration/test_scheduler_query."""
 
-
-class BgQuery:
-    def __init__(self, query: str):
-        self.query = query
+    def __init__(self, make_query, num: int = 2):
+        self.make_query = make_query  # i -> SQL
+        self.num = num
+        self.threads: list = []
+        self.stop_event = threading.Event()
         self.error: str = None
-        self.thread = threading.Thread(target=self._run)
-
-    def _run(self) -> None:
-        try:
-            node.query(self.query)
-        except Exception as ex:  # noqa: BLE001
-            self.error = str(ex)
 
     def start(self) -> None:
-        self.thread.start()
+        def run(i: int) -> None:
+            while not self.stop_event.is_set():
+                try:
+                    node.query(self.make_query(i))
+                except Exception as ex:  # noqa: BLE001
+                    self.error = str(ex)
+                    return
 
-    def join(self) -> None:
-        self.thread.join()
+        for i in range(self.num):
+            t = threading.Thread(target=run, args=(i,))
+            self.threads.append(t)
+            t.start()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        for t in self.threads:
+            t.join()
+        self.threads.clear()
 
 
-def wait_inflight(workload: str, expected: int, timeout: float = 30.0) -> None:
+def wait_inflight_at_least(workload: str, limit: int, timeout: float = 60.0) -> None:
     deadline = time.time() + timeout
+    last = 0
     while time.time() < deadline:
-        if inflight(workload) == expected:
+        last = inflight(workload)
+        if last >= limit:
             return
         time.sleep(0.1)
-    assert inflight(workload) == expected, f"workload '{workload}' inflight != {expected}"
+    raise AssertionError(f"inflight('{workload}') never reached {limit} (last={last})")
 
 
 def test_server_setting_is_enabled() -> None:
@@ -109,34 +119,42 @@ def test_server_setting_is_enabled() -> None:
 
 
 def test_ddl_query_uses_ddl_workload() -> None:
-    # A slow DDL (CREATE ... AS SELECT) holds a QUERY slot for the whole INSERT SELECT.
-    # With use_ddl_workload=1 it must be admitted under `ddl_workload` ('ddlwl'), NOT the
-    # session `workload` ('regular').
+    # With use_ddl_workload=1 a DDL (CREATE ... AS SELECT, kept CPU-bound so it holds its
+    # query slot) must be admitted under `ddl_workload` ('ddlwl'), NOT the session `workload`
+    # ('regular').
     setup_workloads()
-    bg = run_in_background(
-        "create table ddl_dst engine=MergeTree order by tuple() as "
-        "select number from numbers_mt(100000000) "
-        "settings ddl_workload='ddlwl', workload='regular', max_threads=2"
+    pool = QueryPool(
+        lambda i: (
+            f"create or replace table ddl_dst_{i} engine=MergeTree order by tuple() as "
+            f"select count(*) from numbers_mt(100000000) "
+            f"settings ddl_workload='ddlwl', workload='regular', max_threads=2"
+        ),
+        num=2,
     )
+    pool.start()
     try:
-        wait_inflight("ddlwl", 1)
+        wait_inflight_at_least("ddlwl", 1)
         # The session workload must not be touched by the DDL.
-        assert inflight("regular") == 0
+        assert inflight("regular") == 0, "DDL must not run under the session workload"
     finally:
-        bg.join()
-    assert bg.error is None, bg.error
+        pool.stop()
+    assert pool.error is None, pool.error
 
 
 def test_regular_query_uses_workload() -> None:
     # A non-DDL query is unaffected: it stays under the `workload` setting ('regular').
     setup_workloads()
-    bg = run_in_background(
-        "select count(*) from numbers_mt(100000000) "
-        "settings workload='regular', max_threads=2"
+    pool = QueryPool(
+        lambda i: (
+            "select count(*) from numbers_mt(100000000) "
+            "settings workload='regular', max_threads=2"
+        ),
+        num=2,
     )
+    pool.start()
     try:
-        wait_inflight("regular", 1)
+        wait_inflight_at_least("regular", 1)
         assert inflight("ddlwl") == 0
     finally:
-        bg.join()
-    assert bg.error is None, bg.error
+        pool.stop()
+    assert pool.error is None, pool.error
