@@ -3,15 +3,19 @@
 
 #include <DataTypes/DataTypeDate.h>
 #include <DataTypes/DataTypeDateTime.h>
+#include <DataTypes/DataTypeDateTime64.h>
 
 #include <AggregateFunctions/IAggregateFunction.h>
+#include <Columns/ColumnDecimal.h>
 #include <Columns/ColumnsNumber.h>
+#include <Core/DecimalFunctions.h>
 #include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypesNumber.h>
 #include <Functions/array/length.h>
 #include <IO/ReadBufferFromMemory.h>
 #include <IO/ReadHelpers.h>
 #include <IO/WriteHelpers.h>
+#include <base/arithmeticOverflow.h>
 #include <base/range.h>
 #include <Common/VectorWithMemoryTracking.h>
 #include <Common/assert_cast.h>
@@ -19,6 +23,7 @@
 #include <bitset>
 #include <cstddef>
 #include <iterator>
+#include <limits>
 #include <stack>
 #include <vector>
 
@@ -39,6 +44,7 @@ namespace ErrorCodes
     extern const int BAD_ARGUMENTS;
     extern const int LOGICAL_ERROR;
     extern const int TOO_LARGE_ARRAY_SIZE;
+    extern const int ARGUMENT_OUT_OF_BOUND;
 }
 
 namespace
@@ -160,12 +166,23 @@ public:
         , pattern(pattern_)
     {
         arg_count = arguments.size();
+
+        /// Timestamps are kept at the precision of the argument, but the durations in the `(?t...)` conditions of
+        /// the pattern are always seconds, so that the same pattern keeps its meaning when a column changes from
+        /// `DateTime` to `DateTime64` (or between two `DateTime64` scales). Convert them to the argument's ticks.
+        if (const auto * date_time64_type = typeid_cast<const DataTypeDateTime64 *>(arguments.front().get()))
+            time_scale_multiplier = DecimalUtils::scaleMultiplier<Int64>(date_time64_type->getScale());
+
         parsePattern();
     }
 
     void add(AggregateDataPtr __restrict place, const IColumn ** columns, const size_t row_num, Arena *) const override
     {
-        const auto timestamp = assert_cast<const ColumnVector<T> *>(columns[0])->getData()[row_num];
+        typename Data::Timestamp timestamp;
+        if constexpr (is_decimal<T>)
+            timestamp = assert_cast<const ColumnDecimal<T> *>(columns[0])->getData()[row_num].value;
+        else
+            timestamp = assert_cast<const ColumnVector<T> *>(columns[0])->getData()[row_num];
 
         typename Data::Events events;
         for (const auto i : collections::range(1, arg_count))
@@ -213,10 +230,12 @@ private:
     struct PatternAction final
     {
         PatternActionType type;
-        std::uint64_t extra{};
+        /// Signed on purpose: a `DateTime64` timestamp can be negative, and `base_it->first + extra`
+        /// would be evaluated in unsigned arithmetic (wrapping around zero) if this were unsigned.
+        Int64 extra{};
 
         PatternAction() = default;
-        explicit PatternAction(const PatternActionType type_, const std::uint64_t extra_ = 0) : type{type_}, extra{extra_} {}
+        explicit PatternAction(const PatternActionType type_, const Int64 extra_ = 0) : type{type_}, extra{extra_} {}
     };
 
     using PatternActions = PODArrayWithStackMemory<PatternAction, 64>;
@@ -289,8 +308,15 @@ private:
                         actions.back().type != PatternActionType::KleeneStar)
                         throw Exception(ErrorCodes::BAD_ARGUMENTS, "Temporal condition should be preceded by an event condition");
 
+                    Int64 duration_in_ticks = 0;
+                    if (duration > static_cast<UInt64>(std::numeric_limits<Int64>::max())
+                        || common::mulOverflow(static_cast<Int64>(duration), time_scale_multiplier, duration_in_ticks))
+                        throw Exception(ErrorCodes::ARGUMENT_OUT_OF_BOUND,
+                            "Duration {} in the temporal condition of the pattern is too large for the timestamp type",
+                            duration);
+
                     pattern_has_time = true;
-                    actions.emplace_back(type, duration);
+                    actions.emplace_back(type, duration_in_ticks);
                 }
                 else
                 {
@@ -303,7 +329,7 @@ private:
                     if (event_number == 0 || event_number > arg_count - 1)
                         throw Exception(ErrorCodes::BAD_ARGUMENTS, "Event number {} is out of range", event_number);
 
-                    actions.emplace_back(PatternActionType::SpecificEvent, event_number - 1);
+                    actions.emplace_back(PatternActionType::SpecificEvent, static_cast<Int64>(event_number - 1));
                     dfa_states.back().transition = DFATransition::SpecificEvent;
                     dfa_states.back().event = static_cast<uint32_t>(event_number - 1);
                     dfa_states.emplace_back();
@@ -396,7 +422,7 @@ protected:
     }
 
     template <typename EventEntry, bool remember_matched_events = false>
-    bool backtrackingMatch(EventEntry & events_it, const EventEntry events_end, VectorWithMemoryTracking<T> * best_matched_events = nullptr) const
+    bool backtrackingMatch(EventEntry & events_it, const EventEntry events_end, VectorWithMemoryTracking<typename Data::Timestamp> * best_matched_events = nullptr) const
     {
         const auto action_begin = std::begin(actions);
         const auto action_end = std::end(actions);
@@ -409,7 +435,7 @@ protected:
         using backtrack_info = std::tuple<decltype(action_it), EventEntry, EventEntry>;
         std::stack<backtrack_info> back_stack;
 
-        VectorWithMemoryTracking<T> current_matched_events;
+        VectorWithMemoryTracking<typename Data::Timestamp> current_matched_events;
         VectorWithMemoryTracking<decltype(action_it)> current_matched_actions;
 
         const auto do_push_event = [&]
@@ -460,7 +486,7 @@ protected:
         {
             if (action_it->type == PatternActionType::SpecificEvent)
             {
-                if (events_it->second.test(action_it->extra))
+                if (events_it->second.test(static_cast<size_t>(action_it->extra)))
                 {
                     if constexpr (remember_matched_events)
                         do_push_event();
@@ -566,10 +592,10 @@ protected:
     }
 
     template <typename EventEntry>
-    VectorWithMemoryTracking<T> backtrackingMatchEvents(EventEntry & events_it, const EventEntry events_end) const
+    VectorWithMemoryTracking<typename Data::Timestamp> backtrackingMatchEvents(EventEntry & events_it, const EventEntry events_end) const
     {
 
-        VectorWithMemoryTracking<T> best_matched_events;
+        VectorWithMemoryTracking<typename Data::Timestamp> best_matched_events;
         backtrackingMatch<EventEntry, true>(events_it, events_end, &best_matched_events);
 
         return best_matched_events;
@@ -603,7 +629,7 @@ protected:
                 /// matching specific event
                 else
                 {
-                    if (events_it->second.test(det_part_it->extra))
+                    if (events_it->second.test(static_cast<size_t>(det_part_it->extra)))
                         ++events_it, ++det_part_it;
 
                     /// abandon current matching, try to match the deterministic fragment further in the list
@@ -679,6 +705,9 @@ protected:
 private:
     std::string pattern;
     size_t arg_count;
+    /// Multiplier from seconds - the unit of the `(?t...)` durations in the pattern - to the ticks of the
+    /// timestamp argument. `1` for every accepted type except `DateTime64`, where it is `10 ^ scale`.
+    Int64 time_scale_multiplier = 1;
     PatternActions actions;
 
     DFAStates dfa_states;
@@ -745,19 +774,20 @@ public:
         offsets_to.push_back(offsets_to.back() + size);
         if (size)
         {
-            typename ColumnVector<T>::Container & data_to = assert_cast<ColumnVector<T> &>(arr_to.getData()).getData();
+            typename ColumnVectorOrDecimal<T>::Container & data_to
+                = assert_cast<ColumnVectorOrDecimal<T> &>(arr_to.getData()).getData();
 
             for (auto it : result_vec)
             {
-                data_to.push_back(it);
+                data_to.push_back(static_cast<T>(it));
             }
         }
     }
 
 private:
-    VectorWithMemoryTracking<T> getEvents(ConstAggregateDataPtr __restrict place) const
+    VectorWithMemoryTracking<typename Data::Timestamp> getEvents(ConstAggregateDataPtr __restrict place) const
     {
-        VectorWithMemoryTracking<T> res;
+        VectorWithMemoryTracking<typename Data::Timestamp> res;
         const auto & data_ref = this->data(place);
 
         const auto events_begin = std::begin(data_ref.events_list);
@@ -856,9 +886,13 @@ AggregateFunctionPtr createAggregateFunctionSequenceBase(
         return std::make_shared<AggregateFunction<DataTypeDateTime::FieldType, Data<DataTypeDateTime::FieldType>>>(argument_types, params, pattern);
     if (which.isDate())
         return std::make_shared<AggregateFunction<DataTypeDate::FieldType, Data<DataTypeDate::FieldType>>>(argument_types, params, pattern);
+    /// `DateTime64` timestamps are stored and compared as signed ticks of the column's own scale, so events that
+    /// share a second still order by their sub-second part. The `(?t...)` durations stay in seconds.
+    if (which.isDateTime64())
+        return std::make_shared<AggregateFunction<DataTypeDateTime64::FieldType, Data<Int64>>>(argument_types, params, pattern);
 
     throw Exception(ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT,
-                    "Illegal type {} of first argument of aggregate function {}, must be DateTime",
+                    "Illegal type {} of first argument of aggregate function {}, must be Date, DateTime, DateTime64 or an unsigned integer",
                     time_arg->getName(), name);
 }
 
