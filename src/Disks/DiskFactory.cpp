@@ -106,15 +106,15 @@ void DiskFactory::checkForUnknownKeys(
 
     throw Exception(
         ErrorCodes::UNKNOWN_ELEMENT_IN_CONFIG,
-        "The definition of the disk '{}' of type '{}' contains unknown element{}: {}. "
-        "Nothing reads {}, so {} without any effect - most likely it is a typo or an option that does not exist. "
+        "Unknown element{} in the definition of the disk `{}` of type `{}`: {}. "
+        "Nothing reads {}, so {} no effect - most likely it is a typo or an option of another disk type. "
         "You can disable this check with <skip_check_for_incorrect_settings>1</skip_check_for_incorrect_settings>.",
+        unknown_keys.size() == 1 ? "" : "s",
         name,
         disk_type,
-        unknown_keys.size() == 1 ? "" : "s",
         fmt::join(unknown_keys, ", "),
         unknown_keys.size() == 1 ? "it" : "them",
-        unknown_keys.size() == 1 ? "it is accepted" : "they are accepted");
+        unknown_keys.size() == 1 ? "it has" : "they have");
 }
 
 void DiskFactory::clearRegistry()

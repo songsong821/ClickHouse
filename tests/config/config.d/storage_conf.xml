@@ -5,7 +5,6 @@
         <disks>
             <s3_disk>
                 <type>s3</type>
-                <path>s3_disk/</path>
                 <endpoint>http://localhost:11111/test/s3/</endpoint>
                 <access_key_id>clickhouse</access_key_id>
                 <secret_access_key>clickhouse</secret_access_key>
@@ -24,7 +23,6 @@
                  the metadata storage, and it is not configurable in the open-source build. -->
             <s3_disk_no_fake_transaction>
                 <type>s3</type>
-                <path>s3_disk_no_fake_transaction/</path>
                 <endpoint>http://localhost:11111/test/s3_no_fake_transaction/</endpoint>
                 <access_key_id>clickhouse</access_key_id>
                 <secret_access_key>clickhouse</secret_access_key>

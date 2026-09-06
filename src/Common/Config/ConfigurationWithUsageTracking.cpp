@@ -56,7 +56,7 @@ void ConfigurationWithUsageTracking::enumerate(const std::string & key, Keys & r
     config.keys(key, range);
 }
 
-void ConfigurationWithUsageTracking::markAsUsed(const String & key)
+void ConfigurationWithUsageTracking::markAsUsed(const String & key) const
 {
     std::lock_guard lock(mutex);
     used_keys.insert(normalizeKey(key));

@@ -29,7 +29,7 @@ public:
     ~ConfigurationWithUsageTracking() override;
 
     /// Remember a key as used, for the keys that are read by someone else, not through this object.
-    void markAsUsed(const String & key);
+    void markAsUsed(const String & key) const;
 
     /// The leaf keys inside `prefix` that were neither read through this object nor marked as used.
     /// An empty prefix means the whole configuration. The names are returned relative to `prefix`.
