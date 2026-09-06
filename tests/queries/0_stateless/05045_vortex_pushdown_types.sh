@@ -31,16 +31,24 @@ $CLICKHOUSE_LOCAL -q "
     FORMAT Vortex" > "$DATA_FILE"
 
 # Each query runs with the pushdown on and off, so every case prints its answer twice.
+# All of them run in one `clickhouse-local`; the labels go through it as well, or they would not
+# keep their place among the answers.
+QUERIES=""
+
+say() {
+    QUERIES+="SELECT '$1';"
+}
+
 run_query() {
     local label=$1
     local query=$2
-    echo "$label"
+    say "$label"
     for push_down in 1 0; do
-        $CLICKHOUSE_LOCAL -q "$query SETTINGS input_format_vortex_filter_push_down = $push_down"
+        QUERIES+="$query SETTINGS input_format_vortex_filter_push_down = $push_down;"
     done
 }
 
-echo "=== Date32 ==="
+say "=== Date32 ==="
 run_query "d = string literal:" \
     "SELECT count() FROM file('$DATA_FILE', 'Vortex') WHERE d = '2020-03-01'"
 run_query "d != typed literal:" \
@@ -50,7 +58,7 @@ run_query "d < / <= / > / >=:" \
 run_query "d range with min/max:" \
     "SELECT count(), min(d), max(d) FROM file('$DATA_FILE', 'Vortex') WHERE d >= '2020-03-01' AND d < '2020-04-01'"
 
-echo "=== DateTime64 ==="
+say "=== DateTime64 ==="
 run_query "dt0 (UTC, scale 0) range:" \
     "SELECT count() FROM file('$DATA_FILE', 'Vortex') WHERE dt0 >= toDateTime64('2020-01-01 00:05:00', 0, 'UTC')"
 run_query "dt0 equality:" \
@@ -60,7 +68,7 @@ run_query "dt3 (Asia/Istanbul, scale 3) range:" \
 run_query "dt3 equality on a string literal:" \
     "SELECT count() FROM file('$DATA_FILE', 'Vortex') WHERE dt3 = '2020-01-01 00:03:20'"
 
-echo "=== Bool ==="
+say "=== Bool ==="
 run_query "b = true:" \
     "SELECT count() FROM file('$DATA_FILE', 'Vortex') WHERE b = true"
 run_query "b = false:" \
@@ -74,7 +82,7 @@ run_query "NOT b:" \
 run_query "Bool header over a U8 file column (not pushed, values above 1 clamp):" \
     "SELECT count() FROM file('$DATA_FILE', 'Vortex', 'u8 Bool') WHERE u8 = true"
 
-echo "=== Signed and unsigned integers ==="
+say "=== Signed and unsigned integers ==="
 run_query "negative Int32 bound:" \
     "SELECT count(), min(i), max(i) FROM file('$DATA_FILE', 'Vortex') WHERE i < -490"
 run_query "UInt64 against a negative bound (never matches):" \
@@ -82,7 +90,7 @@ run_query "UInt64 against a negative bound (never matches):" \
 run_query "UInt32 header over a U64 file column (not pushed):" \
     "SELECT count() FROM file('$DATA_FILE', 'Vortex', 'u UInt32') WHERE u = 5"
 
-echo "=== Nullable ==="
+say "=== Nullable ==="
 run_query "nb = value:" \
     "SELECT count() FROM file('$DATA_FILE', 'Vortex') WHERE nb = -499"
 run_query "nb != value:" \
@@ -92,7 +100,7 @@ run_query "nb IS NULL:" \
 run_query "nb IS NOT NULL:" \
     "SELECT count() FROM file('$DATA_FILE', 'Vortex') WHERE nb IS NOT NULL"
 
-echo "=== IN ==="
+say "=== IN ==="
 run_query "IN:" \
     "SELECT count() FROM file('$DATA_FILE', 'Vortex') WHERE u IN (1, 5, 999, 12345)"
 run_query "NOT IN:" \
@@ -108,7 +116,7 @@ run_query "collapsing tuple NOT IN (must keep every row):" \
 run_query "tuple IN (not pushed):" \
     "SELECT count() FROM file('$DATA_FILE', 'Vortex') WHERE (u, i) IN ((5, -495))"
 
-echo "=== Strings ==="
+say "=== Strings ==="
 run_query "LIKE with a perfect prefix:" \
     "SELECT count() FROM file('$DATA_FILE', 'Vortex') WHERE s LIKE 'str99%'"
 run_query "LIKE without wildcards (an equality):" \
@@ -124,7 +132,7 @@ run_query "startsWith:" \
 run_query "LowCardinality equality:" \
     "SELECT count() FROM file('$DATA_FILE', 'Vortex') WHERE lc = 'g3'"
 
-echo "=== Floats ==="
+say "=== Floats ==="
 run_query "Float64 range:" \
     "SELECT count() FROM file('$DATA_FILE', 'Vortex') WHERE f >= 249.5"
 run_query "Float32 with a non-representable bound (not pushed):" \
@@ -134,7 +142,7 @@ run_query "NaN rows against a range:" \
 run_query "NaN rows against not-equals:" \
     "SELECT count() FROM file('$DATA_FILE', 'Vortex') WHERE fn != 1"
 
-echo "=== Structural ==="
+say "=== Structural ==="
 run_query "subcolumn predicate (not pushed):" \
     "SELECT count() FROM file('$DATA_FILE', 'Vortex') WHERE t.a = 5"
 run_query "predicate on a column missing in the file:" \
@@ -148,11 +156,13 @@ run_query "NOT over an untranslatable subtree:" \
 run_query "always-false condition:" \
     "SELECT count() FROM file('$DATA_FILE', 'Vortex') WHERE 0"
 
-echo "=== Date over a U16 file column ==="
+say "=== Date over a U16 file column ==="
 # ClickHouse writes `Date` as `U16`, so reading it back as `Date` compares the same day numbers.
 run_query "Date header, range:" \
     "SELECT count() FROM file('$DATA_FILE', 'Vortex', 'u16d Date') WHERE u16d >= '1970-03-01'"
 run_query "Date header, equality on a string literal:" \
     "SELECT count() FROM file('$DATA_FILE', 'Vortex', 'u16d Date') WHERE u16d = '1970-04-11'"
+
+$CLICKHOUSE_LOCAL -q "$QUERIES"
 
 rm -f "$DATA_FILE"

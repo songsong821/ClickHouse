@@ -63,12 +63,16 @@ assert_scan_pushdown "String pushdown reduces scan bytes" "s = '1'"
 assert_scan_pushdown "Float pushdown reduces scan bytes" "f = 0.25"
 
 # Same query twice, pushdown on and off, so every case below prints its answer twice.
+# All of them run in one `clickhouse-local`; the labels go through it as well, or they would not
+# keep their place among the answers.
+QUERIES=""
+
 run_query() {
     local label=$1
     local query=$2
-    echo "$label"
+    QUERIES+="SELECT '$label';"
     for push_down in 1 0; do
-        $CLICKHOUSE_LOCAL -q "$query SETTINGS input_format_vortex_filter_push_down = $push_down"
+        QUERIES+="$query SETTINGS input_format_vortex_filter_push_down = $push_down;"
     done
 }
 
@@ -110,5 +114,7 @@ run_query "Predicate on a column read with a different type:" \
     "SELECT count() FROM file('$DATA_FILE', 'Vortex', 'n UInt32') WHERE n = 5"
 run_query "LowCardinality target type:" \
     "SELECT toTypeName(lc), lc FROM file('$DATA_FILE', 'Vortex', 'lc LowCardinality(String)') WHERE lc = '4' LIMIT 1"
+
+$CLICKHOUSE_LOCAL -q "$QUERIES"
 
 rm -f "$DATA_FILE" "$PUSHDOWN_DATA_FILE"
