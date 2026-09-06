@@ -124,6 +124,7 @@
                     "ja/reference/statements/create/table/replace-table"
                   ]
                 },
+                "ja/reference/statements/create/token",
                 "ja/reference/statements/create/user",
                 "ja/reference/statements/create/view"
               ]

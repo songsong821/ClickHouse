@@ -153,6 +153,7 @@ ClickHouse의 권한 계층 구조는 아래와 같습니다.
     * `CREATE ROLE`
     * `CREATE ROW POLICY`
     * `CREATE SETTINGS PROFILE`
+    * `CREATE TOKEN`
     * `CREATE USER`
     * `DROP QUOTA`
     * `DROP ROLE`
@@ -561,6 +562,7 @@ Not enough privileges. To execute this query, it's necessary to have the grant C
   * `CREATE USER`. 수준: `GLOBAL`
   * `ALTER USER`. 수준: `GLOBAL`
   * `DROP USER`. 수준: `GLOBAL`
+  * `CREATE TOKEN`. 수준: `GLOBAL`
   * `CREATE ROLE`. 수준: `GLOBAL`
   * `ALTER ROLE`. 수준: `GLOBAL`
   * `DROP ROLE`. 수준: `GLOBAL`
@@ -582,7 +584,9 @@ Not enough privileges. To execute this query, it's necessary to have the grant C
     * `SHOW_SETTINGS_PROFILES`. 수준: `GLOBAL`. 별칭: `SHOW PROFILES`, `SHOW CREATE SETTINGS PROFILE`, `SHOW CREATE PROFILE`
   * `ALLOW SQL SECURITY NONE`. 수준: `GLOBAL`. 별칭: `CREATE SQL SECURITY NONE`, `SQL SECURITY NONE`, `SECURITY NONE`
 
-`ROLE ADMIN` 권한이 있으면 admin 옵션과 함께 사용자에게 부여되지 않은 역할을 포함해 모든 역할을 할당하거나 회수할 수 있습니다.
+`ROLE ADMIN` 권한이 있으면 `ADMIN OPTION`과 함께 사용자에게 부여되지 않은 역할을 포함해 모든 역할을 할당하거나 회수할 수 있습니다.
+
+`CREATE TOKEN` 권한은 계정 관리에 관한 다른 권한 없이도 [`CREATE TOKEN`](/ko/reference/statements/create/token) 또는 이에 상응하는 `ALTER USER <current user> ADD IDENTIFIED ...` 문으로 자신의 계정에 인증 메서드를 추가할 수 있게 합니다. 이 권한이 `ALTER USER`와 분리되어 있는 이유는, 사용자가 자기 계정의 보안 수준을 낮출 수 있기 때문입니다. 예를 들어 원래는 인증서로만 연결할 수 있는 계정에 수명이 긴 비밀번호를 추가하는 경우가 이에 해당합니다.
 
 ### SYSTEM {#system}
 

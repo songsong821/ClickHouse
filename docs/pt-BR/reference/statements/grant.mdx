@@ -153,6 +153,7 @@ A hierarquia de privilégios no ClickHouse é mostrada abaixo:
     * `CREATE ROLE`
     * `CREATE ROW POLICY`
     * `CREATE SETTINGS PROFILE`
+    * `CREATE TOKEN`
     * `CREATE USER`
     * `DROP QUOTA`
     * `DROP ROLE`
@@ -561,6 +562,7 @@ Permite que um usuário execute consultas que gerenciem usuários, funções e p
   * `CREATE USER`. Nível: `GLOBAL`
   * `ALTER USER`. Nível: `GLOBAL`
   * `DROP USER`. Nível: `GLOBAL`
+  * `CREATE TOKEN`. Nível: `GLOBAL`
   * `CREATE ROLE`. Nível: `GLOBAL`
   * `ALTER ROLE`. Nível: `GLOBAL`
   * `DROP ROLE`. Nível: `GLOBAL`
@@ -583,6 +585,8 @@ Permite que um usuário execute consultas que gerenciem usuários, funções e p
   * `ALLOW SQL SECURITY NONE`. Nível: `GLOBAL`. Aliases: `CREATE SQL SECURITY NONE`, `SQL SECURITY NONE`, `SECURITY NONE`
 
 O privilégio `ROLE ADMIN` permite que um usuário conceda e revogue quaisquer funções, incluindo aqueles que não foram atribuídos ao usuário com a opção admin.
+
+O privilégio `CREATE TOKEN` permite que um usuário adicione um método de autenticação à sua própria conta, com [`CREATE TOKEN`](/pt-BR/reference/statements/create/token) ou com a instrução equivalente `ALTER USER <current user> ADD IDENTIFIED ...`, sem que ele possa administrar contas de outras maneiras. Ele é separado de `ALTER USER` porque permite que um usuário reduza o nível de segurança da própria conta, por exemplo, adicionando uma senha de longa duração a uma conta que, de outro modo, só seria acessível com um certificado.
 
 ### SYSTEM {#system}
 

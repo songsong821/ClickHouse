@@ -153,6 +153,7 @@ La hiérarchie des privilèges dans ClickHouse est présentée ci-dessous :
     * `CREATE ROLE`
     * `CREATE ROW POLICY`
     * `CREATE SETTINGS PROFILE`
+    * `CREATE TOKEN`
     * `CREATE USER`
     * `DROP QUOTA`
     * `DROP ROLE`
@@ -557,32 +558,35 @@ Le privilège `KILL QUERY` permet à un utilisateur d&#39;interrompre les requê
 
 Permet à un utilisateur d’exécuter des requêtes de gestion des utilisateurs, des rôles et des politiques de lignes.
 
-* `ACCESS MANAGEMENT`. Niveau : `GROUP`
-  * `CREATE USER`. Niveau : `GLOBAL`
-  * `ALTER USER`. Niveau : `GLOBAL`
-  * `DROP USER`. Niveau : `GLOBAL`
-  * `CREATE ROLE`. Niveau : `GLOBAL`
-  * `ALTER ROLE`. Niveau : `GLOBAL`
-  * `DROP ROLE`. Niveau : `GLOBAL`
-  * `ROLE ADMIN`. Niveau : `GLOBAL`
-  * `CREATE ROW POLICY`. Niveau : `GLOBAL`. Alias : `CREATE POLICY`
-  * `ALTER ROW POLICY`. Niveau : `GLOBAL`. Alias : `ALTER POLICY`
-  * `DROP ROW POLICY`. Niveau : `GLOBAL`. Alias : `DROP POLICY`
-  * `CREATE QUOTA`. Niveau : `GLOBAL`
-  * `ALTER QUOTA`. Niveau : `GLOBAL`
-  * `DROP QUOTA`. Niveau : `GLOBAL`
-  * `CREATE SETTINGS PROFILE`. Niveau : `GLOBAL`. Alias : `CREATE PROFILE`
-  * `ALTER SETTINGS PROFILE`. Niveau : `GLOBAL`. Alias : `ALTER PROFILE`
-  * `DROP SETTINGS PROFILE`. Niveau : `GLOBAL`. Alias : `DROP PROFILE`
-  * `SHOW ACCESS`. Niveau : `GROUP`
-    * `SHOW_USERS`. Niveau : `GLOBAL`. Alias : `SHOW CREATE USER`
-    * `SHOW_ROLES`. Niveau : `GLOBAL`. Alias : `SHOW CREATE ROLE`
-    * `SHOW_ROW_POLICIES`. Niveau : `GLOBAL`. Alias : `SHOW POLICIES`, `SHOW CREATE ROW POLICY`, `SHOW CREATE POLICY`
-    * `SHOW_QUOTAS`. Niveau : `GLOBAL`. Alias : `SHOW CREATE QUOTA`
-    * `SHOW_SETTINGS_PROFILES`. Niveau : `GLOBAL`. Alias : `SHOW PROFILES`, `SHOW CREATE SETTINGS PROFILE`, `SHOW CREATE PROFILE`
-  * `ALLOW SQL SECURITY NONE`. Niveau : `GLOBAL`. Alias : `CREATE SQL SECURITY NONE`, `SQL SECURITY NONE`, `SECURITY NONE`
+* `ACCESS MANAGEMENT`. Niveau : `GROUP`
+  * `CREATE USER`. Niveau : `GLOBAL`
+  * `ALTER USER`. Niveau : `GLOBAL`
+  * `DROP USER`. Niveau : `GLOBAL`
+  * `CREATE TOKEN`. Niveau : `GLOBAL`
+  * `CREATE ROLE`. Niveau : `GLOBAL`
+  * `ALTER ROLE`. Niveau : `GLOBAL`
+  * `DROP ROLE`. Niveau : `GLOBAL`
+  * `ROLE ADMIN`. Niveau : `GLOBAL`
+  * `CREATE ROW POLICY`. Niveau : `GLOBAL`. Alias : `CREATE POLICY`
+  * `ALTER ROW POLICY`. Niveau : `GLOBAL`. Alias : `ALTER POLICY`
+  * `DROP ROW POLICY`. Niveau : `GLOBAL`. Alias : `DROP POLICY`
+  * `CREATE QUOTA`. Niveau : `GLOBAL`
+  * `ALTER QUOTA`. Niveau : `GLOBAL`
+  * `DROP QUOTA`. Niveau : `GLOBAL`
+  * `CREATE SETTINGS PROFILE`. Niveau : `GLOBAL`. Alias : `CREATE PROFILE`
+  * `ALTER SETTINGS PROFILE`. Niveau : `GLOBAL`. Alias : `ALTER PROFILE`
+  * `DROP SETTINGS PROFILE`. Niveau : `GLOBAL`. Alias : `DROP PROFILE`
+  * `SHOW ACCESS`. Niveau : `GROUP`
+    * `SHOW_USERS`. Niveau : `GLOBAL`. Alias : `SHOW CREATE USER`
+    * `SHOW_ROLES`. Niveau : `GLOBAL`. Alias : `SHOW CREATE ROLE`
+    * `SHOW_ROW_POLICIES`. Niveau : `GLOBAL`. Alias : `SHOW POLICIES`, `SHOW CREATE ROW POLICY`, `SHOW CREATE POLICY`
+    * `SHOW_QUOTAS`. Niveau : `GLOBAL`. Alias : `SHOW CREATE QUOTA`
+    * `SHOW_SETTINGS_PROFILES`. Niveau : `GLOBAL`. Alias : `SHOW PROFILES`, `SHOW CREATE SETTINGS PROFILE`, `SHOW CREATE PROFILE`
+  * `ALLOW SQL SECURITY NONE`. Niveau : `GLOBAL`. Alias : `CREATE SQL SECURITY NONE`, `SQL SECURITY NONE`, `SECURITY NONE`
 
 Le privilège `ROLE ADMIN` permet à un utilisateur d’attribuer et de révoquer tous les rôles, y compris ceux qui ne lui ont pas été attribués avec l’option admin.
+
+Le privilège `CREATE TOKEN` permet à un utilisateur d’ajouter une méthode d’authentification à son propre compte, à l’aide de [`CREATE TOKEN`](/fr/reference/statements/create/token) ou de l’instruction équivalente `ALTER USER <current user> ADD IDENTIFIED ...`, sans pour autant lui donner la possibilité d’administrer les comptes. Il est distinct de `ALTER USER` car il permet à un utilisateur d’abaisser le niveau de sécurité de son propre compte, par exemple en ajoutant un mot de passe à longue durée de vie à un compte qui n’est autrement joignable qu’avec un certificat.
 
 ### SYSTEM {#system}
 

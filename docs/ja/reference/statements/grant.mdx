@@ -153,6 +153,7 @@ ClickHouse における権限の階層は以下のとおりです。
     * `CREATE ROLE`
     * `CREATE ROW POLICY`
     * `CREATE SETTINGS PROFILE`
+    * `CREATE TOKEN`
     * `CREATE USER`
     * `DROP QUOTA`
     * `DROP ROLE`
@@ -560,6 +561,7 @@ Not enough privileges. To execute this query, it's necessary to have the grant C
   * `CREATE USER`. レベル: `GLOBAL`
   * `ALTER USER`. レベル: `GLOBAL`
   * `DROP USER`. レベル: `GLOBAL`
+  * `CREATE TOKEN`. レベル: `GLOBAL`
   * `CREATE ROLE`. レベル: `GLOBAL`
   * `ALTER ROLE`. レベル: `GLOBAL`
   * `DROP ROLE`. レベル: `GLOBAL`
@@ -582,6 +584,8 @@ Not enough privileges. To execute this query, it's necessary to have the grant C
   * `ALLOW SQL SECURITY NONE`. レベル: `GLOBAL`. 別名: `CREATE SQL SECURITY NONE`, `SQL SECURITY NONE`, `SECURITY NONE`
 
 `ROLE ADMIN` 権限があると、admin オプション付きでそのユーザーに付与されていないロールも含め、あらゆるロールを付与したり取り消したりできます。
+
+`CREATE TOKEN` 権限があると、ユーザーは [`CREATE TOKEN`](/ja/reference/statements/create/token) または同等の `ALTER USER <current user> ADD IDENTIFIED ...` ステートメントによって、自分自身のアカウントに認証方式を追加できます。ただし、それ以外のアカウント管理を行う権限は与えられません。この権限が `ALTER USER` とは別に用意されているのは、ユーザーが自分自身のアカウントのセキュリティレベルを下げられるようにするためです。たとえば、証明書でのみアクセスできるアカウントに、有効期限の長いパスワードを追加するといったケースです。
 
 ### SYSTEM {#system}
 

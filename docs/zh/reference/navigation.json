@@ -124,6 +124,7 @@
                     "zh/reference/statements/create/table/replace-table"
                   ]
                 },
+                "zh/reference/statements/create/token",
                 "zh/reference/statements/create/user",
                 "zh/reference/statements/create/view"
               ]

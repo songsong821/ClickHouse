@@ -124,6 +124,7 @@
                     "ko/reference/statements/create/table/replace-table"
                   ]
                 },
+                "ko/reference/statements/create/token",
                 "ko/reference/statements/create/user",
                 "ko/reference/statements/create/view"
               ]

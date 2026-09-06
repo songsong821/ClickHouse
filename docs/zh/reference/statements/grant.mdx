@@ -153,6 +153,7 @@ ClickHouse 的特权层级如下所示：
     * `CREATE ROLE`
     * `CREATE ROW POLICY`
     * `CREATE SETTINGS PROFILE`
+    * `CREATE TOKEN`
     * `CREATE USER`
     * `DROP QUOTA`
     * `DROP ROLE`
@@ -560,6 +561,7 @@ Not enough privileges. To execute this query, it's necessary to have the grant C
   * `CREATE USER`。级别：`GLOBAL`
   * `ALTER USER`。级别：`GLOBAL`
   * `DROP USER`。级别：`GLOBAL`
+  * `CREATE TOKEN`。级别：`GLOBAL`
   * `CREATE ROLE`。级别：`GLOBAL`
   * `ALTER ROLE`。级别：`GLOBAL`
   * `DROP ROLE`。级别：`GLOBAL`
@@ -582,6 +584,8 @@ Not enough privileges. To execute this query, it's necessary to have the grant C
   * `ALLOW SQL SECURITY NONE`。级别：`GLOBAL`。别名：`CREATE SQL SECURITY NONE`、`SQL SECURITY NONE`、`SECURITY NONE`
 
 `ROLE ADMIN` 特权允许用户授予和撤销任何角色，包括未以 admin 选项授予该用户的角色。
+
+`CREATE TOKEN` 特权允许用户通过 [`CREATE TOKEN`](/zh/reference/statements/create/token) 或等价的 `ALTER USER <current user> ADD IDENTIFIED ...` 语句为自己的账户添加身份验证方法，但不具备其他管理账户的能力。之所以将其与 `ALTER USER` 分开，是因为它会让用户得以降低自己账户的安全级别，例如为一个原本只能通过 certificate 访问的账户添加长期有效的密码。
 
 ### SYSTEM {#system}
 
