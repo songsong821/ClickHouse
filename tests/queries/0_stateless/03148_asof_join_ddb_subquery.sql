@@ -7,6 +7,10 @@ SET enable_analyzer = 1;
 SET join_algorithm = 'full_sorting_merge';
 SET joined_subquery_requires_alias = 0;
 
+-- `events e1` is aliased, so by default `events.value` refers to the enclosing query and the subquery is
+-- correlated, which a JOIN does not support yet. This query keeps the previous resolution, where the name
+-- of an aliased table expression qualifies it even inside a query that selects from the same table, so
+-- `events.value = e1.value` compares the inner row with itself.
 SELECT
     begin,
     value IN (
@@ -24,6 +28,7 @@ SELECT
         USING (begin)
     )
 FROM events
-ORDER BY begin ASC;
+ORDER BY begin ASC
+SETTINGS analyzer_compatibility_qualify_aliased_table_by_name = 1;
 
 DROP TABLE IF EXISTS events;

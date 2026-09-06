@@ -131,6 +131,7 @@ const VersionToSettingsChangesMap & getSettingsChangesHistory()
             {"enable_json_ast_dialect", false, false, "New setting to enable the `clickhouse_json` value of the `dialect` setting, which interprets queries as JSON ASTs (the output of `parseQueryToJSON`) instead of SQL text."},
             {"allow_metadata_only_named_tuple_alter", false, false, "New setting to control metadata-only ALTER for named Tuple subfield additions."},
             {"analyzer_compatibility_apply_final_to_all_joined_tables", false, false, "New setting on master (default false = the fixed behavior). The behavior flip itself is recorded under 26.6, and the introduction for backports to older release branches (with default true) under 26.4."},
+            {"analyzer_compatibility_qualify_aliased_table_by_name", false, false, "New compatibility setting. When enabled, a qualifier that matches the name of an aliased table expression resolves to it even when an enclosing query has a table expression of that name; by default the alias hides the name there, so such a subquery is correlated as SQL requires."},
             {"enable_parallel_single_level_merge", false, true, "New setting to parallelize the final merge of the single-level aggregation hash tables by splitting the key space into disjoint hash partitions that the threads merge independently."},
             {"ai_function_text_default_credentials", "", "", "New setting"},
             {"ai_function_embedding_default_credentials", "", "", "New setting"},

@@ -48,6 +48,7 @@ namespace Setting
     extern const SettingsBool single_join_prefer_left_table;
     extern const SettingsBool analyzer_compatibility_allow_compound_identifiers_in_unflatten_nested;
     extern const SettingsBool analyzer_compatibility_prefer_alias_over_subcolumn;
+    extern const SettingsBool analyzer_compatibility_qualify_aliased_table_by_name;
 }
 
 namespace ErrorCodes
@@ -614,6 +615,69 @@ QueryTreeNodePtr IdentifierResolver::tryResolveIdentifierFromTableColumns(const 
     return {};
 }
 
+/** SQL says an alias replaces the name of the table it stands for, so `t.x` does not refer to `t AS c`.
+  * ClickHouse accepts both spellings, which is harmless while the name means nothing else in the query.
+  * Inside a subquery it is not: an enclosing query that selects from `t` gives `t.x` a second reading,
+  * and only one of the two makes the subquery correlated.
+  *
+  * SELECT count() FROM t WHERE EXISTS (SELECT 1 FROM t AS c WHERE c.grp = t.grp AND c.val > t.val)
+  *
+  * Binding `t.grp` to the aliased `t AS c` silently turns the correlated predicate into a comparison of
+  * the inner row with itself - `c.grp = c.grp AND c.val > c.val` - which is never true, so the query
+  * answers 0 instead of the correlated count, with nothing to indicate it. The alias hides the name from
+  * the qualifier there, as the standard requires, and `t.grp` refers to the outer table.
+  *
+  * The name is only hidden when an enclosing scope carries it: a qualifier that means nothing outside
+  * the subquery keeps resolving to the aliased table expression, so the accepted spelling still works
+  * wherever it is unambiguous.
+  */
+bool IdentifierResolver::tableNameIsHiddenByAlias(
+    const IdentifierLookup & identifier_lookup,
+    const TableExpressionNodePtr & table_expression_node,
+    size_t identifier_column_qualifier_parts,
+    const IdentifierResolveScope & scope)
+{
+    const auto & identifier = identifier_lookup.identifier;
+
+    if (!table_expression_node->hasAlias() || !identifier_lookup.isExpressionLookup())
+        return false;
+    if (identifier.getPartsSize() <= identifier_column_qualifier_parts)
+        return false;
+    if (scope.context->getSettingsRef()[Setting::analyzer_compatibility_qualify_aliased_table_by_name])
+        return false;
+    if (identifier_column_qualifier_parts == 1 && identifier.getParts().front() == table_expression_node->getAlias())
+        return false;
+
+    for (const auto * outer_scope = scope.parent_scope; outer_scope; outer_scope = outer_scope->parent_scope)
+    {
+        for (const auto & [outer_table_expression_node, outer_table_expression_data] : outer_scope->table_expression_node_to_data)
+        {
+            if (identifier_column_qualifier_parts == 2)
+            {
+                /// `database.table` addresses a table expression only while it has no alias of its own.
+                if (outer_table_expression_node->hasAlias())
+                    continue;
+                if (!outer_table_expression_data.database_name.empty()
+                    && identifier.getParts().front() == outer_table_expression_data.database_name
+                    && identifier[1] == outer_table_expression_data.table_name)
+                    return true;
+                continue;
+            }
+
+            /// The name of an aliased table expression is hidden in the enclosing query as well, so only
+            /// the name a table expression is addressed by there can hide this one.
+            const auto & outer_name = outer_table_expression_node->hasAlias()
+                ? outer_table_expression_node->getAlias()
+                : outer_table_expression_data.table_name;
+
+            if (!outer_name.empty() && identifier.getParts().front() == outer_name)
+                return true;
+        }
+    }
+
+    return false;
+}
+
 bool IdentifierResolver::tryBindIdentifierToTableExpression(const IdentifierLookup & identifier_lookup,
     const TableExpressionNodePtr & table_expression_node,
     const IdentifierResolveScope & scope)
@@ -672,16 +736,21 @@ bool IdentifierResolver::tryBindIdentifierToTableExpression(const IdentifierLook
     if (identifier.getPartsSize() == 1)
         return false;
 
-    if ((!table_name.empty() && path_start == table_name) || (table_expression_node->hasAlias() && path_start == table_expression_node->getAlias()))
+    const bool table_name_is_hidden_by_alias
+        = tableNameIsHiddenByAlias(identifier_lookup, table_expression_node, 1 /*identifier_column_qualifier_parts*/, scope);
+
+    if ((!table_name.empty() && path_start == table_name && !table_name_is_hidden_by_alias)
+        || (table_expression_node->hasAlias() && path_start == table_expression_node->getAlias()))
         return true;
 
-    if (!materialized_cte_name.empty() && path_start == materialized_cte_name)
+    if (!materialized_cte_name.empty() && path_start == materialized_cte_name && !table_name_is_hidden_by_alias)
         return true;
 
     if (identifier.getPartsSize() == 2)
         return false;
 
-    if (!database_name.empty() && path_start == database_name && identifier[1] == table_name)
+    if (!database_name.empty() && path_start == database_name && identifier[1] == table_name
+        && !tableNameIsHiddenByAlias(identifier_lookup, table_expression_node, 2 /*identifier_column_qualifier_parts*/, scope))
         return true;
 
     return false;
@@ -934,7 +1003,8 @@ IdentifierResolveResult IdentifierResolver::tryResolveIdentifierFromTableExpress
         && identifier.getPartsSize() > 1)
     {
         const auto & table_name_compat = table_expression_data.table_name;
-        const bool prefix_matches_table_name = !table_name_compat.empty() && path_start == table_name_compat;
+        const bool prefix_matches_table_name = !table_name_compat.empty() && path_start == table_name_compat
+            && !tableNameIsHiddenByAlias(identifier_lookup, table_expression_node, 1 /*identifier_column_qualifier_parts*/, scope);
         const bool prefix_matches_alias
             = table_expression_node->hasAlias() && path_start == table_expression_node->getAlias();
         /** A materialized CTE is stored under an internal temporary table name, so its `table_name` never
@@ -1033,7 +1103,11 @@ IdentifierResolveResult IdentifierResolver::tryResolveIdentifierFromTableExpress
         return false;
     };
 
-    if ((!table_name.empty() && path_start == table_name) || (table_expression_node->hasAlias() && path_start == table_expression_node->getAlias()))
+    const bool table_name_is_hidden_by_alias
+        = tableNameIsHiddenByAlias(identifier_lookup, table_expression_node, 1 /*identifier_column_qualifier_parts*/, scope);
+
+    if ((!table_name.empty() && path_start == table_name && !table_name_is_hidden_by_alias)
+        || (table_expression_node->hasAlias() && path_start == table_expression_node->getAlias()))
     {
         auto lookup_result = tryResolveIdentifierFromStorage(
             identifier_lookup,
@@ -1059,7 +1133,8 @@ IdentifierResolveResult IdentifierResolver::tryResolveIdentifierFromTableExpress
     if (table_expression_node_type == QueryTreeNodeType::TABLE)
     {
         auto * table_node = table_expression_node->as<TableNode>();
-        if (table_node->isMaterializedCTE() && path_start == table_node->getMaterializedCTE()->cte_name)
+        if (table_node->isMaterializedCTE() && path_start == table_node->getMaterializedCTE()->cte_name
+            && !table_name_is_hidden_by_alias)
         {
             auto lookup_result = tryResolveIdentifierFromStorage(
                 identifier_lookup,
@@ -1085,7 +1160,8 @@ IdentifierResolveResult IdentifierResolver::tryResolveIdentifierFromTableExpress
     if (identifier.getPartsSize() == 2)
         return {};
 
-    if (!database_name.empty() && path_start == database_name && identifier[1] == table_name)
+    if (!database_name.empty() && path_start == database_name && identifier[1] == table_name
+        && !tableNameIsHiddenByAlias(identifier_lookup, table_expression_node, 2 /*identifier_column_qualifier_parts*/, scope))
         return tryResolveIdentifierFromStorage(identifier_lookup, table_expression_node, table_expression_data, scope, 2 /*identifier_column_qualifier_parts*/);
 
     return {};
