@@ -1120,10 +1120,11 @@ const SessionSettingsExplorer = ({ href: baseRoute }) => {
     },
     {
       label: "iceberg_*",
-      count: 7,
+      count: 8,
       settings: [
         { name: "iceberg_delete_data_on_drop", path: "/iceberg#iceberg_delete_data_on_drop", default: "0" },
-        { name: "iceberg_delete_manifest_decode_concurrency", path: "/iceberg#iceberg_delete_manifest_decode_concurrency", default: "4" },
+        { name: "iceberg_file_entries_queue_size", path: "/iceberg#iceberg_file_entries_queue_size", default: "100" },
+        { name: "iceberg_manifest_decode_concurrency", path: "/iceberg#iceberg_manifest_decode_concurrency", default: "4" },
         { name: "iceberg_manifest_min_count_to_compact", path: "/iceberg#iceberg_manifest_min_count_to_compact", default: "30" },
         { name: "iceberg_max_number_datafiles_to_compact", path: "/iceberg#iceberg_max_number_datafiles_to_compact", default: "1000" },
         { name: "iceberg_orphan_files_older_than_seconds", path: "/iceberg#iceberg_orphan_files_older_than_seconds", default: "259200" },
@@ -3019,7 +3020,7 @@ const SessionSettingsExplorer = ({ href: baseRoute }) => {
     },
     {
       label: "その他",
-      count: 137,
+      count: 138,
       settings: [
         { name: "adaptive_aggregator_freeze_threshold", path: "/other#adaptive_aggregator_freeze_threshold", default: "16384" },
         { name: "adaptive_aggregator_freeze_threshold_bytes", path: "/other#adaptive_aggregator_freeze_threshold_bytes", default: "4194304" },
@@ -3033,6 +3034,7 @@ const SessionSettingsExplorer = ({ href: baseRoute }) => {
         { name: "cache_warmer_threads", path: "/other#cache_warmer_threads", default: "4" },
         { name: "calculate_text_stack_trace", path: "/other#calculate_text_stack_trace", default: "1" },
         { name: "cancel_http_readonly_queries_on_client_close", path: "/other#cancel_http_readonly_queries_on_client_close", default: "0" },
+        { name: "cascades_aggregation_pushdown", path: "/other#cascades_aggregation_pushdown", default: "1" },
         { name: "checksum_on_read", path: "/other#checksum_on_read", default: "1" },
         { name: "compression", path: "/other#compression", default: '""' },
         { name: "connection_pool_max_wait_ms", path: "/other#connection_pool_max_wait_ms", default: "0" },
@@ -3343,13 +3345,13 @@ const SessionSettingsExplorer = ({ href: baseRoute }) => {
       {isSearching && (
         <div className="mt-2 text-right text-xs text-gray-500 dark:text-gray-400">
           <span>
-            一致する設定 {matchingCount} 件
+            {matchingCount} 件の一致する {matchingCount === 1 ? "設定" : "設定"}
           </span>
         </div>
       )}
       <div className="mt-3 w-full overflow-x-auto rounded-xl border border-gray-200 bg-gray-50/50 px-4 py-3 font-mono text-sm leading-6 dark:border-white/10 dark:bg-transparent">
         <div className="flex min-w-full items-center justify-between gap-4">
-          <div className="min-w-max font-semibold">/session-settings</div>
+          <div className="min-w-max font-semibold">/session-設定</div>
           <button
             type="button"
             aria-label={allGroupsExpanded ? "すべて折りたたむ" : "すべて展開"}

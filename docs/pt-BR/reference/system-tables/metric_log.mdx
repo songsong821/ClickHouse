@@ -85,7 +85,7 @@ Contém o histórico dos valores das métricas das tabelas `system.metrics` e `s
 * `ProfileEvent_MMappedFileCacheHits` ([UInt64](/pt-BR/reference/data-types/int-uint)) — Número de vezes que um arquivo foi encontrado no cache MMap (para o read&#95;method &#39;mmap&#39;), portanto não foi necessário aplicar mmap novamente.
 * `ProfileEvent_MMappedFileCacheMisses` ([UInt64](/pt-BR/reference/data-types/int-uint)) — Número de vezes que um arquivo não foi encontrado no cache MMap (para o read&#95;method &#39;mmap&#39;), portanto foi necessário aplicar mmap novamente.
 * `ProfileEvent_OpenedFileCacheHits` ([UInt64](/pt-BR/reference/data-types/int-uint)) — Número de vezes que um arquivo foi encontrado no cache de arquivos abertos, portanto não foi necessário abri-lo novamente.
-* `ProfileEvent_OpenedFileCacheMisses` ([UInt64](/pt-BR/reference/data-types/int-uint)) — Número de vezes que um arquivo não foi encontrado no cache de arquivos abertos, portanto foi necessário abri-lo novamente.
+* `ProfileEvent_OpenedFileCacheMisses` ([UInt64](/pt-BR/reference/data-types/int-uint)) — Número de vezes que um arquivo foi encontrado no cache de arquivos abertos, portanto foi necessário abri-lo novamente.
 * `ProfileEvent_OpenedFileCacheMicroseconds` ([UInt64](/pt-BR/reference/data-types/int-uint)) — Tempo gasto na execução de métodos do OpenedFileCache.
 * `ProfileEvent_AIOWrite` ([UInt64](/pt-BR/reference/data-types/int-uint)) — Número de gravações com a interface AIO do Linux ou FreeBSD
 * `ProfileEvent_AIOWriteBytes` ([UInt64](/pt-BR/reference/data-types/int-uint)) — Número de bytes gravados com a interface AIO do Linux ou FreeBSD
@@ -1158,7 +1158,7 @@ Contém o histórico dos valores das métricas das tabelas `system.metrics` e `s
 * `ProfileEvent_DistrCacheWriteErrorsNonRetriable` ([UInt64](/pt-BR/reference/data-types/int-uint)) — Evento do cliente do Distributed Cache. Número de erros do Distributed Cache não passíveis de repetição durante solicitações de gravação
 * `ProfileEvent_DistrCacheWriteRequestRetriesExhausted` ([UInt64](/pt-BR/reference/data-types/int-uint)) — Evento do buffer de gravação do Distributed Cache. Número de vezes em que um erro de gravação passível de repetição não foi resolvido dentro do limite de tentativas de repetição da solicitação de gravação
 * `ProfileEvent_DistrCacheWriteRequestRetries` ([UInt64](/pt-BR/reference/data-types/int-uint)) — Evento do buffer de gravação do Distributed Cache. Número de novas tentativas de solicitação de gravação após um erro passível de nova tentativa
-* `ProfileEvent_DistrCacheWriteMicroseconds` ([UInt64](/pt-BR/reference/data-types/int-uint)) — Evento do buffer de gravação do Distributed Cache. Tempo gasto em `WriteBufferFromDistributedCache::writeToFileSegment`
+* `ProfileEvent_DistrCacheWriteMicroseconds` ([UInt64](/pt-BR/reference/data-types/int-uint)) — Evento do buffer de gravação do Distributed Cache. Tempo gasto em WriteBufferFromDistributedCache::writeToFileSegment
 * `ProfileEvent_DistrCacheWriteBytes` ([UInt64](/pt-BR/reference/data-types/int-uint)) — Evento do buffer de gravação do Distributed Cache. Número de bytes gravados no Distributed Cache
 * `ProfileEvent_DistrCacheObjectStorageWriteMicroseconds` ([UInt64](/pt-BR/reference/data-types/int-uint)) — Evento do buffer de gravação do Distributed Cache. Tempo gasto gravando no armazenamento de objetos
 * `ProfileEvent_DistrCacheObjectStorageWriteBytes` ([UInt64](/pt-BR/reference/data-types/int-uint)) — Evento do buffer de gravação do Distributed Cache. Número de bytes gravados no armazenamento de objetos
@@ -1870,6 +1870,9 @@ Contém o histórico dos valores das métricas das tabelas `system.metrics` e `s
 * `CurrentMetric_FormatParsingThreads` ([Int64](/pt-BR/reference/data-types/int-uint)) — Número de threads no pool de threads usado para análise da entrada.
 * `CurrentMetric_FormatParsingThreadsActive` ([Int64](/pt-BR/reference/data-types/int-uint)) — Número de threads no pool de threads usado para análise da entrada executando uma tarefa.
 * `CurrentMetric_FormatParsingThreadsScheduled` ([Int64](/pt-BR/reference/data-types/int-uint)) — Número de tarefas enfileiradas ou ativas no pool de threads usado para análise da entrada.
+* `CurrentMetric_IcebergManifestDecodeThreads` ([Int64](/pt-BR/reference/data-types/int-uint)) — Número de threads no pool de threads usado para decodificar arquivos de manifesto de dados do Iceberg.
+* `CurrentMetric_IcebergManifestDecodeThreadsActive` ([Int64](/pt-BR/reference/data-types/int-uint)) — Número de threads no pool de threads usado para decodificar arquivos de manifesto de dados do Iceberg executando uma tarefa.
+* `CurrentMetric_IcebergManifestDecodeThreadsScheduled` ([Int64](/pt-BR/reference/data-types/int-uint)) — Número de tarefas enfileiradas ou ativas no pool de threads usado para decodificar arquivos de manifesto de dados do Iceberg.
 * `CurrentMetric_OutdatedPartsLoadingThreads` ([Int64](/pt-BR/reference/data-types/int-uint)) — Número de threads no pool de threads para carregamento de partes de dados desatualizadas.
 * `CurrentMetric_OutdatedPartsLoadingThreadsActive` ([Int64](/pt-BR/reference/data-types/int-uint)) — Número de threads ativas no pool de threads para carregamento de partes de dados desatualizadas.
 * `CurrentMetric_OutdatedPartsLoadingThreadsScheduled` ([Int64](/pt-BR/reference/data-types/int-uint)) — Número de tarefas enfileiradas ou ativas no pool de threads para carregamento de partes de dados desatualizadas.

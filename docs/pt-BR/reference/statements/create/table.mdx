@@ -348,7 +348,7 @@ Define por quanto tempo os valores são armazenados. Pode ser especificada apena
 
 ## Selecionar codecs de compressão para colunas {#column_compression_codec}
 
-{/* Âncoras para links de seções movidas para /reference/statements/create/table/codec */}
+{/* Âncoras de destino para links de seções movidas para /reference/statements/create/table/codec */}
 
 <a id="general-purpose-codecs" />
 
@@ -394,7 +394,7 @@ Define por quanto tempo os valores são armazenados. Pode ser especificada apena
 
 <a id="adaptive-codec-selection" />
 
-Por padrão, o ClickHouse usa a compressão `ZSTD(3)` na versão autogerenciada e `zstd` no ClickHouse Cloud. Para a família `MergeTree`, o padrão leva em conta o tamanho: o `LZ4`, mais rápido, é usado abaixo de 100 MB e o `ZSTD(3)` a partir desse valor, de modo que os dados recém-inseridos começam como `LZ4` e as partes maiores produzidas pelas mesclagens em segundo plano passam para `ZSTD(3)`. O threshold é aplicado ao tamanho da parte conhecido no momento em que o codec precisa ser escolhido, antes de os dados serem gravados — `0` para uma parte recém-inserida e o tamanho das partes de origem em um merge ou uma mutation —, e não ao tamanho da parte resultante. Também é possível definir o método de compressão de cada coluna na consulta `CREATE TABLE`:
+Por padrão, o ClickHouse usa a compressão `lz4` na versão autogerenciada e `zstd` no ClickHouse Cloud. Também é possível definir o método de compressão de cada coluna na consulta `CREATE TABLE`:
 
 ```sql
 CREATE TABLE codec_example

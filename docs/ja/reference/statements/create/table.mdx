@@ -394,7 +394,7 @@ ORDER BY (name_len, name);
 
 <a id="adaptive-codec-selection" />
 
-デフォルトでは、セルフマネージド版のClickHouseには `ZSTD(3)` 圧縮が、ClickHouse Cloudには `zstd` 圧縮が適用されます。`MergeTree` ファミリーではデフォルトがサイズに応じて決まり、100 MB未満では高速な `LZ4` が、それ以上では `ZSTD(3)` が使用されます。そのため、挿入直後のデータは `LZ4` で始まり、バックグラウンドマージ によって生成されたより大きな パーツ は `ZSTD(3)` に切り替わります。このしきい値は、データが書き込まれる前、コーデックを選択する時点で判明している パーツ のサイズ (挿入直後の パーツ では `0`、merge や mutation ではソースパーツのサイズ) に対して適用されるものであり、結果として生成される パーツ のサイズに対して適用されるわけではありません。`CREATE TABLE` クエリでは、カラムごとに圧縮方式を指定することもできます。
+デフォルトでは、セルフマネージド版のClickHouseには `lz4` 圧縮が、ClickHouse Cloudには `zstd` 圧縮が適用されます。`CREATE TABLE` クエリでは、カラムごとに圧縮方式を指定することもできます。
 
 ```sql
 CREATE TABLE codec_example

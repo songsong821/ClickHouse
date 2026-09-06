@@ -139,6 +139,17 @@ ClickHouse Cloudでのみ有効です。[cache&#95;populated&#95;by&#95;fetch](/
 
 Cloud でのデフォルト値: `1`.
 
+## cascades_aggregation_pushdown {#cascades_aggregation_pushdown}
+
+<BetaBadge />
+
+<SettingsInfoBlock type="Bool" default_value="1" />
+
+<VersionHistory rows={[{"id": "row-1","items": [{"label": "26.9"},{"label": "1"},{"label": "Cascades オプティマイザーで、部分集約を join の下にプッシュダウンする（即時実行集約）ことを検討するための新しい設定。"}]}]} />
+
+Cascades オプティマイザーにおいて、部分集約を join の下にプッシュダウンする (即時実行集約) ことを、コストベースの選択肢の1つとして検討します。
+`enable_cascades_optimizer = 1` および `make_distributed_plan = 1` と併用した場合にのみ有効になります。
+
 ## checksum_on_read {#checksum_on_read}
 
 <SettingsInfoBlock type="Bool" default_value="1" />

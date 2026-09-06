@@ -488,6 +488,12 @@ HSTS의 만료 기간(초)입니다.
 
 <SettingsInfoBlock type="UInt64" default_value="10" changeable_without_restart="No" />원격 Iceberg catalog에서 최신 metadata를 비동기적으로 가져오는 데 사용되는 스레드 풀의 크기입니다. 이 풀은 활성화된 모든 테이블이 공유합니다.
 
+## iceberg_manifest_decode_thread_pool_queue_size {#iceberg_manifest_decode_thread_pool_queue_size}
+
+<SettingsInfoBlock type="UInt64" default_value="10000" changeable_without_restart="Yes" />
+
+Iceberg 데이터 manifest 파일을 디코딩하는 스레드 풀에 예약할 수 있는 최대 작업(jobs) 수입니다.
+
 ## ignore_empty_sql_security_in_create_view_query {#ignore_empty_sql_security_in_create_view_query}
 
 <SettingsInfoBlock type="Bool" default_value="1" changeable_without_restart="No" />

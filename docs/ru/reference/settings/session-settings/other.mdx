@@ -138,6 +138,17 @@ import { CloudOnlyBadge } from "/snippets/ru/components/CloudOnlyBadge/CloudOnly
 
 значение по умолчанию в Cloud: `1`.
 
+## cascades_aggregation_pushdown {#cascades_aggregation_pushdown}
+
+<BetaBadge />
+
+<SettingsInfoBlock type="Bool" default_value="1" />
+
+<VersionHistory rows={[{"id": "row-1","items": [{"label": "26.9"},{"label": "1"},{"label": "Новая настройка, позволяющая рассматривать перенос частичной агрегации под JOIN (немедленная агрегация) в оптимизаторе Cascades."}]}]} />
+
+Рассматривать перенос частичной агрегации под JOIN (немедленная агрегация) как стоимостную альтернативу в оптимизаторе Cascades.
+Действует только вместе с `enable_cascades_optimizer = 1` и `make_distributed_plan = 1`.
+
 ## checksum_on_read {#checksum_on_read}
 
 <SettingsInfoBlock type="Bool" default_value="1" />

@@ -137,6 +137,17 @@ ClickHouse Cloud에서만 적용됩니다. [cache&#95;populated&#95;by&#95;fetch
 
 Cloud 기본값: `1`.
 
+## cascades_aggregation_pushdown {#cascades_aggregation_pushdown}
+
+<BetaBadge />
+
+<SettingsInfoBlock type="Bool" default_value="1" />
+
+<VersionHistory rows={[{"id": "row-1","items": [{"label": "26.9"},{"label": "1"},{"label": "Cascades 최적화기에서 부분 집계를 조인 아래로 푸시다운하는 방식(eager aggregation)을 고려하는 새로운 설정입니다."}]}]} />
+
+Cascades 최적화기에서 부분 집계를 조인 아래로 푸시다운하는 방식(eager aggregation)을 비용 기반 대안으로 고려합니다.
+`enable_cascades_optimizer = 1` 및 `make_distributed_plan = 1`이 함께 설정된 경우에만 적용됩니다.
+
 ## checksum_on_read {#checksum_on_read}
 
 <SettingsInfoBlock type="Bool" default_value="1" />

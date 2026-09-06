@@ -394,7 +394,7 @@ Définit la durée de conservation des valeurs. Ne peut être spécifiée que po
 
 <a id="adaptive-codec-selection" />
 
-Par défaut, ClickHouse utilise la compression `ZSTD(3)` dans la version autogérée et `zstd` dans ClickHouse Cloud. Pour la famille `MergeTree`, la valeur par défaut dépend de la taille : le codec `LZ4`, plus rapide, est utilisé en dessous de 100 Mo et `ZSTD(3)` à partir de ce seuil ; ainsi, les données fraîchement insérées commencent en `LZ4` et les parties plus volumineuses produites par les fusions en arrière-plan basculent vers `ZSTD(3)`. Le seuil s&#39;applique à la taille de la partie connue au moment où le codec doit être choisi, avant que les données ne soient écrites — `0` pour une partie fraîchement insérée, et la taille des parties sources pour un merge ou une mutation — et non à la taille de la partie résultante. Vous pouvez également définir la méthode de compression pour chaque colonne dans la requête `CREATE TABLE` :
+Par défaut, ClickHouse utilise la compression `lz4` dans la version autogérée et `zstd` dans ClickHouse Cloud. Vous pouvez également définir la méthode de compression pour chaque colonne dans la requête `CREATE TABLE` :
 
 ```sql
 CREATE TABLE codec_example

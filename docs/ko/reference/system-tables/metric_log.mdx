@@ -615,13 +615,13 @@ import SystemTableCloud from '/snippets/ko/_system_table_cloud.mdx';
   1. 서버 업데이트 후 더 최신 버전의 압축 라이브러리를 사용하는 경우.
   2. 다른 압축 방식을 사용하는 경우.
   3. 비결정적 압축 알고리즘(가능성은 매우 낮음).
-  4. 코드의 논리 오류로 인해 비결정적 머지 알고리즘이 사용되는 경우.
+  4. 코드의 논리 오류로 인한 비결정적 머지 알고리즘.
   5. 코드 버그로 인한 메모리 내 데이터 손상.
   6. 하드웨어 문제로 인한 메모리 내 데이터 손상.
   7. 서버 시작 후 원본 데이터를 수동으로 수정한 경우.
   8. ZooKeeper에 저장된 체크섬을 수동으로 수정한 경우.
   9. &#39;enable&#95;mixed&#95;granularity&#95;parts&#39;와 같은 파트 포맷 관련 설정이 레플리카마다 다릅니다.
-     서버가 이 상황을 정상적으로 감지했으며, 바이트 수준까지 동일한 결과를 보장하기 위해 레플리카에서 병합된 파트를 다운로드합니다.
+     서버가 이 상황을 정상적으로 감지했으며, 바이트 수준에서 동일한 결과를 보장하기 위해 레플리카에서 병합된 파트를 다운로드합니다.
 * `ProfileEvent_DataAfterMutationDiffersFromReplica` ([UInt64](/ko/reference/data-types/int-uint)) — mutation 이후 데이터가 다른 레플리카의 데이터와 바이트 단위까지 동일하지 않았던 횟수입니다. &#39;DataAfterMergeDiffersFromReplica&#39;에 설명된 이유 외에도, 비결정적 mutation으로 인해 발생할 수 있습니다.
 * `ProfileEvent_USearchAddCount` ([UInt64](/ko/reference/data-types/int-uint)) — usearch 인덱스에 벡터를 추가한 횟수입니다.
 * `ProfileEvent_USearchAddVisitedMembers` ([UInt64](/ko/reference/data-types/int-uint)) — usearch 인덱스에 벡터를 추가할 때 방문한 노드 수입니다.
@@ -701,7 +701,7 @@ import SystemTableCloud from '/snippets/ko/_system_table_cloud.mdx';
 * `ProfileEvent_PerfLocalMemoryMisses` ([UInt64](/ko/reference/data-types/int-uint)) — 로컬 NUMA 노드 메모리 읽기 미스 횟수
 * `ProfileEvent_CannotWriteToWriteBufferDiscard` ([UInt64](/ko/reference/data-types/int-uint)) — 파이프가 가득 찼거나 파이프에 쓸 수 없어 쿼리 프로파일러 또는 시그널 핸들러가 버린 스택 트레이스 수입니다.
 * `ProfileEvent_QueryProfilerSignalOverruns` ([UInt64](/ko/reference/data-types/int-uint)) — 오버런으로 인해 쿼리 프로파일러 시그널 처리를 건너뛴 횟수와, 오버런으로 인해 OS가 전달하지 않은 시그널 수의 합계입니다.
-* `ProfileEvent_QueryProfilerConcurrencyOverruns` ([UInt64](/ko/reference/data-types/int-uint)) — 다른 스레드에서 동시에 실행 중인 쿼리 프로파일러가 너무 많아 쿼리 프로파일러 시그널 처리를 건너뛴 횟수입니다. 이는 과부하를 나타낼 수 있습니다.
+* `ProfileEvent_QueryProfilerConcurrencyOverruns` ([UInt64](/ko/reference/data-types/int-uint)) — 다른 스레드에서 동시에 실행 중인 쿼리 프로파일러가 너무 많아 쿼리 프로파일러 시그널 처리를 건너뛬 횟수입니다. 이는 과부하를 나타낼 수 있습니다.
 * `ProfileEvent_QueryProfilerRuns` ([UInt64](/ko/reference/data-types/int-uint)) — QueryProfiler가 실행된 횟수입니다.
 * `ProfileEvent_QueryProfilerErrors` ([UInt64](/ko/reference/data-types/int-uint)) — 비동기 스택 언와인딩 중 발생한 잘못된 메모리 접근 횟수입니다.
 * `ProfileEvent_CreatedLogEntryForMerge` ([UInt64](/ko/reference/data-types/int-uint)) — ReplicatedMergeTree에서 파트를 머지하기 위한 로그 엔트리를 성공적으로 생성한 횟수입니다.
@@ -1869,6 +1869,9 @@ import SystemTableCloud from '/snippets/ko/_system_table_cloud.mdx';
 * `CurrentMetric_FormatParsingThreads` ([Int64](/ko/reference/data-types/int-uint)) — 입력 파싱에 사용되는 스레드 풀의 스레드 수입니다.
 * `CurrentMetric_FormatParsingThreadsActive` ([Int64](/ko/reference/data-types/int-uint)) — 입력 파싱에 사용되는 스레드 풀에서 작업을 실행 중인 스레드 수입니다.
 * `CurrentMetric_FormatParsingThreadsScheduled` ([Int64](/ko/reference/data-types/int-uint)) — 입력 파싱에 사용되는 스레드 풀에서 큐에 대기 중이거나 실행 중인 작업 수입니다.
+* `CurrentMetric_IcebergManifestDecodeThreads` ([Int64](/ko/reference/data-types/int-uint)) — Iceberg 데이터 manifest 파일 디코딩에 사용되는 스레드 풀의 스레드 수입니다.
+* `CurrentMetric_IcebergManifestDecodeThreadsActive` ([Int64](/ko/reference/data-types/int-uint)) — Iceberg 데이터 manifest 파일 디코딩에 사용되는 스레드 풀에서 작업을 실행 중인 스레드 수입니다.
+* `CurrentMetric_IcebergManifestDecodeThreadsScheduled` ([Int64](/ko/reference/data-types/int-uint)) — Iceberg 데이터 manifest 파일 디코딩에 사용되는 스레드 풀에서 큐에 대기 중이거나 실행 중인 작업 수입니다.
 * `CurrentMetric_OutdatedPartsLoadingThreads` ([Int64](/ko/reference/data-types/int-uint)) — 오래된 데이터 파트를 로드하는 스레드 풀의 스레드 수입니다.
 * `CurrentMetric_OutdatedPartsLoadingThreadsActive` ([Int64](/ko/reference/data-types/int-uint)) — 오래된 데이터 파트를 로드하는 스레드 풀에서 활성 상태인 스레드 수입니다.
 * `CurrentMetric_OutdatedPartsLoadingThreadsScheduled` ([Int64](/ko/reference/data-types/int-uint)) — 오래된 데이터 파트를 로드하는 스레드 풀에서 큐에 대기 중이거나 실행 중인 작업 수입니다.

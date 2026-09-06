@@ -12,7 +12,7 @@ doc_type: 'reference'
 import { CloudNotSupportedBadge } from "/snippets/ko/components/CloudNotSupportedBadge/CloudNotSupportedBadge.jsx";
 import { ExperimentalBadge } from "/snippets/ko/components/ExperimentalBadge/ExperimentalBadge.jsx";
 
-기본적으로 ClickHouse는 자가 관리형 버전에서 `ZSTD(3)` 압축을 사용하고, ClickHouse Cloud에서는 `zstd`를 사용합니다. `MergeTree` 계열에서는 기본값이 크기에 따라 결정됩니다. 100 MB 미만에서는 더 빠른 `LZ4`가 사용되고 그 이상에서는 `ZSTD(3)`가 사용되므로, 새로 삽입된 데이터는 `LZ4`로 시작하고 백그라운드 머지로 생성된 더 큰 파트는 `ZSTD(3)`로 전환됩니다. 이 임계값은 결과 파트의 크기가 아니라, 데이터가 기록되기 전 코덱을 선택해야 하는 시점에 알려진 파트 크기(새로 삽입된 파트는 `0`, 머지나 뮤테이션은 소스 파트의 크기)에 적용됩니다.
+기본적으로 ClickHouse는 자가 관리형 버전에서 `lz4` 압축을 사용하고, ClickHouse Cloud에서는 `zstd`를 사용합니다.
 
 `MergeTree` 엔진 패밀리에서는 서버 구성의 [compression](/ko/reference/settings/server-settings/settings/other#compression) 섹션에서 기본 압축 메서드를 변경할 수 있습니다.
 
@@ -50,8 +50,7 @@ ALTER TABLE codec_example MODIFY COLUMN float_value CODEC(Default);
 다음 테이블 엔진에서 압축을 지원합니다.
 
 * [MergeTree](/ko/reference/engines/table-engines/mergetree-family/mergetree) 계열. 컬럼 압축 코덱을 지원하며 [compression](/ko/reference/settings/server-settings/settings/other#compression) 설정에서 기본 압축 메서드를 선택할 수 있습니다.
-* [Log](/ko/reference/engines/table-engines/log-family/index) 계열 — `Log` 및 `TinyLog` 엔진은 기본 `ZSTD(3)` 압축 메서드를 사용하며 컬럼 압축 코덱을 지원합니다.
-* [StripeLog](/ko/reference/engines/table-engines/log-family/index)는 모든 컬럼을 기본 `ZSTD(3)` 메서드로 압축된 하나의 공유 데이터 스트림에 기록하므로, 컬럼별 압축 코덱이 적용되지 않습니다.
+* [Log](/ko/reference/engines/table-engines/log-family/index) 계열. 기본적으로 `lz4` 압축 메서드를 사용하며 컬럼 압축 코덱을 지원합니다.
 * [Set](/ko/reference/engines/table-engines/special/set). 기본 압축만 지원합니다.
 * [Join](/ko/reference/engines/table-engines/special/join). 기본 압축만 지원합니다.
 
@@ -65,7 +64,7 @@ ClickHouse는 범용 코덱과 특수 코덱을 지원합니다.
 
 ### LZ4 {#lz4}
 
-`LZ4` — 무손실 [데이터 압축 알고리즘](https://github.com/lz4/lz4)입니다. LZ4의 고속 압축을 적용합니다.
+`LZ4` — 기본적으로 사용되는 무손실 [데이터 압축 알고리즘](https://github.com/lz4/lz4)입니다. LZ4의 고속 압축을 적용합니다.
 
 ### LZ4HC {#lz4hc}
 
@@ -73,7 +72,7 @@ ClickHouse는 범용 코덱과 특수 코덱을 지원합니다.
 
 ### ZSTD {#zstd}
 
-`ZSTD[(level)]` — `level`을 구성할 수 있는 [ZSTD 압축 알고리즘](https://en.wikipedia.org/wiki/Zstandard)입니다. 설정 가능한 수준: [1, 22]. 기본 수준: 1. `ZSTD(3)`은 코덱을 명시적으로 지정하지 않은 컬럼에 기본으로 적용되는 코덱입니다(`MergeTree` 파트에서는 쓰기 시점에 추정된 파트 크기가 100 MB에 도달하면 적용되며, 그 미만에서는 `LZ4`가 사용됩니다).
+`ZSTD[(level)]` — `level`을 구성할 수 있는 [ZSTD 압축 알고리즘](https://en.wikipedia.org/wiki/Zstandard)입니다. 설정 가능한 수준: [1, 22]. 기본 수준: 1.
 
 높은 압축 수준은 한 번 압축한 뒤 반복적으로 압축을 해제하는 비대칭 시나리오에서 유용합니다. 수준이 높을수록 압축률은 향상되지만 CPU 사용량도 증가합니다.
 
@@ -246,7 +245,7 @@ ENGINE = MergeTree ORDER BY x;
 위의 특수 코덱은 적절한 데이터를 크게 줄일 수 있지만, 이를 선택하려면 전문 지식이 필요합니다. 또한 시간이 지남에 따라 데이터가 변하는 컬럼에는 하나의 선택지가 항상 적합하지는 않습니다. MergeTree 설정 [`enable_adaptive_codec_selection`](/ko/reference/settings/merge-tree-settings)을 활성화하면 ClickHouse가 대신 선택합니다. 기본 코덱(`CODEC(Default)` 또는 `CODEC`을 전혀 지정하지 않은 경우)을 사용하는 컬럼에서는 각 블록을 테이블의 기본 코덱, `NONE`, 컬럼 타입에 적합한 특수 코덱 중 가장 작은 크기로 압축되는 코덱으로 기록합니다.
 
 <Note>
-  현재 특수 코덱은 최대 64비트 정수, enum, 날짜 및 시간, `Decimal32`/`Decimal64`, `IPv4`, `Float32`/`Float64`에 대해 선택됩니다. 그 외 컬럼에서는 기본 코덱과 `NONE` 중에서 선택합니다.
+  현재 특수 코덱은 최대 64비트 정수, enum, 날짜 및 시간, `Decimal32`/`Decimal64`, `IPv4`, `Float32`/`Float64`에 대해 선택됩니다. 그 외 컬럼에서는 값에 대해 기본 코덱과 `NONE` 중에서 선택합니다.
 </Note>
 
 블록은 기본 코덱으로 압축했을 때보다 절대 커지지 않으며, 압축할 수 없는 데이터는 원시 형식으로 저장됩니다(압축하면 읽기 속도가 더 느린 약간 더 큰 파일이 생성됩니다). 이 작업은 어차피 데이터가 다시 압축되는 머지와 뮤테이션 과정에서 백그라운드로 수행됩니다. 삽입 속도에는 영향이 없습니다. 쿼리는 더 빨라지는 경우가 많습니다. 디스크에서 읽어오는 데이터가 줄어들고, 쿼리가 읽는 모든 블록은 먼저 압축을 해제해야 하며, 특수 코덱은 기본 `LZ4`보다 압축 해제 속도가 빠르기 때문입니다. 각 블록에는 기록할 때 사용한 코덱이 저장되므로 읽을 때 별도 설정이 필요하지 않습니다. 또한 모든 데이터를 계속 읽을 수 있으므로 언제든지 이 기능을 끌 수 있습니다.

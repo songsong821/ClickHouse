@@ -138,6 +138,17 @@ Cancela queries HTTP em modo somente leitura (por exemplo, `SELECT`) quando o cl
 
 Valor padrão no Cloud: `1`.
 
+## cascades_aggregation_pushdown {#cascades_aggregation_pushdown}
+
+<BetaBadge />
+
+<SettingsInfoBlock type="Bool" default_value="1" />
+
+<VersionHistory rows={[{"id": "row-1","items": [{"label": "26.9"},{"label": "1"},{"label": "Nova configuração para considerar o pushdown da agregação parcial para baixo de um join (agregação imediata) no otimizador Cascades."}]}]} />
+
+Considera o pushdown da agregação parcial para baixo de um join (agregação imediata) como alternativa baseada em custo no otimizador Cascades.
+Só tem efeito em conjunto com `enable_cascades_optimizer = 1` e `make_distributed_plan = 1`.
+
 ## checksum_on_read {#checksum_on_read}
 
 <SettingsInfoBlock type="Bool" default_value="1" />

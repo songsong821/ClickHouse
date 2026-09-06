@@ -488,6 +488,12 @@ Tempo de expiração do HSTS, em segundos.
 
 <SettingsInfoBlock type="UInt64" default_value="10" changeable_without_restart="No" />Tamanho do pool de threads para obter de forma assíncrona os metadados mais recentes de um catálogo Iceberg remoto; o pool é compartilhado por todas as tabelas ativas.
 
+## iceberg_manifest_decode_thread_pool_queue_size {#iceberg_manifest_decode_thread_pool_queue_size}
+
+<SettingsInfoBlock type="UInt64" default_value="10000" changeable_without_restart="Yes" />
+
+O número máximo de jobs que podem ser agendados no pool de threads para decodificar Iceberg data manifest files.
+
 ## ignore_empty_sql_security_in_create_view_query {#ignore_empty_sql_security_in_create_view_query}
 
 <SettingsInfoBlock type="Bool" default_value="1" changeable_without_restart="No" />

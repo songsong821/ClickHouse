@@ -488,6 +488,12 @@ HSTS 的过期时间，单位为秒。
 
 <SettingsInfoBlock type="UInt64" default_value="10" changeable_without_restart="No" />用于异步从远程 Iceberg catalog 拉取最新元数据的线程池大小；所有活跃表共享该线程池。
 
+## iceberg_manifest_decode_thread_pool_queue_size {#iceberg_manifest_decode_thread_pool_queue_size}
+
+<SettingsInfoBlock type="UInt64" default_value="10000" changeable_without_restart="Yes" />
+
+可在用于解码 Iceberg 数据 manifest 文件的线程池上调度的最大作业数。
+
 ## ignore_empty_sql_security_in_create_view_query {#ignore_empty_sql_security_in_create_view_query}
 
 <SettingsInfoBlock type="Bool" default_value="1" changeable_without_restart="No" />

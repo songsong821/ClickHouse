@@ -138,6 +138,17 @@ import { CloudOnlyBadge } from "/snippets/zh/components/CloudOnlyBadge/CloudOnly
 
 Cloud 默认值：`1`。
 
+## cascades_aggregation_pushdown {#cascades_aggregation_pushdown}
+
+<BetaBadge />
+
+<SettingsInfoBlock type="Bool" default_value="1" />
+
+<VersionHistory rows={[{"id": "row-1","items": [{"label": "26.9"},{"label": "1"},{"label": "新增设置，用于在 Cascades 优化器中考虑将部分聚合下推到 join 之下（立即聚合）。"}]}]} />
+
+在 Cascades 优化器中，将部分聚合下推到 join 之下 (立即聚合) 作为一种基于代价的备选方案纳入考虑。
+仅在同时设置 `enable_cascades_optimizer = 1` 和 `make_distributed_plan = 1` 时生效。
+
 ## checksum_on_read {#checksum_on_read}
 
 <SettingsInfoBlock type="Bool" default_value="1" />

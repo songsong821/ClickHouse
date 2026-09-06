@@ -138,6 +138,17 @@ Annule les requêtes HTTP en lecture seule (par ex. `SELECT`) lorsqu’un client
 
 Valeur par défaut dans Cloud : `1`.
 
+## cascades_aggregation_pushdown {#cascades_aggregation_pushdown}
+
+<BetaBadge />
+
+<SettingsInfoBlock type="Bool" default_value="1" />
+
+<VersionHistory rows={[{"id": "row-1","items": [{"label": "26.9"},{"label": "1"},{"label": "Nouveau paramètre permettant d'envisager le pushdown d'une agrégation partielle sous une jointure (agrégation Eager) dans l'optimiseur Cascades."}]}]} />
+
+Envisage le pushdown d&#39;une agrégation partielle sous une jointure (agrégation Eager) comme alternative basée sur les coûts dans l&#39;optimiseur Cascades.
+Ne prend effet qu&#39;en combinaison avec `enable_cascades_optimizer = 1` et `make_distributed_plan = 1`.
+
 ## checksum_on_read {#checksum_on_read}
 
 <SettingsInfoBlock type="Bool" default_value="1" />

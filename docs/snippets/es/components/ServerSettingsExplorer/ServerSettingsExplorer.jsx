@@ -579,7 +579,7 @@ const ServerSettingsExplorer = ({ href: baseRoute }) => {
     },
     {
       label: "max_*",
-      count: 25,
+      count: 27,
       settings: [
         { name: "max_active_parts_loading_thread_pool_size", path: "/max#max_active_parts_loading_thread_pool_size", default: "64" },
         { name: "max_authentication_methods_per_user", path: "/max#max_authentication_methods_per_user", default: "100" },
@@ -590,6 +590,8 @@ const ServerSettingsExplorer = ({ href: baseRoute }) => {
         { name: "max_fetch_partition_thread_pool_size", path: "/max#max_fetch_partition_thread_pool_size", default: "64" },
         { name: "max_held_snapshots", path: "/max#max_held_snapshots", default: "0" },
         { name: "max_http_index_page_size", path: "/max#max_http_index_page_size", default: "10485760" },
+        { name: "max_iceberg_manifest_decode_thread_pool_free_size", path: "/max#max_iceberg_manifest_decode_thread_pool_free_size", default: "0" },
+        { name: "max_iceberg_manifest_decode_thread_pool_size", path: "/max#max_iceberg_manifest_decode_thread_pool_size", default: "100" },
         { name: "max_keep_alive_requests", path: "/max#max_keep_alive_requests", default: "10000" },
         { name: "max_materialized_views_count_for_table", path: "/max#max_materialized_views_count_for_table", default: "0" },
         { name: "max_merges_bandwidth_for_server", path: "/max#max_merges_bandwidth_for_server", default: "0" },
@@ -1318,7 +1320,7 @@ const ServerSettingsExplorer = ({ href: baseRoute }) => {
     },
     {
       label: "Otros",
-      count: 120,
+      count: 121,
       settings: [
         { name: "abort_on_logical_error", path: "/other#abort_on_logical_error", default: "0" },
         { name: "allowed_disks_for_table_engines", path: "/other#allowed_disks_for_table_engines", default: '""' },
@@ -1355,6 +1357,7 @@ const ServerSettingsExplorer = ({ href: baseRoute }) => {
         { name: "hdfs.libhdfs3_conf", path: "/other#hdfs.libhdfs3_conf", default: '""' },
         { name: "hsts_max_age", path: "/other#hsts_max_age" },
         { name: "iceberg_background_schedule_pool_size", path: "/other#iceberg_background_schedule_pool_size", default: "10" },
+        { name: "iceberg_manifest_decode_thread_pool_queue_size", path: "/other#iceberg_manifest_decode_thread_pool_queue_size", default: "10000" },
         { name: "ignore_empty_sql_security_in_create_view_query", path: "/other#ignore_empty_sql_security_in_create_view_query", default: "1" },
         { name: "include_from", path: "/other#include_from", default: '""' },
         { name: "insert_deduplication_version", path: "/other#insert_deduplication_version", default: "new_unified_hash" },

@@ -209,7 +209,7 @@ CREATE TABLE my_table
     `help` String
 )
 ENGINE = TimeSeries
-SETTINGS recent_samples_ttl_seconds = 345600
+SETTINGS version = 1, recent_samples_ttl_seconds = 345600
 SAMPLES INNER COLUMNS
 (
     `id` Tuple(UInt64, LowCardinality(UUID)),
@@ -246,6 +246,7 @@ METRICS INNER ENGINE = ReplacingMergeTree ORDER BY metric_family_name
 Столбцы были созданы автоматически. Кроме того, имеются четыре внутренние целевые таблицы с собственными определениями столбцов,
 сохранёнными в предложениях `INNER COLUMNS`. Настройка `recent_samples_ttl_seconds` была записана в предложение `SETTINGS`
 со значением по умолчанию: она определяет TTL таблицы recent samples, поэтому её фактическое значение фиксируется при создании.
+Также последняя версия схемы была зафиксирована в настройке `version` (см. [Версионирование схемы](#schema-versioning)).
 
 Внутренние целевые таблицы имеют имена вида `.inner_id.samples.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`,
 `.inner_id.recentsamples.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`, `.inner_id.tags.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`,
@@ -461,9 +462,10 @@ ALTER TABLE my_table MODIFY SETTING filter_by_min_time_and_max_time = 0;
 ALTER TABLE my_table RESET SETTING filter_by_min_time_and_max_time;
 ```
 
-Обратите внимание: если изменить `id_generator`, когда данные уже есть в таблице tags, для одной и той же комбинации metric+tag могут создаваться разные идентификаторы — старые строки сохранят прежние идентификаторы, а новые будут использовать новый генератор.
+Обратите внимание: если изменить `id_generator`, когда данные уже есть в таблице tags, для одной и той же комбинации Метрика+тег могут создаваться разные идентификаторы — старые строки сохранят прежние идентификаторы, а новые будут использовать новый генератор.
 
-Другие настройки нельзя изменить с помощью `ALTER ... MODIFY SETTING`, потому что они закладываются в схему внутренних таблиц во время `CREATE`.
+Другие настройки нельзя изменить с помощью `ALTER ... MODIFY SETTING`: большинство из них закладываются в схему внутренних таблиц во время `CREATE`,
+а настройка `version` фиксируется автоматически во время `CREATE` и идентифицирует саму схему (см. [Версионирование схемы](#schema-versioning)).
 
 ## Настройки {#settings}
 
@@ -482,6 +484,28 @@ ALTER TABLE my_table RESET SETTING filter_by_min_time_and_max_time;
 | `recent_samples_partition_by`        | Expression | `toStartOfInterval(toDateTime(timestamp), toIntervalHour(5))` | Ключ партиционирования внутренней таблицы `recent samples`, например `toStartOfHour(timestamp)`. При явной установке переопределяет ключ партиционирования из объявления движка; если не задано ни то ни другое, используется одна партиция на каждые 5 часов. Игнорируется для внешней таблицы recent samples. Требует, чтобы `recent_samples_ttl_seconds` не был равен нулю                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `recent_samples_index_granularity`   | UInt64     | 8192                                                          | Устанавливает `index_granularity` внутренней таблицы `recent samples`. При явной установке переопределяет `index_granularity` из объявления движка. Игнорируется для внешней таблицы recent samples и движка, не относящегося к MergeTree. Требует, чтобы `recent_samples_ttl_seconds` не был равен нулю                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `tags_index_granularity`             | UInt64     | 8192                                                          | Устанавливает `index_granularity` внутренней таблицы [tags](#tags-table). При явной установке переопределяет `index_granularity` из объявления движка. Игнорируется для внешней таблицы tags и движка, не относящегося к MergeTree                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `version`                            | UInt64     | 1                                                             | Версия таблицы: определяет набор целевых таблиц и их структуру. Версия фиксируется автоматически при создании таблицы и не может быть изменена впоследствии; обычно её следует опускать в запросе `CREATE TABLE` (см. [Версионирование схемы](#schema-versioning))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+
+## Версионирование схемы {#schema-versioning}
+
+Движок таблиц `TimeSeries` и слой выполнения PromQL активно развиваются:
+набор целевых таблиц и их структура могут меняться от версии к версии ClickHouse.
+Чтобы такие изменения можно было отследить, каждая таблица `TimeSeries` хранит свою версию в настройке [version](#settings).
+Версия автоматически фиксируется в запросе `CREATE` при создании таблицы — её значением становится последняя версия, известная серверу (сейчас 1), —
+сохраняется в метаданных таблицы и не может быть изменена с помощью `ALTER`. Таблицы, созданные до появления этой настройки, считаются таблицами версии 0.
+Обычно эту настройку достаточно просто не указывать в запросе `CREATE TABLE` — тогда таблица получит последнюю версию.
+Явно заданное значение `version` принимается, если сервер поддерживает эту версию; например, `CREATE TABLE ... AS other_table` копирует версию другой таблицы.
+
+Сервер поддерживает диапазон версий, причём минимальная версия может отличаться для чтения через `SELECT`, для записи через `INSERT`
+или по протоколу Prometheus remote-write, а также для вычисления PromQL (табличные функции [prometheusQuery](/ru/reference/functions/table-functions/prometheusQuery),
+[prometheusQueryRange](/ru/reference/functions/table-functions/prometheusQueryRange)
+и [timeSeriesSelector](/ru/reference/functions/table-functions/timeSeriesSelector),
+диалект `promql` и HTTP query API Prometheus):
+
+* Если версия таблицы `TimeSeries` слишком старая для PromQL, запросы PromQL к ней отклоняются. В тексте исключения предлагается пересоздать таблицу:
+  создайте новую таблицу `TimeSeries`, скопируйте данные запросом `INSERT ... SELECT` и замените старую таблицу новой.
+* Если версия слишком старая для записи, запросы `INSERT` и протокол Prometheus remote-write отклоняются, при этом запросы `SELECT` продолжают работать.
+* Если версия слишком старая для сервера в принципе, отклоняется любой запрос к таблице (кроме `SHOW CREATE TABLE`, `DETACH` и `DROP`).
 
 # Функции {#functions}
 

@@ -488,6 +488,12 @@ Tiempo de caducidad de HSTS en segundos.
 
 <SettingsInfoBlock type="UInt64" default_value="10" changeable_without_restart="No" />Tamaño del grupo de hilos para obtener de forma asíncrona los metadatos más recientes de un catálogo Iceberg remoto; el grupo se comparte entre todas las tablas activas.
 
+## iceberg_manifest_decode_thread_pool_queue_size {#iceberg_manifest_decode_thread_pool_queue_size}
+
+<SettingsInfoBlock type="UInt64" default_value="10000" changeable_without_restart="Yes" />
+
+El número máximo de jobs que se pueden programar en el pool de hilos para decodificar archivos de manifiesto de datos de Iceberg.
+
 ## ignore_empty_sql_security_in_create_view_query {#ignore_empty_sql_security_in_create_view_query}
 
 <SettingsInfoBlock type="Bool" default_value="1" changeable_without_restart="No" />

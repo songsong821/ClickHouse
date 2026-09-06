@@ -394,7 +394,7 @@ ORDER BY (name_len, name);
 
 <a id="adaptive-codec-selection" />
 
-默认情况下，自管理版本的 ClickHouse 使用 `ZSTD(3)` 压缩，ClickHouse Cloud 则使用 `zstd`。对于 `MergeTree` 家族，默认行为会根据大小自动选择：小于 100 MB 时使用速度更快的 `LZ4`，达到或超过该值时使用 `ZSTD(3)`；因此刚插入的数据先以 `LZ4` 压缩，而后台合并生成的较大 parts 则切换为 `ZSTD(3)`。该阈值针对的是选择编解码器时 (即数据写入之前) 已知的 part 大小——刚插入的 part 为 `0`，merge 或 mutation 则为 source parts 的大小——而不是最终生成的 part 的大小。您还可以在 `CREATE TABLE` 查询中为每一列指定压缩方法：
+默认情况下，自管理版本的 ClickHouse 使用 `lz4` 压缩，ClickHouse Cloud 则使用 `zstd`。您还可以在 `CREATE TABLE` 查询中为每一列指定压缩方法：
 
 ```sql
 CREATE TABLE codec_example

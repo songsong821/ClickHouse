@@ -1451,7 +1451,7 @@ Contiene el historial de los valores de métricas de las tablas `system.metrics`
 * `ProfileEvent_CoordinatedMergesMergeWorkerUpdateCount` ([UInt64](/es/reference/data-types/int-uint)) — Número total de actualizaciones del merge worker
 * `ProfileEvent_CoordinatedMergesMergeWorkerUpdateMicroseconds` ([UInt64](/es/reference/data-types/int-uint)) — Tiempo total dedicado a actualizar el estado local de los merges asignados en el worker
 * `ProfileEvent_CoordinatedMergesMergeAssignmentRequest` ([UInt64](/es/reference/data-types/int-uint)) — Número total de solicitudes de asignación de merge
-* `ProfileEvent_CoordinatedMergesMergeAssignmentResponse` ([UInt64](/es/reference/data-types/int-uint)) — Número total de respuestas de asignación de merge
+* `ProfileEvent_CoordinatedMergesMergeAssignmentResponse` ([UInt64](/es/reference/data-types/int-uint)) — Número total de solicitudes de asignación de merge
 * `ProfileEvent_CoordinatedMergesMergeAssignmentRequestMicroseconds` ([UInt64](/es/reference/data-types/int-uint)) — Tiempo total dedicado al client de asignación de merge
 * `ProfileEvent_CoordinatedMergesMergeAssignmentResponseMicroseconds` ([UInt64](/es/reference/data-types/int-uint)) — Tiempo total dedicado al handler de asignación de merge
 * `ProfileEvent_SharedDatabaseCatalogFailedToApplyState` ([UInt64](/es/reference/data-types/int-uint)) — Número de fallos al aplicar un nuevo estado en SharedDatabaseCatalog
@@ -1870,6 +1870,9 @@ Contiene el historial de los valores de métricas de las tablas `system.metrics`
 * `CurrentMetric_FormatParsingThreads` ([Int64](/es/reference/data-types/int-uint)) — Número de hilos del grupo de hilos usado para analizar la entrada.
 * `CurrentMetric_FormatParsingThreadsActive` ([Int64](/es/reference/data-types/int-uint)) — Número de hilos del grupo de hilos usado para analizar la entrada que están ejecutando una tarea.
 * `CurrentMetric_FormatParsingThreadsScheduled` ([Int64](/es/reference/data-types/int-uint)) — Número de trabajos en cola o activos en el grupo de hilos usado para analizar la entrada.
+* `CurrentMetric_IcebergManifestDecodeThreads` ([Int64](/es/reference/data-types/int-uint)) — Número de hilos en el grupo de hilos usado para decodificar archivos de manifiesto de datos de Iceberg.
+* `CurrentMetric_IcebergManifestDecodeThreadsActive` ([Int64](/es/reference/data-types/int-uint)) — Número de hilos en el grupo de hilos usado para decodificar archivos de manifiesto de datos de Iceberg que están ejecutando una tarea.
+* `CurrentMetric_IcebergManifestDecodeThreadsScheduled` ([Int64](/es/reference/data-types/int-uint)) — Número de trabajos en cola o activos en el grupo de hilos usado para decodificar archivos de manifiesto de datos de Iceberg.
 * `CurrentMetric_OutdatedPartsLoadingThreads` ([Int64](/es/reference/data-types/int-uint)) — Número de hilos del grupo de hilos para cargar partes de datos obsoletas.
 * `CurrentMetric_OutdatedPartsLoadingThreadsActive` ([Int64](/es/reference/data-types/int-uint)) — Número de hilos activos en el grupo de hilos para cargar partes de datos obsoletas.
 * `CurrentMetric_OutdatedPartsLoadingThreadsScheduled` ([Int64](/es/reference/data-types/int-uint)) — Número de trabajos en cola o activos en el grupo de hilos para cargar partes de datos obsoletas.

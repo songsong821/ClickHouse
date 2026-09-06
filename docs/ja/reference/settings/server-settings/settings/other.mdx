@@ -490,6 +490,12 @@ HSTS の有効期間 (秒) 。
 
 <SettingsInfoBlock type="UInt64" default_value="10" changeable_without_restart="No" />リモートのIcebergカタログから最新のメタデータを非同期で取得するためのスレッドプールのサイズです。このプールは、アクティブなすべてのテーブルで共有されます。
 
+## iceberg_manifest_decode_thread_pool_queue_size {#iceberg_manifest_decode_thread_pool_queue_size}
+
+<SettingsInfoBlock type="UInt64" default_value="10000" changeable_without_restart="Yes" />
+
+Iceberg のデータマニフェストファイルをデコードするスレッドプールにスケジュールできるジョブの最大数です。
+
 ## ignore_empty_sql_security_in_create_view_query {#ignore_empty_sql_security_in_create_view_query}
 
 <SettingsInfoBlock type="Bool" default_value="1" changeable_without_restart="No" />

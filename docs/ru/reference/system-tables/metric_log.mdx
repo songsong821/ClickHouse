@@ -295,8 +295,8 @@ import SystemTableCloud from '/snippets/ru/_system_table_cloud.mdx';
 * `ProfileEvent_QueryBackupThrottlerSleepMicroseconds` ([UInt64](/ru/reference/data-types/int-uint)) — Общее время, в течение которого запрос был приостановлен из-за ограничения пропускной способности &#39;max&#95;backup&#95;bandwidth&#39;.
 * `ProfileEvent_DistrCacheReadThrottlerBytes` ([UInt64](/ru/reference/data-types/int-uint)) — Байты, прошедшие через ограничитель &#39;max&#95;distributed&#95;cache&#95;read&#95;bandwidth&#95;for&#95;server&#39;.
 * `ProfileEvent_DistrCacheReadThrottlerSleepMicroseconds` ([UInt64](/ru/reference/data-types/int-uint)) — Общее время, в течение которого запрос был приостановлен из-за ограничения пропускной способности &#39;max&#95;distributed&#95;cache&#95;read&#95;bandwidth&#95;for&#95;server&#39;.
-* `ProfileEvent_DistrCacheWriteThrottlerBytes` ([UInt64](/ru/reference/data-types/int-uint)) — Байты, прошедшие через ограничитель `max_distributed_cache_write_bandwidth_for_server`.
-* `ProfileEvent_DistrCacheWriteThrottlerSleepMicroseconds` ([UInt64](/ru/reference/data-types/int-uint)) — Общее время, в течение которого запрос находился в ожидании, чтобы соответствовать ограничению `max_distributed_cache_write_bandwidth_for_server`.
+* `ProfileEvent_DistrCacheWriteThrottlerBytes` ([UInt64](/ru/reference/data-types/int-uint)) — Байты, прошедшие через ограничитель &#39;max&#95;distributed&#95;cache&#95;write&#95;bandwidth&#95;for&#95;server&#39;.
+* `ProfileEvent_DistrCacheWriteThrottlerSleepMicroseconds` ([UInt64](/ru/reference/data-types/int-uint)) — Общее время, в течение которого запрос был приостановлен из-за ограничения пропускной способности &#39;max&#95;distributed&#95;cache&#95;write&#95;bandwidth&#95;for&#95;server&#39;.
 * `ProfileEvent_ThrottlerSleepMicroseconds` ([UInt64](/ru/reference/data-types/int-uint)) — Общее время, в течение которого запрос находился в ожидании, чтобы соответствовать всем настройкам ограничения скорости.
 * `ProfileEvent_ReadTasksWithAppliedPatches` ([UInt64](/ru/reference/data-types/int-uint)) — Общее количество задач чтения, в которых была применена хотя бы одна патч-часть
 * `ProfileEvent_PatchesAppliedInAllReadTasks` ([UInt64](/ru/reference/data-types/int-uint)) — Общее количество применённых патч-частей во всех задачах чтения
@@ -1803,7 +1803,7 @@ import SystemTableCloud from '/snippets/ru/_system_table_cloud.mdx';
 * `CurrentMetric_DistributedIndexAnalysisThreads` ([Int64](/ru/reference/data-types/int-uint)) — Количество потоков в пуле потоков для распределённого анализа индексов.
 * `CurrentMetric_DistributedIndexAnalysisThreadsActive` ([Int64](/ru/reference/data-types/int-uint)) — Количество потоков в пуле потоков для распределённого анализа индексов, выполняющих задачу.
 * `CurrentMetric_DistributedIndexAnalysisThreadsScheduled` ([Int64](/ru/reference/data-types/int-uint)) — Количество задач в очереди или активных задач в пуле потоков для распределённого анализа индексов.
-* `CurrentMetric_ObjectStorageQueueRegisteredServers` ([Int64](/ru/reference/data-types/int-uint)) — Количество зарегистрированных серверов в StorageS3(Azure)Queue.
+* `CurrentMetric_ObjectStorageQueueRegisteredServers` ([Int64](/ru/reference/data-types/int-uint)) — Количество зарегистрированных серверов в StorageS3(Azure)Queue
 * `CurrentMetric_IcebergCatalogThreads` ([Int64](/ru/reference/data-types/int-uint)) — Количество потоков в пуле потоков IcebergCatalog.
 * `CurrentMetric_IcebergCatalogThreadsActive` ([Int64](/ru/reference/data-types/int-uint)) — Количество потоков в пуле потоков IcebergCatalog, выполняющих задачу.
 * `CurrentMetric_IcebergCatalogThreadsScheduled` ([Int64](/ru/reference/data-types/int-uint)) — Количество задач в очереди или активных задач в пуле потоков IcebergCatalog.
@@ -1870,6 +1870,9 @@ import SystemTableCloud from '/snippets/ru/_system_table_cloud.mdx';
 * `CurrentMetric_FormatParsingThreads` ([Int64](/ru/reference/data-types/int-uint)) — Количество потоков в пуле потоков, используемом для разбора входных данных.
 * `CurrentMetric_FormatParsingThreadsActive` ([Int64](/ru/reference/data-types/int-uint)) — Количество потоков в пуле потоков, используемом для разбора входных данных, выполняющих задачу.
 * `CurrentMetric_FormatParsingThreadsScheduled` ([Int64](/ru/reference/data-types/int-uint)) — Количество поставленных в очередь или активных задач в пуле потоков, используемом для разбора входных данных.
+* `CurrentMetric_IcebergManifestDecodeThreads` ([Int64](/ru/reference/data-types/int-uint)) — Количество потоков в пуле потоков, используемом для декодирования manifest-файлов данных Iceberg.
+* `CurrentMetric_IcebergManifestDecodeThreadsActive` ([Int64](/ru/reference/data-types/int-uint)) — Количество потоков в пуле потоков, используемом для декодирования manifest-файлов данных Iceberg, выполняющих задачу.
+* `CurrentMetric_IcebergManifestDecodeThreadsScheduled` ([Int64](/ru/reference/data-types/int-uint)) — Количество поставленных в очередь или активных задач в пуле потоков, используемом для декодирования manifest-файлов данных Iceberg.
 * `CurrentMetric_OutdatedPartsLoadingThreads` ([Int64](/ru/reference/data-types/int-uint)) — Количество потоков в пуле потоков для загрузки устаревших частей данных.
 * `CurrentMetric_OutdatedPartsLoadingThreadsActive` ([Int64](/ru/reference/data-types/int-uint)) — Количество активных потоков в пуле потоков для загрузки устаревших частей данных.
 * `CurrentMetric_OutdatedPartsLoadingThreadsScheduled` ([Int64](/ru/reference/data-types/int-uint)) — Количество поставленных в очередь или активных задач в пуле потоков для загрузки устаревших частей данных.

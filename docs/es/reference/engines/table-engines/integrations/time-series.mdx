@@ -188,8 +188,8 @@ La tabla *metrics* debe tener las siguientes columnas:
 
 ## Creación {#creation}
 
-Existen varias formas de crear una table con el table engine `TimeSeries`.
-El statement más sencillo
+Existen varias formas de crear una table con el motor de tabla `TimeSeries`.
+La sentencia más sencilla
 
 ```sql
 CREATE TABLE my_table ENGINE=TimeSeries
@@ -209,7 +209,7 @@ CREATE TABLE my_table
     `help` String
 )
 ENGINE = TimeSeries
-SETTINGS recent_samples_ttl_seconds = 345600
+SETTINGS version = 1, recent_samples_ttl_seconds = 345600
 SAMPLES INNER COLUMNS
 (
     `id` Tuple(UInt64, LowCardinality(UUID)),
@@ -243,11 +243,12 @@ METRICS INNER COLUMNS
 METRICS INNER ENGINE = ReplacingMergeTree ORDER BY metric_family_name
 ```
 
-Es decir, las columnas se generaron automáticamente y además hay cuatro inner target tables con sus propias definiciones de columnas
+Es decir, las columnas se generaron automáticamente y además hay cuatro tablas internas de destino con sus propias definiciones de columnas
 almacenadas en las cláusulas `INNER COLUMNS`. El ajuste `recent_samples_ttl_seconds` se escribió en la cláusula `SETTINGS`
 con su valor predeterminado: este ajuste define el TTL de la tabla de samples recientes, por lo que su valor efectivo queda fijado en el momento de la creación.
+Además, la última versión del esquema quedó fijada en el ajuste `version` (véase [Control de versiones del esquema](#schema-versioning)).
 
-Las inner target tables tienen nombres como `.inner_id.samples.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`,
+Las tablas internas de destino tienen nombres como `.inner_id.samples.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`,
 `.inner_id.recentsamples.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`, `.inner_id.tags.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`,
 `.inner_id.metrics.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
 y cada target table tiene su propio conjunto de columnas:
@@ -463,7 +464,8 @@ ALTER TABLE my_table RESET SETTING filter_by_min_time_and_max_time;
 
 Ten en cuenta que cambiar `id_generator` cuando ya hay datos en la tabla de etiquetas puede generar IDs distintos para la misma combinación de métrica+etiqueta: las filas antiguas conservan sus IDs anteriores y las nuevas usan el nuevo generador.
 
-Los demás ajustes no se pueden cambiar con `ALTER ... MODIFY SETTING` porque quedan incorporados en el esquema de las tablas internas en el momento de `CREATE`.
+Los demás ajustes no se pueden cambiar con `ALTER ... MODIFY SETTING`: la mayoría quedan incorporados en el esquema de las tablas internas en el momento de `CREATE`,
+y el ajuste `version` se fija automáticamente en el momento de `CREATE` e identifica el propio esquema (consulta [Control de versiones del esquema](#schema-versioning)).
 
 ## Configuración {#settings}
 
@@ -482,6 +484,28 @@ Aquí tienes una lista de configuraciones que se pueden especificar al definir u
 | `recent_samples_partition_by`        | Expression | `toStartOfInterval(toDateTime(timestamp), toIntervalHour(5))` | Clave de partición de la tabla interna `recent samples`, por ejemplo, `toStartOfHour(timestamp)`. Cuando se establece explícitamente, sobrescribe la clave de partición de la declaración del motor; si no se establece ninguna, se usa una partición por cada 5 horas. Se ignora para una tabla externa de samples recientes. Requiere que `recent_samples_ttl_seconds` sea distinto de cero                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `recent_samples_index_granularity`   | UInt64     | 8192                                                          | Establece `index_granularity` de la tabla interna `recent samples`. Cuando se establece explícitamente, sobrescribe `index_granularity` de la declaración del motor. Se ignora para una tabla externa de samples recientes y un motor que no sea MergeTree. Requiere que `recent_samples_ttl_seconds` sea distinto de cero                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `tags_index_granularity`             | UInt64     | 8192                                                          | Establece `index_granularity` de la tabla [etiquetas](#tags-table) interna. Cuando se establece explícitamente, sobrescribe `index_granularity` de la declaración del motor. Se ignora para una tabla externa de etiquetas y un motor que no sea MergeTree                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `version`                            | UInt64     | 1                                                             | La versión de la tabla: identifica el conjunto de tablas de destino y su estructura. La versión se fija automáticamente cuando se crea una tabla y no se puede cambiar posteriormente; normalmente debe omitirse en la consulta `CREATE TABLE` (consulta [Control de versiones del esquema](#schema-versioning))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+
+## Control de versiones del esquema {#schema-versioning}
+
+El motor de tabla `TimeSeries` y la capa de ejecución de PromQL están en desarrollo activo:
+el conjunto de tablas de destino y su estructura pueden cambiar entre versiones de ClickHouse.
+Para que dichos cambios sean detectables, cada tabla `TimeSeries` almacena su versión en el ajuste [version](#settings).
+La versión se fija automáticamente en la consulta `CREATE` al crear la tabla —su valor es la última versión conocida por el servidor (actualmente 1)—,
+persiste en los metadatos de la tabla y no puede modificarse mediante `ALTER`. Las tablas creadas antes de que se introdujera el ajuste se consideran de versión 0.
+Lo normal es omitir el ajuste en la consulta `CREATE TABLE`: así la tabla obtiene la última versión.
+Se acepta un valor explícito de `version` siempre que el servidor admita esa versión; por ejemplo, `CREATE TABLE ... AS other_table` copia la versión de otra tabla.
+
+Un servidor admite un rango de versiones, y la versión mínima puede variar según se trate de lectura con `SELECT`, de escritura con `INSERT`
+o con el protocolo remote-write de Prometheus, o de evaluación de PromQL (las funciones de tabla [prometheusQuery](/es/reference/functions/table-functions/prometheusQuery),
+[prometheusQueryRange](/es/reference/functions/table-functions/prometheusQueryRange)
+y [timeSeriesSelector](/es/reference/functions/table-functions/timeSeriesSelector),
+el dialecto `promql` y la API HTTP de consultas de Prometheus):
+
+* Si la versión de una tabla `TimeSeries` es demasiado antigua para PromQL, se rechazan las consultas PromQL sobre ella. La excepción sugiere volver a crear la tabla:
+  cree una nueva tabla `TimeSeries`, copie los datos con una consulta `INSERT ... SELECT` y sustituya la tabla antigua por la nueva.
+* Si la versión es demasiado antigua para escribir en ella, se rechazan las consultas `INSERT` y el protocolo remote-write de Prometheus, mientras que las consultas `SELECT` siguen funcionando.
+* Si la versión es demasiado antigua para el servidor en general, se rechaza cualquier consulta sobre la tabla (excepto `SHOW CREATE TABLE`, `DETACH` y `DROP`).
 
 # Funciones {#functions}
 

@@ -138,6 +138,17 @@ import { CloudOnlyBadge } from "/snippets/ar/components/CloudOnlyBadge/CloudOnly
 
 القيمة الافتراضية في Cloud: `1`.
 
+## cascades_aggregation_pushdown {#cascades_aggregation_pushdown}
+
+<BetaBadge />
+
+<SettingsInfoBlock type="Bool" default_value="1" />
+
+<VersionHistory rows={[{"id": "row-1","items": [{"label": "26.9"},{"label": "1"},{"label": "إعداد جديد للنظر في دفع التجميع الجزئي إلى ما قبل الـ join (التجميع الفوري - Eager) في مُحسِّن Cascades."}]}]} />
+
+النظر في دفع التجميع الجزئي إلى ما قبل الـ join (التجميع الفوري - Eager) كبديل قائم على التكلفة في مُحسِّن Cascades.
+لا يسري مفعوله إلا مع تفعيل `enable_cascades_optimizer = 1` و`make_distributed_plan = 1` معًا.
+
 ## checksum_on_read {#checksum_on_read}
 
 <SettingsInfoBlock type="Bool" default_value="1" />
