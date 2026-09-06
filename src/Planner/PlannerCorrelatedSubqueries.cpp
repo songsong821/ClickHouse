@@ -38,6 +38,7 @@
 #include <Processors/QueryPlan/AggregatingStep.h>
 #include <Processors/QueryPlan/CommonSubplanReferenceStep.h>
 #include <Processors/QueryPlan/CommonSubplanStep.h>
+#include <Processors/QueryPlan/CreatingSetsStep.h>
 #include <Processors/QueryPlan/DistinctStep.h>
 #include <Processors/QueryPlan/ExpressionStep.h>
 #include <Processors/QueryPlan/FilterStep.h>
@@ -944,6 +945,31 @@ QueryPlan decorrelateQueryPlan(
             aggeregating_step->explicitSortingRequired()
         );
         result_step->setStepDescription(*aggeregating_step);
+
+        decorrelated_query_plan.addStep(std::move(result_step));
+
+        return decorrelated_query_plan;
+    }
+    if (auto * delayed_creating_sets_step = typeid_cast<DelayedCreatingSetsStep *>(node->step.get()))
+    {
+        /** The sets this step builds are subqueries of their own: they cannot reference a correlated column,
+          * which is only in scope inside the subquery body, so decorrelating the body below and rebuilding the
+          * step over the result is all that is needed. The step does not change the header, and the rebuilt
+          * one is turned into a `CreatingSets` step by `addPlansForSets` wherever it sits in the plan, exactly
+          * as the copy `filterPushDown` makes of it is.
+          *
+          * A predicate like `dictGet('d', 'attr', key) >= 42` inside a correlated subquery gets one: the
+          * `optimize_inverse_dictionary_lookup` rewrite turns it into a membership test against a set the pass
+          * builds, and the subquery plan then carries the step that builds it.
+          */
+        auto decorrelated_query_plan = decorrelateQueryPlan(context, node->children.front());
+
+        auto result_step = std::make_unique<DelayedCreatingSetsStep>(
+            decorrelated_query_plan.getCurrentHeader(),
+            delayed_creating_sets_step->detachSets(),
+            delayed_creating_sets_step->getNetworkTransferLimits(),
+            delayed_creating_sets_step->getPreparedSetsCache());
+        result_step->setStepDescription(*delayed_creating_sets_step);
 
         decorrelated_query_plan.addStep(std::move(result_step));
 
