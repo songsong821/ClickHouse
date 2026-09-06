@@ -27,6 +27,25 @@ function cleanup()
     run_query "DROP TABLE IF EXISTS ${TABLE_PROJ} SYNC" >/dev/null 2>&1 ||:
 }
 
+function insert_data()
+{
+    local table=$1
+    local queries=""
+    local i
+
+    # Keep 32 separate `INSERT` statements to create four parts per partition, but
+    # reuse one `clickhouse-client` process to avoid repeated sanitizer startup overhead.
+    for i in {0..31}; do
+        queries+="
+            INSERT INTO ${table}
+            SELECT number + $((i * 256)), $((i % 8)), toString(number + $((i * 256)))
+            FROM numbers(256);
+        "
+    done
+
+    $CLICKHOUSE_CLIENT --multiquery --query "$queries"
+}
+
 function wait_for_reading()
 {
     local query_id=$1 && shift
@@ -171,19 +190,7 @@ $CLICKHOUSE_CLIENT --query "
 
 $CLICKHOUSE_CLIENT --query "SYSTEM STOP MERGES ${TABLE}"
 
-for i in {0..31}; do
-    bucket=$((i % 8))
-    offset=$((i * 256))
-
-    $CLICKHOUSE_CLIENT --query "
-        INSERT INTO ${TABLE}
-        SELECT
-            number + ${offset},
-            ${bucket},
-            toString(number + ${offset})
-        FROM numbers(256)
-    "
-done
+insert_data "$TABLE"
 
 for iteration in $(seq 1 "${ITERATIONS}"); do
     run_iteration "$iteration"
@@ -217,19 +224,7 @@ $CLICKHOUSE_CLIENT --query "
 
 $CLICKHOUSE_CLIENT --query "SYSTEM STOP MERGES ${TABLE_PROJ}"
 
-for i in {0..31}; do
-    bucket=$((i % 8))
-    offset=$((i * 256))
-
-    $CLICKHOUSE_CLIENT --query "
-        INSERT INTO ${TABLE_PROJ}
-        SELECT
-            number + ${offset},
-            ${bucket},
-            toString(number + ${offset})
-        FROM numbers(256)
-    "
-done
+insert_data "$TABLE_PROJ"
 
 for iteration in $(seq 1 "${ITERATIONS}"); do
     run_iteration_proj "$iteration"
