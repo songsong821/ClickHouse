@@ -17,7 +17,6 @@
 #include <Common/LockMemoryExceptionInThread.h>
 #include <Common/MemoryTrackerBlockerInThread.h>
 #include <Common/SharedLockGuard.h>
-#include <Common/getRandomASCIIString.h>
 #include <Common/logger_useful.h>
 
 namespace DB
@@ -43,6 +42,8 @@ namespace FailPoints
     extern const char plain_object_storage_copy_fail_on_file_move[];
     extern const char plain_object_storage_copy_temp_source_file_fail_on_file_move[];
     extern const char plain_object_storage_copy_temp_target_file_fail_on_file_move[];
+    extern const char plain_object_storage_pause_before_unlink_file_finalize[];
+    extern const char plain_object_storage_pause_before_remove_recursive_finalize[];
 }
 
 MetadataStorageFromPlainObjectStorageValidatePreconditionsOperation::MetadataStorageFromPlainObjectStorageValidatePreconditionsOperation(
@@ -384,7 +385,7 @@ void MetadataStorageFromPlainObjectStorageUnlinkMetadataFileOperation::execute()
     const auto normalized_path_from = normalizePath(path);
     const auto directory_remote_path_from = fs_tree->getDirectoryRemoteInfo(normalized_path_from.parent_path())->remote_path;
     remote_source_path = layout->constructFileObjectKey(directory_remote_path_from, normalized_path_from.filename());
-    remote_tmp_path = layout->constructFileObjectKey(PlainRewritableLayout::ROOT_DIRECTORY_TOKEN, getRandomASCIIString(16));
+    remote_tmp_path = layout->constructFileObjectKey(PlainRewritableLayout::ROOT_DIRECTORY_TOKEN, PlainRewritableLayout::generateRemovedName());
 
     copy_started = true;
     object_storage->copyObject(StoredObject(remote_source_path), StoredObject(remote_tmp_path), getReadSettings(), getWriteSettings());
@@ -408,6 +409,8 @@ void MetadataStorageFromPlainObjectStorageUnlinkMetadataFileOperation::undo()
 
 void MetadataStorageFromPlainObjectStorageUnlinkMetadataFileOperation::finalize()
 {
+    FailPointInjection::pauseFailPoint(FailPoints::plain_object_storage_pause_before_unlink_file_finalize);
+
     removed_objects.push_back(StoredObject(remote_source_path));
 
     if (copy_started)
@@ -515,8 +518,8 @@ void MetadataStorageFromPlainObjectStorageMoveFileOperation::execute()
 
     remote_path_from = layout->constructFileObjectKey(directory_remote_path_from, normalized_path_from.filename());
     remote_path_to = layout->constructFileObjectKey(directory_remote_path_to, normalized_path_to.filename());
-    tmp_remote_path_from = layout->constructFileObjectKey(PlainRewritableLayout::ROOT_DIRECTORY_TOKEN, getRandomASCIIString(16));
-    tmp_remote_path_to = layout->constructFileObjectKey(PlainRewritableLayout::ROOT_DIRECTORY_TOKEN, getRandomASCIIString(16));
+    tmp_remote_path_from = layout->constructFileObjectKey(PlainRewritableLayout::ROOT_DIRECTORY_TOKEN, PlainRewritableLayout::generateRemovedName());
+    tmp_remote_path_to = layout->constructFileObjectKey(PlainRewritableLayout::ROOT_DIRECTORY_TOKEN, PlainRewritableLayout::generateRemovedName());
     file_from_remote_info = fs_tree->getFileRemoteInfo(path_from).value();
     const auto read_settings = getReadSettingsForMetadata();
     const auto write_settings = getWriteSettingsForMetadata();
@@ -640,7 +643,9 @@ MetadataStorageFromPlainObjectStorageRemoveRecursiveOperation::MetadataStorageFr
     , log(getLogger("MetadataStorageFromPlainObjectStorageRemoveRecursiveOperation"))
 {
     chassert(metrics);
-    tmp_path = getRandomASCIIString(16);
+    /// The subtree is moved under a reserved name, so that a concurrent load does not resurrect it under the original path,
+    /// and so that the objects can be reclaimed on the next load if the process dies before `finalize` deletes them.
+    tmp_path = PlainRewritableLayout::generateRemovedName();
     move_to_tmp_op = std::make_unique<MetadataStorageFromPlainObjectStorageMoveDirectoryOperation>(path / "", tmp_path / "", fs_tree, object_storage, layout, metrics);
 }
 
@@ -674,6 +679,8 @@ void MetadataStorageFromPlainObjectStorageRemoveRecursiveOperation::finalize()
 {
     if (!move_tried)
         return;
+
+    FailPointInjection::pauseFailPoint(FailPoints::plain_object_storage_pause_before_remove_recursive_finalize);
 
     StoredObjects objects_to_remove;
     for (const auto & [subdir, remote_info] : subtree_remote_info)

@@ -1,0 +1,159 @@
+"""A `plain_rewritable` disk commits a removal in the metadata first and deletes the objects afterwards.
+If the server is killed in between, the objects must not stay in the bucket forever (issue #114051):
+they are kept under reserved names and reclaimed when the metadata is loaded on the next start."""
+
+import concurrent.futures
+import threading
+import time
+
+import pytest
+
+from helpers.cluster import ClickHouseCluster
+
+cluster = ClickHouseCluster(__file__)
+node = cluster.add_instance(
+    "node",
+    main_configs=[
+        "configs/storage_conf.xml",
+        "configs/drop_table_immediately.xml",
+    ],
+    with_minio=True,
+    stay_alive=True,
+)
+
+# The disk endpoint is `http://minio1:9001/root/data/`.
+KEY_PREFIX = "data/"
+# `PlainRewritableLayout::REMOVED_NAME_PREFIX`
+REMOVED_NAME_PREFIX = "__removed."
+
+
+@pytest.fixture(scope="module", autouse=True)
+def start_cluster():
+    try:
+        cluster.start()
+        yield cluster
+    finally:
+        cluster.shutdown()
+
+
+def list_keys():
+    return sorted(
+        obj.object_name
+        for obj in cluster.minio_client.list_objects(
+            cluster.minio_bucket, KEY_PREFIX, recursive=True
+        )
+    )
+
+
+def read_key(key):
+    response = cluster.minio_client.get_object(cluster.minio_bucket, key)
+    try:
+        return response.read().decode()
+    finally:
+        response.close()
+        response.release_conn()
+
+
+def has_removed_directory(keys):
+    """`RemoveRecursive` rewrites `prefix.path` of every directory of the subtree to a path under a reserved name."""
+    return any(
+        read_key(key).startswith(REMOVED_NAME_PREFIX)
+        for key in keys
+        if key.endswith("/prefix.path")
+    )
+
+
+def has_removed_file_backup(keys):
+    """The removal of a file keeps a backup copy under a reserved name in `__root` until it is finalized."""
+    return any(f"/__root/{REMOVED_NAME_PREFIX}" in key for key in keys)
+
+
+def wait_failpoint_paused(failpoint, timeout=60):
+    """`SYSTEM WAIT FAILPOINT ... PAUSE` blocks until some thread parks at the failpoint,
+    so it runs on a worker thread that is abandoned if the failpoint is never reached."""
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(node.query, f"SYSTEM WAIT FAILPOINT {failpoint} PAUSE")
+    done, _ = concurrent.futures.wait([future], timeout=timeout)
+    if not done:
+        pool.shutdown(wait=False, cancel_futures=True)
+        raise AssertionError(f"failpoint {failpoint} was not reached within {timeout}s")
+    pool.shutdown(wait=False)
+    future.result()
+
+
+def wait_for_empty_prefix(timeout=60):
+    deadline = time.time() + timeout
+    keys = list_keys()
+    while keys and time.time() < deadline:
+        time.sleep(0.5)
+        keys = list_keys()
+    assert keys == [], f"objects remain under {KEY_PREFIX}: {keys}"
+
+
+@pytest.mark.parametrize(
+    "failpoint, num_parts, is_removal_in_progress",
+    [
+        # Removing a part: its directory is renamed under a reserved name, then its objects are deleted.
+        pytest.param(
+            "plain_object_storage_pause_before_remove_recursive_finalize",
+            3,
+            has_removed_directory,
+            id="remove_recursive",
+        ),
+        # Removing `format_version.txt`: a backup copy is kept until the removal is finalized.
+        pytest.param(
+            "plain_object_storage_pause_before_unlink_file_finalize",
+            0,
+            has_removed_file_backup,
+            id="unlink_file",
+        ),
+    ],
+)
+def test_drop_table_killed_before_finalize(failpoint, num_parts, is_removal_in_progress):
+    node.query("DROP TABLE IF EXISTS t SYNC")
+    wait_for_empty_prefix()
+
+    node.query(
+        "CREATE TABLE t (x UInt64) ENGINE = MergeTree ORDER BY x SETTINGS storage_policy = 's3_plain_rewritable'"
+    )
+    # A background merge would remove parts on its own and reach the failpoint instead of the DROP.
+    node.query("SYSTEM STOP MERGES t")
+    for i in range(num_parts):
+        node.query(f"INSERT INTO t VALUES ({i})")
+    assert int(node.query("SELECT count() FROM t")) == num_parts
+    assert list_keys() != []
+
+    node.query(f"SYSTEM ENABLE FAILPOINT {failpoint}")
+
+    def drop_table():
+        try:
+            node.query("DROP TABLE t SYNC")
+        except Exception:
+            # The server is killed while the query is running.
+            pass
+
+    drop_thread = threading.Thread(target=drop_table)
+    drop_thread.start()
+    try:
+        wait_failpoint_paused(failpoint)
+        # The removal is committed in the metadata but the objects are still there, under a reserved name.
+        assert is_removal_in_progress(list_keys())
+        node.stop_clickhouse(kill=True)
+    finally:
+        drop_thread.join()
+
+    # The killed process left everything behind.
+    assert is_removal_in_progress(list_keys())
+
+    node.start_clickhouse()
+
+    # The objects under the reserved names are deleted while loading the metadata, and the table found
+    # in `metadata_dropped` is dropped again, removing whatever the killed process did not get to.
+    wait_for_empty_prefix()
+    assert (
+        node.query(
+            "SELECT count() FROM system.tables WHERE database = currentDatabase() AND name = 't'"
+        )
+        == "0\n"
+    )
+    assert node.contains_in_log("orphaned objects left by removals")

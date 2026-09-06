@@ -1,5 +1,7 @@
 #include <Disks/DiskObjectStorage/MetadataStorages/PlainRewritable/PlainRewritableLayout.h>
+#include <Disks/DiskObjectStorage/MetadataStorages/NormalizedPath.h>
 
+#include <Common/getRandomASCIIString.h>
 #include <base/find_symbols.h>
 
 #include <fmt/format.h>
@@ -37,6 +39,25 @@ std::string PlainRewritableLayout::constructFileObjectKey(const std::string & di
 std::string PlainRewritableLayout::constructDirectoryObjectKey(const std::string & directory_remote_path) const
 {
     return object_storage_common_key_prefix / METADATA_DIRECTORY_TOKEN / directory_remote_path / PREFIX_PATH_FILE_NAME;
+}
+
+std::string PlainRewritableLayout::generateRemovedName()
+{
+    return REMOVED_NAME_PREFIX + getRandomASCIIString(16);
+}
+
+bool PlainRewritableLayout::isRemovedName(std::string_view name)
+{
+    return name.starts_with(REMOVED_NAME_PREFIX);
+}
+
+bool PlainRewritableLayout::isRemovedLocalPath(const std::string & local_path)
+{
+    const auto normalized_path = normalizePath(local_path);
+    if (normalized_path.empty())
+        return false;
+
+    return isRemovedName(normalized_path.begin()->string());
 }
 
 std::optional<std::pair<std::string, std::string>> PlainRewritableLayout::parseFileObjectKey(const std::string & key) const

@@ -36,6 +36,7 @@
 namespace ProfileEvents
 {
     extern const Event DiskPlainRewritableLegacyLayoutDiskCount;
+    extern const Event DiskPlainRewritableOrphanedObjectsRemoved;
 }
 
 namespace DB
@@ -43,6 +44,7 @@ namespace DB
 
 namespace ErrorCodes
 {
+    extern const int BAD_ARGUMENTS;
     extern const int FILE_DOESNT_EXIST;
     extern const int LOGICAL_ERROR;
 }
@@ -58,6 +60,17 @@ namespace
 fs::path normalizeDirectoryPath(const fs::path & path)
 {
     return path / "";
+}
+
+/// Names under `PlainRewritableLayout::REMOVED_NAME_PREFIX` denote garbage that is deleted on the next load, so nobody may create them.
+void checkNotReservedPath(const std::string & path)
+{
+    if (PlainRewritableLayout::isRemovedLocalPath(path))
+        throw Exception(
+            ErrorCodes::BAD_ARGUMENTS,
+            "Cannot create '{}' on a plain_rewritable disk: names starting with '{}' are reserved",
+            path,
+            PlainRewritableLayout::REMOVED_NAME_PREFIX);
 }
 
 }
@@ -122,6 +135,13 @@ void MetadataStorageFromPlainRewritableObjectStorage::load(bool is_initial_load,
 
     const auto read_snapshot = fs.takeReadOnlySnapshot();
 
+    /// Objects under the reserved names (see `PlainRewritableLayout::REMOVED_NAME_PREFIX`) belong to removals
+    /// that were committed but not finished, because the process died in between. They are never loaded.
+    /// They are deleted during the initial load only: a subsequent load may run concurrently with the `finalize`
+    /// of a transaction that has just committed such a removal, and that `finalize` deletes them itself.
+    const bool remove_orphaned_objects = is_initial_load && !object_storage->isReadOnly();
+    StoredObjects orphaned_objects;
+
     ThreadPoolCallbackRunnerLocal<void> runner(pool, ThreadName::PLAIN_REWRITABLE_META_LOAD);
     try
     {
@@ -129,6 +149,13 @@ void MetadataStorageFromPlainRewritableObjectStorage::load(bool is_initial_load,
         for (auto iterator = object_storage->iterate(layout->constructRootFilesDirectoryKey(), 0, /*with_tags=*/ false, std::nullopt); iterator->isValid(); iterator->next())
         {
             auto remote_file = iterator->current();
+            if (PlainRewritableLayout::isRemovedName(remote_file->getFileName()))
+            {
+                if (remove_orphaned_objects)
+                    orphaned_objects.emplace_back(remote_file->getPath());
+                continue;
+            }
+
             remote_layout[""].files.emplace(remote_file->getFileName(), FileRemoteInfo{
                 .bytes_size = remote_file->metadata->size_bytes,
                 .last_modified = remote_file->metadata->last_modified.epochTime(),
@@ -149,7 +176,7 @@ void MetadataStorageFromPlainRewritableObjectStorage::load(bool is_initial_load,
             /// remote_layout_mutex: Same
             /// In any case we have a try {} catch (...) around runner usage, so exceptions will call runner.waitForAllToFinish() first
             /// Thus the order of destruction of the variables is not important
-            runner.enqueueAndKeepTrack([remote_path, object_path = file->getPath(), metadata = file->metadata, read_snapshot, do_not_load_unchanged_directories, &log, &settings, this, &remote_layout, &remote_layout_mutex]
+            runner.enqueueAndKeepTrack([remote_path, object_path = file->getPath(), metadata = file->metadata, read_snapshot, do_not_load_unchanged_directories, remove_orphaned_objects, &log, &settings, this, &remote_layout, &remote_layout_mutex, &orphaned_objects]
             {
                 DB::setThreadName(ThreadName::PLAIN_REWRITABLE_META_LOAD);
 
@@ -158,6 +185,8 @@ void MetadataStorageFromPlainRewritableObjectStorage::load(bool is_initial_load,
                 /// Assuming that local and the object storage clocks are synchronized.
                 Poco::Timestamp last_modified = metadata->last_modified;
                 std::unordered_map<std::string, FileRemoteInfo> files;
+                bool is_orphaned = false;
+                StoredObjects orphaned_files;
 
                 try
                 {
@@ -167,6 +196,13 @@ void MetadataStorageFromPlainRewritableObjectStorage::load(bool is_initial_load,
                     {
                         auto read_buf = object_storage->readObject(object, settings);
                         readStringUntilEOF(local_path, *read_buf);
+                    }
+
+                    is_orphaned = PlainRewritableLayout::isRemovedLocalPath(local_path);
+                    if (is_orphaned && !remove_orphaned_objects)
+                    {
+                        LOG_TRACE(log, "The directory '{}' with the key '{}' is being removed, skipping", local_path, object_path);
+                        return;
                     }
 
                     if (do_not_load_unchanged_directories)
@@ -194,10 +230,13 @@ void MetadataStorageFromPlainRewritableObjectStorage::load(bool is_initial_load,
                         const auto & [directory_remote_path, filename] = unpacked_remote_file_path.value();
                         chassert(directory_remote_path == remote_path);
 
-                        files.emplace(filename, FileRemoteInfo{
-                            .bytes_size = remote_file->metadata->size_bytes,
-                            .last_modified = remote_file->metadata->last_modified.epochTime(),
-                        });
+                        if (is_orphaned)
+                            orphaned_files.emplace_back(remote_file->getPath());
+                        else
+                            files.emplace(filename, FileRemoteInfo{
+                                .bytes_size = remote_file->metadata->size_bytes,
+                                .last_modified = remote_file->metadata->last_modified.epochTime(),
+                            });
                     }
 
 #if USE_AZURE_BLOB_STORAGE
@@ -235,7 +274,14 @@ void MetadataStorageFromPlainRewritableObjectStorage::load(bool is_initial_load,
                 }
 
                 std::lock_guard guard(remote_layout_mutex);
-                remote_layout[local_path] = DirectoryRemoteInfo{remote_path.value(), metadata->etag, last_modified.epochTime(), std::move(files)};
+                if (is_orphaned)
+                {
+                    LOG_TRACE(log, "The directory '{}' with the key '{}' was not removed completely, its {} files will be removed", local_path, object_path, orphaned_files.size());
+                    orphaned_objects.emplace_back(object_path);
+                    orphaned_objects.append_range(std::move(orphaned_files));
+                }
+                else
+                    remote_layout[local_path] = DirectoryRemoteInfo{remote_path.value(), metadata->etag, last_modified.epochTime(), std::move(files)};
             });
         }
     }
@@ -250,6 +296,13 @@ void MetadataStorageFromPlainRewritableObjectStorage::load(bool is_initial_load,
     LOG_DEBUG(log, "Loaded metadata for {} directories", remote_layout.size());
     fs.applyLayout(std::move(remote_layout));
     previous_refresh.restart();
+
+    if (!orphaned_objects.empty())
+    {
+        LOG_INFO(log, "Removing {} orphaned objects left by removals that were committed but not finished, most likely because the process died in the middle of them", orphaned_objects.size());
+        object_storage->removeObjectsIfExist(orphaned_objects);
+        ProfileEvents::increment(ProfileEvents::DiskPlainRewritableOrphanedObjectsRemoved, orphaned_objects.size());
+    }
 }
 
 MetadataStorageFromPlainRewritableObjectStorage::MetadataStorageFromPlainRewritableObjectStorage(ObjectStoragePtr object_storage_, String storage_path_prefix_)
@@ -444,6 +497,7 @@ void MetadataStorageFromPlainRewritableObjectStorageTransaction::createDirectory
         return;
     }
 
+    checkNotReservedPath(path);
     uncommitted_state.createDirectory(path);
 
     operations.addOperation(std::make_unique<MetadataStorageFromPlainObjectStorageCreateDirectoryOperation>(
@@ -464,6 +518,7 @@ void MetadataStorageFromPlainRewritableObjectStorageTransaction::createDirectory
         return;
     }
 
+    checkNotReservedPath(path);
     uncommitted_state.createDirectory(path);
 
     operations.addOperation(std::make_unique<MetadataStorageFromPlainObjectStorageCreateDirectoryOperation>(
@@ -478,6 +533,7 @@ void MetadataStorageFromPlainRewritableObjectStorageTransaction::createDirectory
 
 void MetadataStorageFromPlainRewritableObjectStorageTransaction::moveDirectory(const std::string & path_from, const std::string & path_to)
 {
+    checkNotReservedPath(path_to);
     uncommitted_state.moveDirectory(path_from, path_to);
 
     operations.addOperation(std::make_unique<MetadataStorageFromPlainObjectStorageMoveDirectoryOperation>(
@@ -532,6 +588,7 @@ void MetadataStorageFromPlainRewritableObjectStorageTransaction::removeRecursive
 
 void MetadataStorageFromPlainRewritableObjectStorageTransaction::createHardLink(const std::string & path_from, const std::string & path_to)
 {
+    checkNotReservedPath(path_to);
     uncommitted_state.useDirectory(normalizePath(path_from).parent_path());
     uncommitted_state.useDirectory(normalizePath(path_to).parent_path());
 
@@ -546,6 +603,7 @@ void MetadataStorageFromPlainRewritableObjectStorageTransaction::createHardLink(
 
 void MetadataStorageFromPlainRewritableObjectStorageTransaction::moveFile(const std::string & path_from, const std::string & path_to)
 {
+    checkNotReservedPath(path_to);
     uncommitted_state.useDirectory(normalizePath(path_from).parent_path());
     uncommitted_state.useDirectory(normalizePath(path_to).parent_path());
 
@@ -562,6 +620,7 @@ void MetadataStorageFromPlainRewritableObjectStorageTransaction::moveFile(const 
 
 void MetadataStorageFromPlainRewritableObjectStorageTransaction::replaceFile(const std::string & path_from, const std::string & path_to)
 {
+    checkNotReservedPath(path_to);
     uncommitted_state.useDirectory(normalizePath(path_from).parent_path());
     uncommitted_state.useDirectory(normalizePath(path_to).parent_path());
 
@@ -578,6 +637,7 @@ void MetadataStorageFromPlainRewritableObjectStorageTransaction::replaceFile(con
 
 ObjectStorageKey MetadataStorageFromPlainRewritableObjectStorageTransaction::generateObjectKeyForPath(const std::string & path)
 {
+    checkNotReservedPath(path);
     const auto normalized_path = normalizePath(path);
     if (normalized_path.filename().empty())
         throw Exception(ErrorCodes::LOGICAL_ERROR, "File name is empty for path '{}'", path);

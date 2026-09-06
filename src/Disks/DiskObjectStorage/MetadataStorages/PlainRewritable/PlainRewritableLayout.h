@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <optional>
 #include <filesystem>
 
@@ -13,6 +14,21 @@ public:
     constexpr static std::string PREFIX_PATH_FILE_NAME = "prefix.path";
     constexpr static std::string METADATA_DIRECTORY_TOKEN = "__meta";
     constexpr static std::string ROOT_DIRECTORY_TOKEN = "__root";
+
+    /// A local name with this prefix (of a top-level directory, or of a file in the root directory)
+    /// belongs to a removal that has been committed but not finished yet:
+    /// - `RemoveRecursive` moves the subtree being removed under such a name (by rewriting `prefix.path`
+    ///   of every directory in it), commits, and only then deletes the objects;
+    /// - file operations keep a backup copy of a file they remove or overwrite under such a name in `__root`,
+    ///   to be able to undo, and delete it after the commit.
+    /// If the process dies in between, these objects are garbage: they are skipped when the metadata is loaded,
+    /// and deleted during the initial load. Such names are reserved: an attempt to create them is rejected.
+    constexpr static std::string REMOVED_NAME_PREFIX = "__removed.";
+
+    static std::string generateRemovedName();
+    static bool isRemovedName(std::string_view name);
+    /// Whether the first component of a local path (as stored in `prefix.path`) is a removed name.
+    static bool isRemovedLocalPath(const std::string & local_path);
 
     explicit PlainRewritableLayout(std::string object_storage_common_key_prefix_);
 
