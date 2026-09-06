@@ -16,6 +16,7 @@ namespace DB
 namespace ErrorCodes
 {
     extern const int SET_NON_GRANTED_ROLE;
+    extern const int BAD_ARGUMENTS;
 }
 
 
@@ -23,6 +24,13 @@ BlockIO InterpreterSetRoleQuery::execute()
 {
     const auto updated_query_ptr = removeOnClusterClauseIfNeeded(query_ptr, getContext());
     const auto & query = updated_query_ptr->as<const ASTSetRoleQuery &>();
+
+    /// Only `SET DEFAULT ROLE` changes the user and can be distributed. `SET ROLE` and `SET ROLE DEFAULT`
+    /// change the current session, so a cluster is meaningless for them - and executing one on another
+    /// host, where there is no session at all, is not something to attempt. The parser only accepts the
+    /// clause for `SET DEFAULT ROLE`, so this guards an AST built by other means.
+    if (!query.cluster.empty() && query.kind != ASTSetRoleQuery::Kind::SET_DEFAULT_ROLE)
+        throw Exception(ErrorCodes::BAD_ARGUMENTS, "ON CLUSTER is only supported for SET DEFAULT ROLE, because SET ROLE changes the current session");
 
     if (query.kind == ASTSetRoleQuery::Kind::SET_DEFAULT_ROLE)
         return setDefaultRole(updated_query_ptr, query);
@@ -35,6 +43,13 @@ BlockIO InterpreterSetRoleQuery::execute()
 void InterpreterSetRoleQuery::setRole(const ASTSetRoleQuery & query)
 {
     auto session_context = getContext()->getSessionContext();
+
+    /// There are contexts with no user at all - the one the DDL worker executes a distributed query in,
+    /// unless `distributed_ddl_use_initial_user_and_roles` is set. There are no current roles to change
+    /// there, and `setCurrentRoles` reaches `ContextAccess::getUser`, which treats a missing user as a
+    /// logical error and aborts. Refuse it as the user error it is instead.
+    if (!session_context->getUserID())
+        throw Exception(ErrorCodes::BAD_ARGUMENTS, "SET ROLE requires a user in the current context");
 
     if (query.kind == ASTSetRoleQuery::Kind::SET_ROLE_DEFAULT)
         session_context->setCurrentRolesDefault();

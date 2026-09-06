@@ -38,6 +38,7 @@ SELECT formatQuerySingleLine($$SET DEFAULT ROLE ON CLUSTER c r TO u$$);
 
 SELECT 'SET ROLE is session-local and takes no ON CLUSTER';
 SELECT formatQuerySingleLine($$SET ROLE r ON CLUSTER c$$); -- { serverError SYNTAX_ERROR }
+SELECT formatQuerySingleLine($$SET ROLE DEFAULT ON CLUSTER c$$); -- { serverError SYNTAX_ERROR }
 
 DROP USER 05107_user ON CLUSTER test_shard_localhost;
 DROP ROLE 05107_role_a ON CLUSTER test_shard_localhost;
