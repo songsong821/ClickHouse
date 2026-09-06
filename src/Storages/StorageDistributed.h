@@ -215,6 +215,12 @@ private:
 
     bool isShardingKeySuitsQueryTreeNodeExpression(const QueryTreeNodePtr & expr, const SelectQueryInfo & query_info) const;
 
+    /// Throws when the remote table has a column whose conversion to the type declared here does not
+    /// preserve the order (see `conversionPreservesOrder`), because the shards then sort by one type
+    /// and the initiator merges by another. The remote table is only visible when a shard of
+    /// `cluster` is this server; nothing is checked otherwise.
+    void checkRemoteTableConversionPreservesOrder(ContextPtr local_context, const StorageSnapshotPtr & storage_snapshot, const ClusterPtr & cluster) const;
+
     /// The implicit `rand()` sharding key of a `Remote` database proxy (see `DatabaseRemote`) exists
     /// only to spread `INSERT` rows across the shards; it says nothing about data placement. The read
     /// path (shard pruning under `optimize_skip_unused_shards`/`force_optimize_skip_unused_shards`,
