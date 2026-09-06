@@ -219,12 +219,17 @@ void deserializeFromSingleArgumentTextArray(IColumn & column, ReadBuffer & istr,
     /// dispatched to the quoted serialization for them. Other scalar types (numbers, dates, `UUID`, ...)
     /// handle both quote kinds in `deserializeTextCSV` itself, and their `deserializeTextQuoted` would
     /// reject quotes, so they always take the CSV branch. For `Nullable` types with a non-string-like
-    /// nested type, an element starting with `N`/`n` is dispatched to the quoted serialization, which
-    /// recognizes the `NULL` keyword of the native form with rollback (and otherwise falls through to the
-    /// nested quoted parse, e.g. `NaN` for floats); the released CSV element parse rejected `NULL`/`null`
-    /// for these types, so this is purely additive. String-like `Nullable` arguments must NOT take that
-    /// dispatch: the released CSV element parse accepted arbitrary unquoted words as string values,
-    /// including ones starting with `N`/`n` (`[NaN,"a"]` produced the string 'NaN', and `[NULL,"a"]`
+    /// nested type, an element that is exactly the `NULL` keyword of the native form (in any letter case,
+    /// as the quoted serialization recognizes it) is dispatched to the quoted serialization, which builds a
+    /// null; the released CSV element parse rejected that keyword for these types, so this is purely
+    /// additive. Every other bareword starting with `N`/`n` keeps the released CSV element parse: that is
+    /// what recognizes a custom `format_csv_null_representation` such as `Nothing` (verified on released
+    /// `26.7.1`: `[Nothing,1]` built `[NULL,1]` for `AggregateFunction(groupArray, Nullable(UInt64))`) and
+    /// parses `NaN` for floats. Telling the keyword apart from such a bareword needs the whole word, so it is
+    /// read up to the next element or the end of the array first (no scalar type that takes this dispatch has
+    /// a value containing `,` or `]`) and parsed from its own buffer. String-like `Nullable` arguments must
+    /// NOT take that dispatch: the released CSV element parse accepted arbitrary unquoted words as string
+    /// values, including ones starting with `N`/`n` (`[NaN,"a"]` produced the string 'NaN', and `[NULL,"a"]`
     /// produced the STRING 'NULL', not a null), so they always take the CSV branch too.
     /// `Variant` and `Dynamic` elements use the CSV parse (the released form: double-quoted strings and
     /// bareword scalars worked, and bareword `NULL` parsed as the STRING 'NULL' when a `String`-like
@@ -267,11 +272,42 @@ void deserializeFromSingleArgumentTextArray(IColumn & column, ReadBuffer & istr,
         const char first_char = istr.eof() ? 0 : *istr.position();
         if ((quoted_form_is_string && first_char == '\'')
             || (is_variant_or_dynamic && (first_char == '\'' || first_char == '[' || first_char == '(' || first_char == '{'))
-            || (is_composite && (first_char == '[' || first_char == '(' || first_char == '{'))
-            || (!quoted_form_is_string && !is_variant_or_dynamic && is_nullable && (first_char == 'N' || first_char == 'n')))
+            || (is_composite && (first_char == '[' || first_char == '(' || first_char == '{')))
+        {
             elem_serialization->deserializeTextQuoted(*tmp_column, istr, settings);
+        }
+        else if (!quoted_form_is_string && !is_variant_or_dynamic && is_nullable && (first_char == 'N' || first_char == 'n'))
+        {
+            String word;
+            while (!istr.eof() && *istr.position() != ',' && *istr.position() != ']')
+                word.push_back(*istr.position()++);
+
+            bool is_null_keyword = false;
+            {
+                ReadBufferFromString keyword_buf(word);
+                if (checkStringCaseInsensitive("NULL", keyword_buf))
+                {
+                    skipWhitespaceIfAny(keyword_buf);
+                    is_null_keyword = keyword_buf.eof();
+                }
+            }
+
+            ReadBufferFromString word_buf(word);
+            if (is_null_keyword)
+                elem_serialization->deserializeTextQuoted(*tmp_column, word_buf, settings);
+            else
+                elem_serialization->deserializeTextCSV(*tmp_column, word_buf, settings);
+
+            /// The released parse continued in the array right after the element, so anything the element
+            /// parse left unread made the delimiter assertion below fail; reproduce that.
+            skipWhitespaceIfAny(word_buf);
+            if (!word_buf.eof())
+                throwAtAssertionFailed(",", word_buf);
+        }
         else
+        {
             elem_serialization->deserializeTextCSV(*tmp_column, istr, settings);
+        }
     }
     assertChar(']', istr);
 
@@ -315,6 +351,55 @@ void deserializeFromSingleArgumentLegacyQuotedValue(
     ReadBufferFromString buf(value);
     /// The released implementation did not check that the CSV parse consumed the whole field, so neither do we.
     value_type->getDefaultSerialization()->deserializeTextCSV(*tmp_column, buf, settings);
+
+    const IColumn * arg_columns[1] = {tmp_column.get()};
+    createStateFromValues(function, column, arg_columns, 1);
+}
+
+/// Backward compatibility: released parsed a single `Tuple` argument in `value` mode by reading the whole
+/// field as a string and handing it to the tuple's `deserializeTextCSV`. While
+/// `input_format_csv_deserialize_separate_columns_into_tuple` is enabled (the default) that parse reads the
+/// flattened CSV form of the tuple - the elements separated by `format_csv_tuple_delimiter`, without
+/// parentheses - so for `AggregateFunction(any, Tuple(UInt64, String))` the field `"2,foo"` in `CSV`, and
+/// `2,foo` in `TabSeparated`, `TSVRaw`, the quoted `VALUES` form and the string-wrapped `JSONEachRow` form,
+/// inserted `(2,'foo')` (verified on released `26.7.1`); with the setting disabled it reads the CSV-quoted
+/// native form `"(2,'foo')"`. The unified path would instead hand the tuple to the source format's tuple
+/// parser: in `CSV` that consumes one outer cell per element and swallows the cells of the following columns,
+/// and on the whole-field entrypoints it expects the native form and rejects the flattened one. So keep the
+/// field bounded and parse its content exactly as released did. The native form `(2,'foo')` is accepted as
+/// well when the content opens with a parenthesis: released either rejected it or, when the first element is
+/// a string, split it into a degenerate value such as ('(\'foo\'', 2), so the native form only replaces that.
+/// A `Nullable(Tuple)` argument is not affected: `SerializationNullable::deserializeTextCSV` parses the nested
+/// tuple from one bounded field in the native form, which `deserializeFromSingleNullableArgumentLegacyValue`
+/// and `useLegacyQuotedValueParsing` already reproduce.
+bool useLegacyTupleValueParsing(const AggregateFunctionPtr & function, const FormatSettings & settings)
+{
+    if (!isSingleArgumentValueMode(function, settings))
+        return false;
+
+    return isTuple(function->getArgumentTypes()[0]);
+}
+
+void deserializeFromSingleTupleArgumentLegacyValue(
+    IColumn & column, const String & value, const FormatSettings & settings, const AggregateFunctionPtr & function)
+{
+    const auto & argument_types = function->getArgumentTypes();
+    chassert(argument_types.size() == 1);
+
+    const auto & value_type = argument_types[0];
+    const auto tmp_column = value_type->createColumn();
+    ReadBufferFromString buf(value);
+    skipWhitespaceIfAny(buf);
+
+    if (!buf.eof() && *buf.position() == '(')
+    {
+        value_type->getDefaultSerialization()->deserializeWholeText(*tmp_column, buf, settings);
+    }
+    else
+    {
+        /// The released implementation did not check that the CSV parse consumed the whole field, so neither do we.
+        value_type->getDefaultSerialization()->deserializeTextCSV(*tmp_column, buf, settings);
+    }
 
     const IColumn * arg_columns[1] = {tmp_column.get()};
     createStateFromValues(function, column, arg_columns, 1);
@@ -540,6 +625,17 @@ void SerializationAggregateFunction::deserializeTextEscaped(IColumn & column, Re
         return;
     }
 
+    /// Backward compatibility, see `useLegacyTupleValueParsing`. Released decoded the escaped field before
+    /// parsing it, so a quoted or backslash-led field of a `Tuple` argument ends up in the same CSV parse as
+    /// released too, and this comes before the quoted and backslash paths below.
+    if (useLegacyTupleValueParsing(function, settings))
+    {
+        String s;
+        settings.tsv.crlf_end_of_line_input ? readEscapedStringCRLF(s, istr) : readEscapedString(s, istr);
+        deserializeFromSingleTupleArgumentLegacyValue(column, s, settings, function);
+        return;
+    }
+
     /// Backward compatibility, see `useLegacyQuotedValueParsing`. An unescaped quote can be recognized
     /// before the escaped read, because it cannot be the start of an escape sequence.
     if (useLegacyQuotedValueParsing(function, settings, istr))
@@ -648,6 +744,15 @@ void SerializationAggregateFunction::deserializeWholeText(IColumn & column, Read
         return;
     }
 
+    /// Backward compatibility, see `useLegacyTupleValueParsing`.
+    if (useLegacyTupleValueParsing(function, settings))
+    {
+        String s;
+        readStringUntilEOF(s, istr);
+        deserializeFromSingleTupleArgumentLegacyValue(column, s, settings, function);
+        return;
+    }
+
     /// Backward compatibility, see `useLegacyQuotedValueParsing`. This has to come before the `Nullable`
     /// branch below: released parsed a quoted payload of a `Nullable` argument with the very same CSV parse,
     /// so `'42'` for `AggregateFunction(any, Nullable(UInt64))` inserted `42`.
@@ -749,6 +854,16 @@ void SerializationAggregateFunction::deserializeTextCSV(IColumn & column, ReadBu
         readCSV(s, istr, settings.csv);
         ReadBufferFromString str_buf(s);
         deserializeFromSingleArgumentTextArray(column, str_buf, settings, function);
+        return;
+    }
+
+    /// Backward compatibility, see `useLegacyTupleValueParsing`: the field stays bounded, as released, instead
+    /// of letting the tuple's CSV parse consume one outer cell per element.
+    if (useLegacyTupleValueParsing(function, settings))
+    {
+        String s;
+        readCSV(s, istr, settings.csv);
+        deserializeFromSingleTupleArgumentLegacyValue(column, s, settings, function);
         return;
     }
 
