@@ -2650,22 +2650,6 @@ static BlockIO executeQueryImpl(
             /// to allow settings to take effect.
             InterpreterSetQuery::applySettingsFromQuery(out_ast, context);
 
-            /// Route DDL queries through the `ddl_workload` setting instead of `workload`, so
-            /// administrative statements do not compete with regular queries for the same workload
-            /// resources (query slots, memory reservations, CPU, IO). Gated by the `use_ddl_workload`
-            /// server setting (off by default — behavior is unchanged). This runs before the workload
-            /// classifier is first acquired (in `ProcessList::insert`), and the classifier is cached
-            /// once, so a single override of the effective `workload` redirects every resource dimension.
-            if (context->getUseDdlWorkload() && isDDLQuery(out_ast.get()))
-            {
-                const String & ddl_workload = settings[Setting::ddl_workload];
-                /// Apply via the settings-constraints path (not a raw setSetting) so a profile that
-                /// pins or constrains `workload` is still honored for DDL.
-                SettingChange change{"workload", Field(ddl_workload.empty() ? String("default") : ddl_workload)};
-                context->checkSettingsConstraints(change, SettingSource::QUERY);
-                context->applySettingChange(change);
-            }
-
             /// The `database` setting is documented as equivalent to `USE`. To behave that way it must
             /// change the database that unqualified names resolve to, not just be stored as a string.
             /// Apply it here — after all SETTINGS have been resolved — so every protocol (native TCP,
@@ -2815,8 +2799,24 @@ static BlockIO executeQueryImpl(
         /// Put query to process list. But don't put SHOW PROCESSLIST query itself.
         if (!(out_ast && out_ast->as<ASTShowProcesslistQuery>()))
         {
+            /// Read the hot-reloadable use_ddl_workload once and derive both decisions from it here, so a
+            /// config reload cannot mix modes mid-query. When enabled, route DDL under `ddl_workload` (via
+            /// the settings-constraints path, so a pinned `workload` is honored) before the workload
+            /// classifier is acquired in insert; when disabled, DDL skips workload admission (but still
+            /// counts against the server-wide max_concurrent_queries* limits — see ProcessList::insert).
+            const bool is_ddl_query = isDDLQuery(out_ast.get());
+            const bool ddl_workload_enabled = context->getUseDdlWorkload();
+            if (is_ddl_query && ddl_workload_enabled)
+            {
+                const String & ddl_workload = settings[Setting::ddl_workload];
+                SettingChange change{"workload", Field(ddl_workload.empty() ? String("default") : ddl_workload)};
+                context->checkSettingsConstraints(change, SettingSource::QUERY);
+                context->applySettingChange(change);
+            }
             /// processlist also has query masked now, to avoid secrets leaks though SHOW PROCESSLIST by other users.
-            process_list_entry = context->getProcessList().insert(query_for_logging, normalized_query_hash, out_ast.get(), context, start_watch.getStart(), internal);
+            process_list_entry = context->getProcessList().insert(
+                query_for_logging, normalized_query_hash, out_ast.get(), context,
+                start_watch.getStart(), internal, /*skip_workload_admission=*/ is_ddl_query && !ddl_workload_enabled);
             context->setProcessListElement(process_list_entry->getQueryStatus());
         }
 

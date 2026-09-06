@@ -139,7 +139,8 @@ ProcessList::EntryPtr ProcessList::insert(
     const IAST * ast,
     ContextMutablePtr query_context,
     UInt64 watch_start_nanoseconds,
-    bool is_internal)
+    bool is_internal,
+    bool skip_workload_admission)
 {
     EntryPtr res;
 
@@ -150,13 +151,6 @@ ProcessList::EntryPtr ProcessList::insert(
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Query id cannot be empty");
 
     bool is_unlimited_query = isUnlimitedQuery(ast) || is_internal || client_info.is_from_introspection_port;
-
-    /// With use_ddl_workload disabled (default), DDL and administrative queries are exempt from
-    /// WORKLOAD admission (the query slot + memory reservation below) so they never queue behind
-    /// regular queries in a workload. This is intentionally narrower than `is_unlimited_query`: such
-    /// queries still count against the server-wide `max_concurrent_queries*` hard limits. With the
-    /// setting enabled, DDL is admitted under `ddl_workload` (applied in executeQuery) and is not skipped.
-    bool skip_workload_admission = isDDLQuery(ast) && !query_context->getUseDdlWorkload();
     std::shared_ptr<QueryStatus> query;
 
     // Acquire a query slot and a memory reservation from the resource scheduler if necessary.
@@ -170,6 +164,10 @@ ProcessList::EntryPtr ProcessList::insert(
     // `ProcessList` mutex would prevent that unification and is a worse design overall.
     QuerySlotPtr query_slot;
     MemoryReservationPtr memory_reservation;
+    /// `skip_workload_admission` exempts DDL/administrative queries from WORKLOAD admission (the query
+    /// slot + memory reservation acquired here) when `use_ddl_workload` is disabled — WITHOUT exempting
+    /// them from the server-wide `max_concurrent_queries*` hard limits below (those stay gated by
+    /// `is_unlimited_query`). The caller reads the hot-reloadable flag once and passes the decision.
     if (!is_unlimited_query && !skip_workload_admission)
     {
         /// Hold a shared_ptr to keep the storage alive for the duration of this call, in case of concurrent shutdown.

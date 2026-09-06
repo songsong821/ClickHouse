@@ -484,8 +484,11 @@ public:
       * If too many running queries - wait for not more than specified (see settings) amount of time.
       * If timeout is passed - throw an exception.
       * Don't count KILL QUERY queries or async insert flush queries
+      * With skip_workload_admission=true the query is exempt from WORKLOAD query-slot and
+      * memory-reservation admission (used for DDL when use_ddl_workload is disabled), but it still
+      * counts against the server-wide max_concurrent_queries* limits.
       */
-    EntryPtr insert(const String & query_, UInt64 normalized_query_hash, const IAST * ast, ContextMutablePtr query_context, UInt64 watch_start_nanoseconds, bool is_internal);
+    EntryPtr insert(const String & query_, UInt64 normalized_query_hash, const IAST * ast, ContextMutablePtr query_context, UInt64 watch_start_nanoseconds, bool is_internal, bool skip_workload_admission = false);
 
     /// Number of currently executing queries.
     /// WARNING: includes internal queries (e.g. those executed by dictionaries, RMVs, async inserts).
