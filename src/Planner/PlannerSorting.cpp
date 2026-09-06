@@ -3,6 +3,7 @@
 #include <Core/Settings.h>
 
 #include <Common/FieldAccurateComparison.h>
+#include <Common/NaNUtils.h>
 
 #include <DataTypes/DataTypeInterval.h>
 
@@ -99,6 +100,15 @@ FillColumnDescription extractWithFillDescription(const SortNode & sort_node)
     if (accurateEquals(fill_column_description.fill_step, Field{0}))
         throw Exception(ErrorCodes::INVALID_WITH_FILL_EXPRESSION,
             "WITH FILL STEP value cannot be zero");
+
+    /// A `TO` bound of `NaN` or `Inf` is one the fill loop can never pass: `FillingRow::next` guards the
+    /// fill cursor and the data rows against non-finite values, but compares them against this bound
+    /// unguarded, so `WITH FILL TO nan` generated fill rows until the query hit a time limit (with no time
+    /// limit set, forever).
+    if (fill_column_description.fill_to.getType() == Field::Types::Float64
+        && !isFinite(fill_column_description.fill_to.safeGet<Float64>()))
+        throw Exception(ErrorCodes::INVALID_WITH_FILL_EXPRESSION,
+            "WITH FILL TO value must be finite");
 
     if (sort_node.hasFillStaleness())
     {
