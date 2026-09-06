@@ -17,6 +17,7 @@
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTIdentifier.h>
 #include <Parsers/ASTSelectWithUnionQuery.h>
+#include <Parsers/ASTSetQuery.h>
 #include <Parsers/ASTSubquery.h>
 #include <Parsers/ASTTablesInSelectQuery.h>
 
@@ -210,6 +211,75 @@ bool hasRowHidingFunctionOutsideSubqueries(const IAST & ast)
 {
     std::unordered_set<String> udfs_in_progress;
     return hasRowHidingFunctionOutsideSubqueries(ast, udfs_in_progress, 0);
+}
+
+/// A `SETTINGS` clause of the view's query is applied to the context the inner query runs in, so
+/// it can hide rows without any clause of the `SELECT` doing so: `limit` and `offset` truncate the
+/// result, `final` rewrites every table read as `FINAL`, `additional_table_filters` and
+/// `additional_result_filter` add predicates, `max_rows_to_read` under a `read_overflow_mode = 'break'`
+/// profile truncates the scan, `prefer_column_name_to_alias` or `enable_analyzer` change which
+/// column an identifier binds to, and so on. Rather than enumerate everything that can go wrong,
+/// only settings that tune execution and provably cannot change the rows or the names the query
+/// produces are accepted; any other change - including one that resets a setting to its default,
+/// which may undo a limit of the definer's profile - fails closed. Query parameters bind values
+/// into the query text, so a clause carrying them is not a pure tuning clause either.
+bool settingsClauseCanHideRows(const ASTPtr & settings_ast)
+{
+    if (!settings_ast)
+        return false;
+
+    static const std::unordered_set<std::string_view> execution_only_settings
+    {
+        "max_threads",
+        "max_block_size",
+        "preferred_block_size_bytes",
+        "preferred_max_column_in_block_size_bytes",
+        "max_memory_usage",
+        "max_memory_usage_for_user",
+        "max_bytes_before_external_group_by",
+        "max_bytes_before_external_sort",
+        "max_bytes_ratio_before_external_group_by",
+        "max_bytes_ratio_before_external_sort",
+        "max_streams_to_max_threads_ratio",
+        "max_streams_for_merge_tree_reading",
+        "merge_tree_min_rows_for_concurrent_read",
+        "merge_tree_min_bytes_for_concurrent_read",
+        "merge_tree_max_rows_to_use_cache",
+        "merge_tree_max_bytes_to_use_cache",
+        "min_bytes_to_use_direct_io",
+        "min_bytes_to_use_mmap_io",
+        "max_read_buffer_size",
+        "use_uncompressed_cache",
+        "local_filesystem_read_method",
+        "remote_filesystem_read_method",
+        "enable_filesystem_cache",
+        "read_from_filesystem_cache_if_exists_otherwise_bypass_cache",
+        "optimize_move_to_prewhere",
+        "optimize_move_to_prewhere_if_final",
+        "optimize_read_in_order",
+        "optimize_aggregation_in_order",
+        "use_skip_indexes",
+        "priority",
+        "os_thread_priority",
+        "log_comment",
+        "log_queries",
+        "log_query_threads",
+        "log_processors_profiles",
+    };
+
+    const auto * set_query = settings_ast->as<ASTSetQuery>();
+    if (!set_query || !set_query->query_parameters.empty())
+        return true;
+
+    for (const auto & change : set_query->changes)
+        if (!execution_only_settings.contains(change.name))
+            return true;
+
+    for (const auto & name : set_query->default_settings)
+        if (!execution_only_settings.contains(name))
+            return true;
+
+    return false;
 }
 
 bool isNullableOrLcNullable(DataTypePtr type)
@@ -1033,14 +1103,15 @@ bool StorageView::canHideRows(const ASTPtr & inner_query, const ContextPtr & con
     if (!select)
         return true;
 
-    /// `GROUP BY ALL` uses a flag instead of a non-empty `groupBy` expression list, and query
-    /// settings may introduce a limit or otherwise change which rows the view exposes. Both must
-    /// fail closed just like their explicit counterparts.
+    /// `GROUP BY ALL` uses a flag instead of a non-empty `groupBy` expression list, and a query
+    /// setting may introduce a limit or otherwise change which rows the view exposes. Both must
+    /// fail closed just like their explicit counterparts - but a clause of pure execution tuning
+    /// (`SETTINGS max_threads = 1`) must not turn a projection-only view into a barrier.
     if (select->distinct
         || select->where() || select->prewhere() || select->having() || select->qualify()
         || select->groupBy() || select->group_by_all
         || select->limitLength() || select->limitOffset() || select->limitByLength() || select->limitByOffset()
-        || select->settings())
+        || settingsClauseCanHideRows(select->settings()))
         return true;
 
     /// `ARRAY JOIN` drops rows with an empty array (and `LEFT ARRAY JOIN` is not worth
