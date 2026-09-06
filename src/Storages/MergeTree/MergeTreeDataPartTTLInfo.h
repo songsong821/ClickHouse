@@ -64,6 +64,10 @@ struct MergeTreeDataPartTTLInfos
     /// Has any TTLs which are not calculated on completely expired parts.
     bool hasAnyNonFinishedTTLs() const;
 
+    /// Has any column TTL which is not calculated yet. A column TTL can only be honoured by
+    /// rewriting the part, never by dropping it, so it is tracked separately from the rest.
+    bool hasAnyNonFinishedColumnTTLs() const;
+
     void updatePartMinMaxTTL(const MergeTreeDataPartTTLInfo & ttl_info)
     {
         if (ttl_info.finished())

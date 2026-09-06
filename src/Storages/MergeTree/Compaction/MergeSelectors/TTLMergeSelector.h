@@ -82,7 +82,10 @@ private:
 class TTLRowDeleteMergeSelector : public ITTLMergeSelector
 {
 public:
-    explicit TTLRowDeleteMergeSelector(const PartitionIdToTTLs & merge_due_times_, time_t current_time_);
+    /// With `only_column_ttls_`, only parts with an unfinished *column* TTL are considered. This is the
+    /// mode used under `ttl_only_drop_parts`, which suppresses merges done to delete expired rows but
+    /// must not suppress the merges that clear expired columns.
+    explicit TTLRowDeleteMergeSelector(const PartitionIdToTTLs & merge_due_times_, time_t current_time_, bool only_column_ttls_ = false);
 
 private:
     time_t getTTLForPart(const PartProperties & part) const override;
@@ -90,6 +93,8 @@ private:
     /// Checks that part has at least one unfinished ttl. Because if all ttls
     /// are finished for part - it will be considered by TTLPartDropMergeSelector.
     bool canConsiderPart(const PartProperties & part) const override;
+
+    const bool only_column_ttls;
 };
 
 /// Select parts to merge using information about recompression TTL and compression codec of existing parts.

@@ -42,6 +42,10 @@ struct PartProperties
     struct GeneralTTLInfo
     {
         const bool has_any_non_finished_ttls;
+        /// Only the column TTLs of `has_any_non_finished_ttls`. A part can need a merge for a column
+        /// TTL alone, which `ttl_only_drop_parts` must not suppress because dropping the part is not
+        /// an alternative way of clearing a column.
+        const bool has_any_non_finished_column_ttls;
         const time_t part_min_ttl;
         const time_t part_max_ttl;
     };

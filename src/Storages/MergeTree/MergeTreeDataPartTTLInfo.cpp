@@ -245,6 +245,15 @@ time_t MergeTreeDataPartTTLInfos::getMinimalMaxRecompressionTTL() const
     return max;
 }
 
+bool MergeTreeDataPartTTLInfos::hasAnyNonFinishedColumnTTLs() const
+{
+    for (const auto & [name, info] : columns_ttl)
+        if (info.initialized() && !info.finished())
+            return true;
+
+    return false;
+}
+
 bool MergeTreeDataPartTTLInfos::hasAnyNonFinishedTTLs() const
 {
     auto has_non_finished_ttl = [] (const TTLInfoMap & map) -> bool
