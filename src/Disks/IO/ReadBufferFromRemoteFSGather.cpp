@@ -80,7 +80,13 @@ SeekableReadBufferPtr ReadBufferFromRemoteFSGather::createImplementationBuffer(c
     current_object = object;
     auto buf = read_buffer_creator(/* restricted_seek */true, object);
 
-    if (read_until_position > start_offset && read_until_position < start_offset + object.bytes_size)
+    /// Pass the right bound also when it is exactly the end of the object. Without it the request is
+    /// open-ended, and the underlying buffer (e.g. `ReadBufferFromS3`) can return the HTTP connection to
+    /// the pool only after a read observes EOF. That never happens when the caller reads exactly the
+    /// remaining bytes (`MergeTree` readers size the buffer to the mark range), so the connection stays
+    /// occupied until the buffer is destroyed, and every new stream has to open a new connection.
+    if (object.bytes_size != StoredObject::UnknownSize
+        && read_until_position > start_offset && read_until_position <= start_offset + object.bytes_size)
         buf->setReadUntilPosition(read_until_position - start_offset);
 
     return buf;
