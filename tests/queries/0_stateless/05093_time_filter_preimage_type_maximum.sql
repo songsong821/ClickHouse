@@ -6,6 +6,8 @@
 -- now declined when an endpoint does not fit the column type.
 
 SET session_timezone = 'UTC';
+-- The flaky check randomizes `optimize_time_filter_with_preimage`; the `EXPLAIN` checks below need it on.
+SET optimize_time_filter_with_preimage = 1;
 
 DROP TABLE IF EXISTS t_preimage_date;
 CREATE TABLE t_preimage_date (d Date) ENGINE = MergeTree ORDER BY d;
