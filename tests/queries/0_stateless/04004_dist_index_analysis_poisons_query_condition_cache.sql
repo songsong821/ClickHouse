@@ -1,4 +1,5 @@
--- Tags: long
+-- Tags: long, no-parallel
+-- Tag no-parallel: concurrent tests can clear the shared query condition cache between population and the hit assertion.
 
 -- Test that distributed index analysis does not poison the query condition cache.
 --
