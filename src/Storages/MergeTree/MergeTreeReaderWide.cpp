@@ -570,6 +570,12 @@ void MergeTreeReaderWide::prefetchForColumn(
         if (!ISerialization::isPrefetchNeededForSubstream(substream_path, substream_path.size(), settings.prefetch_json_shared_data_substreams))
             return;
 
+        /// Metadata streams (for example, the structure of `Dynamic` or `JSON`) are read only while deserializing
+        /// the prefix and are released right after that. Prefetching them at the current mark would create the
+        /// stream again and read the file again.
+        if (ISerialization::isMetadataStream(substream_path))
+            return;
+
         auto stream_name = IMergeTreeDataPart::getStreamNameForColumn(name_and_type, substream_path, ".bin", data_part_info_for_read->getChecksums(), storage_settings);
 
         if (stream_name && !prefetched_streams.contains(*stream_name))
