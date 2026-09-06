@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Tags: stateful, no-parallel, no-random-settings, long
+# Tag no-parallel: Clears the shared `cache_for_readbigat` cache and reads 30 million rows within the test time limit.
 
 CURDIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=../shell_config.sh
