@@ -1,0 +1,62 @@
+a monotonically decreasing function of the key
+-3
+-2
+-1
+nan
+-3
+-2
+-1
+nan
+under LIMIT, where the wrong order also returns wrong rows
+-3
+-2
+-3
+-2
+the mirror order, which a backward read satisfies exactly
+nan
+-1
+-2
+-3
+nan
+-1
+-2
+-3
+the key itself, which was always read in order
+1
+2
+3
+nan
+3
+2
+1
+nan
+1
+2
+3
+nan
+an increasing function of the key
+2
+3
+4
+nan
+2
+3
+4
+nan
+and a key column declared DESC
+-3
+-2
+-1
+nan
+-3
+-2
+-1
+nan
+3
+2
+1
+nan
+3
+2
+1
+nan
