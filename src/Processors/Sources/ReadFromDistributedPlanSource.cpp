@@ -30,10 +30,11 @@ std::optional<Chunk> ReadFromDistributedPlanSource::tryGenerate()
     /// Cancelled (via onCancel) or already finished - stop without launching/continuing work.
     if (cleaned_up || cancellation->isCancelled())
     {
-        cleanupLocked();
         /// A failing task cancels the query too. Report its exception instead of reporting end of
-        /// data, which would turn the failure into a silently truncated result.
+        /// data, which would turn the failure into a silently truncated result. Rethrow before the
+        /// cleanup, for the reason spelled out at the `catch` below.
         cancellation->rethrowIfFailed();
+        cleanupLocked();
         return std::nullopt;
     }
 
@@ -61,10 +62,16 @@ std::optional<Chunk> ReadFromDistributedPlanSource::tryGenerate()
     }
     catch (...)
     {
-        /// Record the failure before the cleanup cancels the exchanges, so their consumers
-        /// rethrow this root cause.
+        /// Record the failure so that whoever observes the cancellation reports this root cause.
         cancellation->recordCurrentException();
-        cleanupLocked();
+
+        /// Deliberately no cleanup here: it closes this query's pending exchange connections, which
+        /// wakes the streaming exchange sources of *this* pipeline with a bare
+        /// `peer closed connection`. `PipelineExecutor` reports the exception of the first node in
+        /// graph order that holds one, not the one raised first, so that network error can replace
+        /// the root cause - the failure the query should report. `onCancel` runs the cleanup
+        /// instead: it is reached through `PipelineExecutor::cancel`, which finishes the task queue
+        /// before cancelling the processors, so no source runs again to record the teardown error.
         throw;
     }
 
