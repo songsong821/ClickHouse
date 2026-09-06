@@ -11,11 +11,20 @@ from helpers.cluster import ClickHouseCluster, ClickHouseInstance
 
 cluster = ClickHouseCluster(__file__)
 
-# use_ddl_workload=1 -> DDL queries are scheduled under the `ddl_workload` setting.
-node: ClickHouseInstance = cluster.add_instance(
-    "node",
+# node_on: use_ddl_workload=1  -> DDL is scheduled under the `ddl_workload` setting.
+node_on: ClickHouseInstance = cluster.add_instance(
+    "node_on",
     stay_alive=True,
     main_configs=["configs/use_ddl_workload.xml"],
+    with_zookeeper=True,
+    cpu_limit=15,
+)
+
+# node_off: use_ddl_workload=0 (default) -> DDL is exempt from workload admission (hard skip).
+node_off: ClickHouseInstance = cluster.add_instance(
+    "node_off",
+    stay_alive=True,
+    main_configs=["configs/no_ddl_workload.xml"],
     with_zookeeper=True,
     cpu_limit=15,
 )
@@ -32,20 +41,21 @@ def start_cluster():
 
 @pytest.fixture(scope="function", autouse=True)
 def clean():
-    node.query(
-        """
-        drop table if exists ddl_dst_0 sync;
-        drop table if exists ddl_dst_1 sync;
-        drop workload if exists regular;
-        drop workload if exists ddlwl;
-        drop workload if exists all;
-        drop resource if exists query;
-        """
-    )
+    for node in (node_on, node_off):
+        node.query(
+            """
+            drop table if exists ddl_dst_0 sync;
+            drop table if exists ddl_dst_1 sync;
+            drop workload if exists regular;
+            drop workload if exists ddlwl;
+            drop workload if exists all;
+            drop resource if exists query;
+            """
+        )
     yield
 
 
-def setup_workloads() -> None:
+def setup_workloads(node) -> None:
     node.query(
         """
         create resource query (query);
@@ -56,7 +66,7 @@ def setup_workloads() -> None:
     )
 
 
-def inflight(workload: str) -> int:
+def inflight(node, workload: str) -> int:
     return int(
         node.query(
             f"select inflight_requests from system.scheduler where "
@@ -67,10 +77,11 @@ def inflight(workload: str) -> int:
 
 
 class QueryPool:
-    """Keep `num` copies of a query continuously in flight (a single such query finishes too
-    fast to observe an in-flight slot), mirroring tests/integration/test_scheduler_query."""
+    """Keep `num` copies of a query continuously in flight (a single query finishes too fast to
+    observe an in-flight slot), mirroring tests/integration/test_scheduler_query."""
 
-    def __init__(self, make_query, num: int = 2):
+    def __init__(self, node, make_query, num: int = 2):
+        self.node = node
         self.make_query = make_query  # i -> SQL
         self.num = num
         self.threads: list = []
@@ -81,7 +92,7 @@ class QueryPool:
         def run(i: int) -> None:
             while not self.stop_event.is_set():
                 try:
-                    node.query(self.make_query(i))
+                    self.node.query(self.make_query(i))
                 except Exception as ex:  # noqa: BLE001
                     self.error = str(ex)
                     return
@@ -98,63 +109,90 @@ class QueryPool:
         self.threads.clear()
 
 
-def wait_inflight_at_least(workload: str, limit: int, timeout: float = 60.0) -> None:
+def wait_inflight_at_least(node, workload: str, limit: int, timeout: float = 60.0) -> None:
     deadline = time.time() + timeout
     last = 0
     while time.time() < deadline:
-        last = inflight(workload)
+        last = inflight(node, workload)
         if last >= limit:
             return
         time.sleep(0.1)
     raise AssertionError(f"inflight('{workload}') never reached {limit} (last={last})")
 
 
-def test_server_setting_is_enabled() -> None:
-    assert (
-        node.query(
-            "select value from system.server_settings where name='use_ddl_workload'"
-        ).strip()
-        == "1"
-    )
-
-
-def test_ddl_query_uses_ddl_workload() -> None:
-    # With use_ddl_workload=1 a DDL (CREATE ... AS SELECT, kept CPU-bound so it holds its
-    # query slot) must be admitted under `ddl_workload` ('ddlwl'), NOT the session `workload`
-    # ('regular').
-    setup_workloads()
-    pool = QueryPool(
+def _ddl_pool(node, workload_settings: str) -> QueryPool:
+    # A CPU-bound CREATE ... AS SELECT (DDL) that holds its query slot while the SELECT runs.
+    return QueryPool(
+        node,
         lambda i: (
             f"create or replace table ddl_dst_{i} engine=MergeTree order by tuple() as "
-            f"select count(*) from numbers_mt(100000000) "
-            f"settings ddl_workload='ddlwl', workload='regular', max_threads=2"
+            f"select count(*) from numbers_mt(100000000) settings {workload_settings}, max_threads=2"
         ),
         num=2,
     )
+
+
+def test_server_setting_reflects_config() -> None:
+    assert node_on.query("select value from system.server_settings where name='use_ddl_workload'").strip() == "1"
+    assert node_off.query("select value from system.server_settings where name='use_ddl_workload'").strip() == "0"
+
+
+def test_ddl_uses_ddl_workload_when_enabled() -> None:
+    # use_ddl_workload=1: DDL is admitted under `ddl_workload` ('ddlwl'), NOT the session
+    # `workload` ('regular').
+    setup_workloads(node_on)
+    pool = _ddl_pool(node_on, "ddl_workload='ddlwl', workload='regular'")
     pool.start()
     try:
-        wait_inflight_at_least("ddlwl", 1)
-        # The session workload must not be touched by the DDL.
-        assert inflight("regular") == 0, "DDL must not run under the session workload"
+        wait_inflight_at_least(node_on, "ddlwl", 1)
+        assert inflight(node_on, "regular") == 0, "DDL must not run under the session workload"
     finally:
         pool.stop()
     assert pool.error is None, pool.error
 
 
-def test_regular_query_uses_workload() -> None:
+def test_regular_query_uses_workload_when_enabled() -> None:
     # A non-DDL query is unaffected: it stays under the `workload` setting ('regular').
-    setup_workloads()
+    setup_workloads(node_on)
     pool = QueryPool(
-        lambda i: (
-            "select count(*) from numbers_mt(100000000) "
-            "settings workload='regular', max_threads=2"
-        ),
+        node_on,
+        lambda i: "select count(*) from numbers_mt(100000000) settings workload='regular', max_threads=2",
         num=2,
     )
     pool.start()
     try:
-        wait_inflight_at_least("regular", 1)
-        assert inflight("ddlwl") == 0
+        wait_inflight_at_least(node_on, "regular", 1)
+        assert inflight(node_on, "ddlwl") == 0
     finally:
         pool.stop()
     assert pool.error is None, pool.error
+
+
+def test_ddl_exempt_when_disabled() -> None:
+    # use_ddl_workload=0 (default): DDL is exempt from workload admission (hard skip). A regular
+    # query under 'regular' is still admitted (control); a DDL under the same workload never takes
+    # a query slot.
+    setup_workloads(node_off)
+
+    control = QueryPool(
+        node_off,
+        lambda i: "select count(*) from numbers_mt(100000000) settings workload='regular', max_threads=2",
+        num=2,
+    )
+    control.start()
+    try:
+        wait_inflight_at_least(node_off, "regular", 1)  # regular queries ARE admitted
+    finally:
+        control.stop()
+
+    ddl = _ddl_pool(node_off, "workload='regular'")
+    ddl.start()
+    try:
+        # While the DDL pool runs, its slots must never appear under 'regular' (it is exempt).
+        deadline = time.time() + 10.0
+        while time.time() < deadline:
+            assert inflight(node_off, "regular") == 0, "DDL must be exempt from workload admission when use_ddl_workload=0"
+            time.sleep(0.2)
+    finally:
+        ddl.stop()
+    assert ddl.error is None, ddl.error

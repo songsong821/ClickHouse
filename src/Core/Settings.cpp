@@ -7565,7 +7565,7 @@ SETTINGS additional_result_filter = 'x != 2'
 Name of workload to be used to access resources
 )", 0) \
     DECLARE(String, ddl_workload, "default", R"(
-Name of the workload used to access resources for DDL queries (CREATE, ALTER, DROP, RENAME, OPTIMIZE, TRUNCATE, MOVE). Only takes effect when the server setting `use_ddl_workload` is enabled; DDL queries are then scheduled under this workload instead of the `workload` setting, so administrative statements are isolated from the workload of regular queries and do not compete for the same query-slot and memory-reservation limits. Defaults to the `default` workload.
+Name of the workload used to schedule DDL and administrative queries (CREATE, DROP, ALTER, RENAME, OPTIMIZE, MOVE, GRANT, REVOKE, SYSTEM, ...) when the server setting `use_ddl_workload` is enabled. Such queries are then admitted under this workload instead of the `workload` setting, so administrative statements do not compete with regular queries for the same query-slot and memory-reservation limits. Defaults to the `default` workload. Has no effect when `use_ddl_workload` is disabled (then DDL is exempt from workload admission entirely).
 )", 0) \
     DECLARE(Milliseconds, storage_system_stack_trace_pipe_read_timeout_ms, 100, R"(
 Maximum time to read from a pipe for receiving information from the threads when querying the `system.stack_trace` table. This setting is used for testing purposes and not meant to be changed by users.

@@ -45,6 +45,11 @@ class ThreadGroup;
 using ThreadGroupPtr = std::shared_ptr<ThreadGroup>;
 class ProcessListEntry;
 
+/// True for DDL / administrative statements (schema DDL, access control, SYSTEM), by query kind.
+/// Used to route DDL through the `ddl_workload` setting and to exempt it from workload admission
+/// when `use_ddl_workload` is disabled (see ProcessList::insert and executeQuery).
+bool isDDLQuery(const IAST * ast);
+
 /// Forward-declare to avoid pulling the whole scheduler stack into every TU that includes this header.
 /// The unique_ptr destructor is instantiated only in ProcessList.cpp where MemoryReservation.h is included.
 struct MemoryReservation;

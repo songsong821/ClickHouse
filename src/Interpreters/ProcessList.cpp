@@ -110,6 +110,29 @@ static bool isUnlimitedQuery(const IAST * ast)
     return false;
 }
 
+bool isDDLQuery(const IAST * ast)
+{
+    if (!ast)
+        return false;
+
+    switch (ast->getQueryKind())
+    {
+        case IAST::QueryKind::Create:
+        case IAST::QueryKind::Drop:
+        case IAST::QueryKind::Undrop:
+        case IAST::QueryKind::Rename:
+        case IAST::QueryKind::Alter:
+        case IAST::QueryKind::Optimize:
+        case IAST::QueryKind::Move:
+        case IAST::QueryKind::Grant:
+        case IAST::QueryKind::Revoke:
+        case IAST::QueryKind::System:
+            return true;
+        default:
+            return false;
+    }
+}
+
 ProcessList::EntryPtr ProcessList::insert(
     const String & query_,
     UInt64 normalized_query_hash,
@@ -126,7 +149,12 @@ ProcessList::EntryPtr ProcessList::insert(
     if (client_info.current_query_id.empty())
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Query id cannot be empty");
 
-    bool is_unlimited_query = isUnlimitedQuery(ast) || is_internal || client_info.is_from_introspection_port;
+    /// With use_ddl_workload disabled (default), DDL is exempt from query-slot and memory-reservation
+    /// admission, so administrative statements never queue behind regular queries. With it enabled,
+    /// DDL is admitted like any query but under `ddl_workload` (applied in executeQuery), so it is
+    /// not treated as unlimited here.
+    bool is_unlimited_query = isUnlimitedQuery(ast) || is_internal || client_info.is_from_introspection_port
+        || (isDDLQuery(ast) && !query_context->getUseDdlWorkload());
     std::shared_ptr<QueryStatus> query;
 
     // Acquire a query slot and a memory reservation from the resource scheduler if necessary.

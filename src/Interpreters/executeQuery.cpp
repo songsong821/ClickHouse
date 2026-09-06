@@ -313,26 +313,6 @@ static TSA_NO_THREAD_SAFETY_ANALYSIS void triggerSanitizerError()
 #endif
 }
 
-/// DDL / administrative statements, identified by query kind. Used to route them through the
-/// `ddl_workload` setting when `use_ddl_workload` is enabled, so they are not scheduled under the
-/// same workload as regular queries.
-static bool isDDLQuery(const IAST & ast)
-{
-    switch (ast.getQueryKind())
-    {
-        case IAST::QueryKind::Create:
-        case IAST::QueryKind::Drop:
-        case IAST::QueryKind::Undrop:
-        case IAST::QueryKind::Rename:
-        case IAST::QueryKind::Alter:
-        case IAST::QueryKind::Optimize:
-        case IAST::QueryKind::Move:
-            return true;
-        default:
-            return false;
-    }
-}
-
 static void checkASTSizeLimits(const IAST & ast, const Settings & settings)
 {
     if (settings[Setting::max_ast_depth])
@@ -2676,10 +2656,14 @@ static BlockIO executeQueryImpl(
             /// server setting (off by default — behavior is unchanged). This runs before the workload
             /// classifier is first acquired (in `ProcessList::insert`), and the classifier is cached
             /// once, so a single override of the effective `workload` redirects every resource dimension.
-            if (out_ast && context->getUseDdlWorkload() && isDDLQuery(*out_ast))
+            if (context->getUseDdlWorkload() && isDDLQuery(out_ast.get()))
             {
                 const String & ddl_workload = settings[Setting::ddl_workload];
-                context->setSetting("workload", ddl_workload.empty() ? String("default") : ddl_workload);
+                /// Apply via the settings-constraints path (not a raw setSetting) so a profile that
+                /// pins or constrains `workload` is still honored for DDL.
+                SettingChange change{"workload", Field(ddl_workload.empty() ? String("default") : ddl_workload)};
+                context->checkSettingsConstraints(change, SettingSource::QUERY);
+                context->applySettingChange(change);
             }
 
             /// The `database` setting is documented as equivalent to `USE`. To behave that way it must
