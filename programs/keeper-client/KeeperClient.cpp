@@ -3,6 +3,7 @@
 #include <Client/ClientBase.h>
 #include <Common/VersionNumber.h>
 #include <Common/Config/ConfigProcessor.h>
+#include <Common/Config/getConfigPath.h>
 #include <Client/ClientApplicationBase.h>
 #include <Common/EventNotifier.h>
 #include <Common/ZooKeeper/IKeeper.h>
@@ -650,7 +651,10 @@ void KeeperClient::connectToKeeper()
     }
 #endif
 
-    ConfigProcessor config_processor(config().getString("config-file", "config.xml"));
+    /// A configuration file can be written in XML or in YAML, so the default one is looked up with
+    /// every supported extension, not only with `.xml`.
+    ConfigProcessor config_processor(
+        config().has("config-file") ? config().getString("config-file") : getConfigPathForAnySupportedFormat("config.xml"));
 
     /// This will handle a situation when clickhouse is running on the embedded config, but config.d folder is also present.
     ConfigProcessor::registerEmbeddedConfig("config.xml", "<clickhouse/>");
