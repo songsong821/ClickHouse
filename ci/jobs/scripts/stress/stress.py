@@ -465,8 +465,9 @@ def get_options(i: int, upgrade_check: bool, encrypted_storage: bool) -> str:
     # Independent draws so the three can combine, up to all three on one worker. Not keyed on
     # `i`: --num-parallel is min(8, cpu_count()), so the earlier `i % 7 == 4` / `i % 7 == 6`
     # arms never fired at all on a runner with fewer than 5 and 7 cores.
-    if random.random() < 1 / 3:
-        client_options.append("transform_null_in=1")
+    # https://github.com/ClickHouse/ClickHouse/issues/112032 needs to be fixed to enable transform_null_in
+    #if random.random() < 1 / 3:
+    #    client_options.append("transform_null_in=1")
     if random.random() < 1 / 3:
         client_options.append("cast_keep_nullable=1")
     if random.random() < 1 / 3:
