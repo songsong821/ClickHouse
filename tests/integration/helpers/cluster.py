@@ -2768,6 +2768,11 @@ class ClickHouseCluster:
             exec_id = self.docker_client.api.exec_create(container_id, cmd, **kwargs)
             output = self.docker_client.api.exec_start(exec_id, detach=detach)
 
+            if detach:
+                # A detached exec is left running, so docker reports `ExitCode: None` for it; a
+                # value here would only mean it happened to finish first, which was not waited for.
+                return exec_id["Id"] if get_exec_id else output
+
             exit_code = self.docker_client.api.exec_inspect(exec_id)["ExitCode"]
             if exit_code:
                 container_info = self.docker_client.api.inspect_container(container_id)
@@ -2787,10 +2792,8 @@ class ClickHouseCluster:
                     logging.debug(message)
                 else:
                     raise Exception(message)
-            if not detach:
-                assert not get_exec_id
-                return output.decode()
-            return exec_id["Id"] if get_exec_id else output
+            assert not get_exec_id
+            return output.decode()
 
     def copy_file_to_container(self, container_id, local_path, dest_path):
         with open(local_path, "rb") as fdata:
@@ -4348,9 +4351,9 @@ class ClickHouseCluster:
                     )
                     instance.clickhouse_last_exit_code = None
                     instance.clickhouse_forced_stop = False
-                    # Same ordering as `start_clickhouse`: `exec_in_container` throws when the
-                    # server exits immediately, so clear the handle first and take the new one
-                    # only once the start returned, never leaving a finished exec behind.
+                    # Same ordering as `start_clickhouse`: clear the handle first and take the
+                    # new one only once the start returned, so a start that throws never leaves
+                    # the previous server's finished exec in place.
                     instance.clickhouse_exec_id = ""
                     exec_id = instance.exec_in_container(
                         ["bash", "-c", instance.clickhouse_start_command],
@@ -5718,10 +5721,9 @@ class ClickHouseInstance:
                 self.clickhouse_last_exit_code = None
                 self.clickhouse_forced_stop = False
                 # Drop the previous exec before starting, and take the new id only once the
-                # start returned. `exec_in_container` inspects the exec it just created and
-                # throws when the server exited immediately, so assigning in one statement
-                # would leave the finished exec of the *previous* server in place, and its
-                # exit code would then be read as if it belonged to this one.
+                # start returned: should the start throw, assigning in one statement would
+                # leave the finished exec of the *previous* server in place, and its exit
+                # code would then be read as if it belonged to this one.
                 self.clickhouse_exec_id = ""
                 exec_id = self.exec_in_container(
                     [
