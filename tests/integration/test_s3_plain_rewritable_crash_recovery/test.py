@@ -1,6 +1,7 @@
 """A `plain_rewritable` disk commits a removal in the metadata first and deletes the objects afterwards.
 If the server is killed in between, the objects must not stay in the bucket forever (issue #114051):
-they are kept under reserved names and reclaimed when the metadata is loaded on the next start."""
+they are kept under reserved names and reclaimed when the metadata is loaded on the next start.
+"""
 
 import concurrent.futures
 import threading
@@ -70,7 +71,8 @@ def has_removed_file_backup(keys):
 
 def wait_failpoint_paused(failpoint, timeout=60):
     """`SYSTEM WAIT FAILPOINT ... PAUSE` blocks until some thread parks at the failpoint,
-    so it runs on a worker thread that is abandoned if the failpoint is never reached."""
+    so it runs on a worker thread that is abandoned if the failpoint is never reached.
+    """
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     future = pool.submit(node.query, f"SYSTEM WAIT FAILPOINT {failpoint} PAUSE")
     done, _ = concurrent.futures.wait([future], timeout=timeout)
@@ -109,7 +111,9 @@ def wait_for_empty_prefix(timeout=60):
         ),
     ],
 )
-def test_drop_table_killed_before_finalize(failpoint, num_parts, is_removal_in_progress):
+def test_drop_table_killed_before_finalize(
+    failpoint, num_parts, is_removal_in_progress
+):
     node.query("DROP TABLE IF EXISTS t SYNC")
     wait_for_empty_prefix()
 
