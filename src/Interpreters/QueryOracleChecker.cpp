@@ -109,8 +109,18 @@ const std::unordered_set<String> non_deterministic_functions = {
     /// Non-deterministic or approximate aggregate functions.
     "any", "anyLast", "anyHeavy",
     "anyRespectNulls", "anyLastRespectNulls",
+    /// `anyRespectNulls` / `anyLastRespectNulls` are aliases; these are the
+    /// names they are registered under and are equally valid in a query.
+    "any_respect_nulls", "anyLast_respect_nulls",
     "first_value", "last_value",
     "topK", "topKWeighted",
+    /// `approx_top_k` / `approx_top_sum` are the space-saving counterparts of
+    /// `topK`: which elements survive the bounded counter table, and the counts
+    /// reported for them, depend on the order values arrive in and on how the
+    /// partial states are merged. `QueryFuzzer`'s aggregate swap list offers
+    /// `approx_top_k` for any single-argument aggregate, so omitting it here let
+    /// the TLP Aggregate oracle report false mismatches on master CI.
+    "approx_top_k", "approx_top_sum",
     "uniqHLL12", "uniqCombined", "uniqCombined64", "uniqTheta",
     /// Approximate quantile/median functions: State/Merge gives different results
     /// than direct computation due to approximate merging algorithms. Block both
@@ -133,6 +143,8 @@ const std::unordered_set<String> non_deterministic_functions = {
     "quantileExactExclusive", "quantileExactInclusive",
     "quantilesExactExclusive", "quantilesExactInclusive",
     "quantileInterpolatedWeighted", "quantilesInterpolatedWeighted",
+    "quantileExactWeightedInterpolated", "quantilesExactWeightedInterpolated",
+    "quantilePrometheusHistogram", "quantilesPrometheusHistogram",
     /// Order-dependent or floating-point aggregates whose State/Merge path
     /// can differ from direct computation. `sum` / `sumWithOverflow` are
     /// blocked because floating-point addition is non-associative — the
@@ -145,13 +157,22 @@ const std::unordered_set<String> non_deterministic_functions = {
     "stddevPop", "stddevSamp", "stddevPopStable", "stddevSampStable",
     "varPop", "varSamp", "varPopStable", "varSampStable",
     "covarPop", "covarSamp", "covarPopStable", "covarSampStable", "corr", "corrStable",
+    "corrMatrix", "covarPopMatrix", "covarSampMatrix",
     "avg", "avgWeighted",
     "skewPop", "skewSamp", "kurtPop", "kurtSamp",
-    "sum", "sumWithOverflow", "sumKahan",
+    "sum", "sumWithOverflow", "sumKahan", "sumCount",
+    /// Per-key sums over maps and arrays add the same floating-point values in
+    /// a merge-order-dependent order, exactly like `sum` above.
+    "sumMappedArrays", "sumMapWithOverflow",
+    "sumMapFiltered", "sumMapFilteredWithOverflow",
     "stochasticLinearRegression", "stochasticLogisticRegression",
     "initializeAggregation",
     /// Order-dependent aggregate functions.
     "groupArray", "groupUniqArray", "groupArrayInsertAt",
+    /// `groupArrayIntersect` emits the surviving set in hash-table iteration
+    /// order, which depends on the insertion history — same reason as
+    /// `groupUniqArray`. The *set* matches, the array order does not.
+    "groupArrayIntersect",
     "groupArrayMovingSum", "groupArrayMovingAvg",
     "groupArraySorted", "groupArrayLast",
     /// `argMin`/`argMax`/`groupConcat` are order-dependent on ties: the
@@ -170,13 +191,21 @@ const std::unordered_set<String> non_deterministic_functions = {
     /// plan-changing rewrite (DQP setting toggle, State/Merge, subquery wrap)
     /// then legitimately differs from direct evaluation.
     "largestTriangleThreeBuckets",
+    /// `boundingRatio` divides by the gap between the leftmost and rightmost
+    /// points: on ties in the x argument which point wins is merge-order
+    /// dependent, and the ratio is a Float64 either way.
+    "boundingRatio",
+    /// `mergedJSONPatch` keeps the last write per path ordered by the sort key,
+    /// so tied keys resolve differently depending on the merge order.
+    "mergedJSONPatch",
     /// Depends on physical data layout, not values.
     "estimateCompressionRatio",
     /// Statistical hypothesis-test / correlation aggregates: they return
     /// floating-point statistics or p-values computed with rank/tie handling
     /// and non-associative summation, so the State/Merge, DQP and
     /// subquery-rewrite paths legitimately differ from direct evaluation.
-    "mannWhitneyUTest", "studentTTest", "welchTTest", "meanZTest",
+    "mannWhitneyUTest", "studentTTest", "studentTTestOneSample", "welchTTest", "meanZTest",
+    "analysisOfVariance",
     "kolmogorovSmirnovTest", "rankCorr", "theilsU", "cramersV",
     "cramersVBiasCorrected", "contingency", "categoricalInformationValue",
 };
@@ -236,6 +265,29 @@ String stripAggregateCombinators(String name)
     return name;
 }
 
+/// Resolve an aggregate function alias to the name it was registered under.
+/// ClickHouse aliases plenty of aggregates whose `State`/`Merge` rewrite is
+/// unsafe for the oracle — `min_by`/`max_by` for `argMin`/`argMax`, `array_agg`
+/// for `groupArray`, `lttb` for `largestTriangleThreeBuckets`, every `median*`
+/// for the matching `quantile*`, `approx_top_count` for `approx_top_k`, `anova`
+/// for `analysisOfVariance`, `STDDEV_POP`/`VAR_SAMP`/`COVAR_POP` for the
+/// `stddev*`/`var*`/`covar*` families — and listing each alias by hand is the
+/// kind of bookkeeping that rots silently: one missing spelling is one false
+/// oracle mismatch reddening master CI. Resolve through the factory instead.
+/// `isAlias` looks the raw name up in the case-sensitive map and only a
+/// lowercased name up in the case-insensitive one, so retry lowercased before
+/// giving up. Over-matching a spelling ClickHouse would not resolve at all only
+/// skips one more query, which is safe.
+String resolveAggregateAlias(const String & name)
+{
+    const auto & factory = AggregateFunctionFactory::instance();
+    if (factory.isAlias(name))
+        return factory.aliasTo(name);
+    if (const String name_lower = Poco::toLower(name); factory.isAlias(name_lower))
+        return factory.aliasTo(name_lower);
+    return name;
+}
+
 /// True if `name`, after removing zero or more combinator suffixes, names an
 /// entry of `non_deterministic_functions` (matched case-insensitively).
 /// Membership must be tested at EVERY stripping stage, not only at the
@@ -243,11 +295,37 @@ String stripAggregateCombinators(String name)
 /// word, e.g. `groupUniqArrayOrNull` strips to `groupUniqArray` (a set
 /// member), but one more iteration eats the literal `Array` and produces
 /// `groupUniq`, which the set does not contain.
+bool namesUnsafeFunctionAfterStripping(String name)
+{
+    while (true)
+    {
+        if (non_deterministic_functions_lower.contains(Poco::toLower(name)))
+            return true;
+        if (!stripLongestCombinatorSuffix(name))
+            return false;
+    }
+}
+
+/// As above, but a name is also unsafe when the aggregate function it is an
+/// alias of is.
 bool isOracleUnsafeFunctionName(String name)
 {
     while (true)
     {
         if (non_deterministic_functions_lower.contains(Poco::toLower(name)))
+            return true;
+        /// The raw spelling is tested first and separately, never replaced by
+        /// the canonical one: the set is free to name a function by whichever
+        /// spelling reads best, so resolving before the lookup would turn a
+        /// listed alias into an unlisted canonical and lose the match.
+        /// The alias is resolved at every stripping stage rather than once up
+        /// front, because the combinators the fuzzer appends hide the alias
+        /// from the factory (`min_byIf` is not a registered name, `min_by` is).
+        /// The expansion is then stripped in turn: an alias may well expand to
+        /// a name that itself carries a combinator, as `array_concat_agg` does
+        /// to `groupArrayArray` (`groupArray` plus `Array`).
+        if (const String canonical = resolveAggregateAlias(name);
+            canonical != name && namesUnsafeFunctionAfterStripping(canonical))
             return true;
         if (!stripLongestCombinatorSuffix(name))
             return false;
