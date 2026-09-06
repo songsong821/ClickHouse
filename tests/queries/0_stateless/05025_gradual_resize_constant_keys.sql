@@ -69,12 +69,49 @@ SELECT x, c FROM (SELECT 1 AS x, count() AS c FROM test_gradual_resize_constant_
 -- Distributed regression: a remote shard analyzes the query itself and keeps a constant grouping
 -- key such as `hostName()` (`ExpressionAnalyzer` and `PlannerExpressionAnalysis` only strip it on
 -- the initiator), so the shard-side pre-aggregation hits the same code path.
+-- `test_shard_localhost` is the local server, and with `prefer_localhost_replica = 1` the initiator
+-- would run the shard part of the query itself, skipping the shard-side analysis; force a real
+-- remote query. Its pipeline is not visible in `EXPLAIN PIPELINE`, hence the introspection through
+-- `processors_profile_log` (the shard is this server, so its processors land in the same log).
 DROP TABLE IF EXISTS test_gradual_resize_constant_keys_dist;
 CREATE TABLE test_gradual_resize_constant_keys_dist AS test_gradual_resize_constant_keys
 ENGINE = Distributed(test_shard_localhost, currentDatabase(), test_gradual_resize_constant_keys);
 
+SET prefer_localhost_replica = 0;
+SET log_processors_profiles = 1;
+
+-- Positive control: a keyed `GROUP BY` does take the gradual path on the shard.
+SELECT k, count() FROM test_gradual_resize_constant_keys_dist GROUP BY k
+    FORMAT Null SETTINGS log_comment = '05025_remote_keyed';
+SELECT hostName() AS h, count() AS c FROM test_gradual_resize_constant_keys_dist GROUP BY h
+    FORMAT Null SETTINGS log_comment = '05025_remote_hostname';
+SELECT 1 AS x, count() AS c FROM test_gradual_resize_constant_keys_dist GROUP BY x
+    FORMAT Null SETTINGS log_comment = '05025_remote_literal';
+
+-- Results are unaffected: a single group covering all the rows.
 SELECT count(), sum(c) FROM (SELECT hostName() AS h, count() AS c FROM test_gradual_resize_constant_keys_dist GROUP BY h);
 SELECT count(), sum(c) FROM (SELECT 1 AS x, count() AS c FROM test_gradual_resize_constant_keys_dist GROUP BY x);
+
+SYSTEM FLUSH LOGS processors_profile_log, query_log;
+
+-- The `event_time` bound keeps the log scans cheap: without it every flaky-check rerun scans all
+-- the log rows accumulated by the earlier runs.
+SELECT
+    log_comment,
+    countIf(name = 'GradualResize') > 0 AS has_gradual_resize,
+    countIf(name = 'Resize') > 0 AS has_strict_resize
+FROM system.processors_profile_log AS p
+INNER JOIN
+(
+    SELECT query_id, log_comment
+    FROM system.query_log
+    WHERE event_date >= yesterday() AND event_time >= now() - INTERVAL 10 MINUTE
+      AND current_database = currentDatabase() AND type = 'QueryFinish'
+      AND log_comment IN ('05025_remote_keyed', '05025_remote_hostname', '05025_remote_literal')
+) AS q ON p.initial_query_id = q.query_id
+WHERE p.event_date >= yesterday() AND p.event_time >= now() - INTERVAL 10 MINUTE
+GROUP BY log_comment
+ORDER BY log_comment;
 
 DROP TABLE test_gradual_resize_constant_keys_dist;
 DROP TABLE test_gradual_resize_constant_keys;
