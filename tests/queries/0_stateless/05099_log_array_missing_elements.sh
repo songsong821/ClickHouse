@@ -11,7 +11,7 @@ CUR_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # MergeTree readers may see a partially read column, because they throw it away and fill it with
 # defaults afterwards; everywhere else the data has to be rejected while reading it.
 
-WORKING_DIR="${CLICKHOUSE_TMP}/05023_log_array_missing_elements"
+WORKING_DIR="${CLICKHOUSE_TMP}/05099_log_array_missing_elements"
 rm -rf "${WORKING_DIR}"
 mkdir -p "${WORKING_DIR}"
 

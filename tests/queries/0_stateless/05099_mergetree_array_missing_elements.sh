@@ -11,7 +11,7 @@ CUR_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # but holds no data is not refilled, so it has to be rejected while reading instead of reaching the
 # query pipeline with offsets that index past the end of its elements.
 
-WORKING_DIR="${CLICKHOUSE_TMP}/05024_mergetree_array_missing_elements"
+WORKING_DIR="${CLICKHOUSE_TMP}/05099_mergetree_array_missing_elements"
 rm -rf "${WORKING_DIR}"
 mkdir -p "${WORKING_DIR}"
 
