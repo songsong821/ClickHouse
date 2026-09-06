@@ -331,8 +331,10 @@ public:
     /// and in bytes under the sweep lock, drains each into a producer-local table outside the
     /// lock, and writes that table through the ordinary external machinery, until the query is
     /// back under the threshold or only a tail too small for a part is left, which accumulates
-    /// in the session's shared table instead. Producers over the trigger block on the claim
-    /// deliberately - pausing production is the backpressure that makes the bound hold.
+    /// in the session's shared table instead - written out first when the residue there and the
+    /// tail together would reach the part bound, so that table too stays within a part. Producers
+    /// over the trigger block on the claim deliberately - pausing production is the backpressure
+    /// that makes the bound hold.
     void drainStagedChunksUnderMemoryPressure(AdaptiveAggregationSession & shared) const;
 
     /// One claim of the sweep: a full batch drained into a producer-local table and written,

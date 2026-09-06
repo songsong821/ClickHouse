@@ -40,8 +40,11 @@ namespace ProfileEvents
     extern const Event AdaptiveAggregationDrainedRecords;
     extern const Event AdaptiveAggregationPressureSweeps;
     extern const Event AdaptiveAggregationPressureDrainedRecords;
+    extern const Event AdaptiveAggregationFinishDrains;
+    extern const Event AdaptiveAggregationFinishDrainedRecords;
     extern const Event AdaptiveAggregationResidueReleases;
     extern const Event AdaptiveAggregationSharedTableSpills;
+    extern const Event AdaptiveAggregationSharedTableSpillsBeforeTail;
 }
 
 namespace DB
@@ -1883,7 +1886,10 @@ void Aggregator::drainStagedChunksAtFinish(AdaptiveAggregationSession & shared) 
         return;
     }
 
-    ProfileEvents::increment(ProfileEvents::AdaptiveAggregationPressureSweeps);
+    /// Counted apart from the pressure sweeps: this drain runs because the input ended with
+    /// records still staged, not because of memory pressure, and a test of the production-time
+    /// valve must be able to tell the two apart.
+    ProfileEvents::increment(ProfileEvents::AdaptiveAggregationFinishDrains);
     while (shared.early_drain_variants->aggregates_pools.size() < ADAPTIVE_AGGREGATION_NUM_BUCKETS)
         shared.early_drain_variants->aggregates_pools.push_back(std::make_shared<Arena>());
 
@@ -1939,7 +1945,7 @@ void Aggregator::drainStagedChunksAtFinish(AdaptiveAggregationSession & shared) 
         begin = end;
     }
 
-    ProfileEvents::increment(ProfileEvents::AdaptiveAggregationPressureDrainedRecords, drained_records);
+    ProfileEvents::increment(ProfileEvents::AdaptiveAggregationFinishDrainedRecords, drained_records);
     shared.backlog.recordDrained(drained_records);
     LOG_TRACE(log, "Adaptive aggregation: finish drain converted {} staged records", drained_records);
 
@@ -2008,6 +2014,46 @@ bool Aggregator::drainStagedChunksBatchUnderMemoryPressure(
         if (!batch_is_full)
         {
             /// The tail regime: too little for a part of reasonable size.
+
+            /// The claim above was sized against a fresh part, which is what tells a part of its
+            /// own from a tail; it says nothing about the room left in the shared table. A tail
+            /// is drained into that table only if the residue it holds and the tail together stay
+            /// under the part bound, otherwise the residue is written out first: draining first
+            /// and detaching after would build a table of up to two parts, which is the working
+            /// set the bound exists to keep, and would do so again on every sub-part sweep. The
+            /// write happens outside the lock, like every other detached table; the tail is
+            /// claimed already, so it waits on this thread and no other sweep can take it. Only
+            /// cancellation declines the reservation, and then the tail goes back for the finish
+            /// drain to drop with the rest.
+            const size_t tail_bytes = estimateAdaptiveDrainBytes(routing_type, batch_records, batch_staged_bytes);
+            if (shared.early_drain_variants->hasData()
+                && (shared.early_drain_variants->size() + batch_records >= adaptive_pressure_spill_min_keys
+                    || sharedDrainTableBytes(shared) + tail_bytes >= part_bytes))
+            {
+                AdaptiveAggregationSession::SpillReservation reservation;
+                if (!reservation.reserveOrWait(shared, sharedDrainTableBytes(shared), adaptivePressureDetachedBytesBudget()))
+                {
+                    for (auto & chunk : batch)
+                        shared.backlog.requeue(chunk);
+                    return false;
+                }
+
+                auto detached = detachSharedDrainTable(shared, createAdaptiveDrainTable(shared.early_drain_variants->type));
+                ProfileEvents::increment(ProfileEvents::AdaptiveAggregationSharedTableSpills);
+                ProfileEvents::increment(ProfileEvents::AdaptiveAggregationSharedTableSpillsBeforeTail);
+                LOG_TRACE(
+                    log,
+                    "Adaptive aggregation: pressure sweep wrote the shared drain table ({} keys) out before draining a tail of {} records into it",
+                    detached->size(),
+                    batch_records);
+
+                sweep_lock.unlock();
+                spillDetachedAdaptiveTable(shared, *detached);
+                detached.reset();
+                reservation.release();
+                sweep_lock.lock();
+            }
+
             while (shared.early_drain_variants->aggregates_pools.size() < ADAPTIVE_AGGREGATION_NUM_BUCKETS)
                 shared.early_drain_variants->aggregates_pools.push_back(std::make_shared<Arena>());
 
@@ -2023,7 +2069,12 @@ bool Aggregator::drainStagedChunksBatchUnderMemoryPressure(
 
             ProfileEvents::increment(ProfileEvents::AdaptiveAggregationPressureDrainedRecords, drained_records);
             shared.backlog.recordDrained(drained_records);
-            LOG_TRACE(log, "Adaptive aggregation: pressure sweep drained {} staged records early", drained_records);
+            LOG_TRACE(
+                log,
+                "Adaptive aggregation: pressure sweep drained {} staged records early into the shared table, which holds {} keys in {} bytes",
+                drained_records,
+                shared.early_drain_variants->size(),
+                sharedDrainTableBytes(shared));
 
             /// Tail drains can push the shared residue past the floor over time; detach it
             /// under the lock and write it outside, like a producer-local table. The
