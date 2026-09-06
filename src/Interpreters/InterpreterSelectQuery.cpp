@@ -2018,6 +2018,15 @@ void InterpreterSelectQuery::executeImpl(QueryPlan & query_plan, std::optional<P
 
         if (expressions.first_stage)
         {
+            /// A row policy on a `SQL SECURITY DEFINER` / `NONE` view and a view-keyed additional
+            /// filter hide rows of the view exactly like the view's own `WHERE` does, and
+            /// `StorageView::readImpl` already treats both as row-hiding when it seals the view's
+            /// subplan. The filter steps built here sit above that subplan, so they must be
+            /// barriers themselves: otherwise the invoker's predicate merges into them and is
+            /// evaluated on the rows they are about to drop. See IQueryPlanStep::isSecurityBarrier.
+            const bool view_is_security_barrier = typeid_cast<const StorageView *>(storage.get())
+                && StorageView::isSecurityBarrier(*metadata_snapshot, context);
+
             // If there is a storage that supports prewhere, this will always be nullptr
             // Thus, we don't actually need to check if projection is active.
             if (expressions.row_policy_info && !shouldPushRowLevelFilterToStorage())
@@ -2029,6 +2038,8 @@ void InterpreterSelectQuery::executeImpl(QueryPlan & query_plan, std::optional<P
                     expressions.row_policy_info->do_remove_column);
 
                 row_level_security_step->setStepDescription("Row-level security filter");
+                if (view_is_security_barrier)
+                    row_level_security_step->setSecurityBarrier();
                 query_plan.addStep(std::move(row_level_security_step));
             }
 
@@ -2047,8 +2058,7 @@ void InterpreterSelectQuery::executeImpl(QueryPlan & query_plan, std::optional<P
             if (additional_filter_info)
             {
                 add_filter_step(additional_filter_info, "Additional filter");
-                if (typeid_cast<const StorageView *>(storage.get())
-                    && StorageView::isSecurityBarrier(*metadata_snapshot, context))
+                if (view_is_security_barrier)
                     query_plan.getRootNode()->step->setSecurityBarrier();
             }
 

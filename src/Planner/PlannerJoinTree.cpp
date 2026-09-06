@@ -1915,8 +1915,7 @@ JoinTreeQueryPlan buildQueryPlanForTableExpression(TableExpressionNodePtr table_
 
                 std::vector<std::pair<FilterDAGInfo, DescriptionHolderPtr>> where_filters;
                 bool row_policy_filter_not_pushed = false;
-                const bool additional_filter_is_security_barrier = table_expression_query_info.additional_filter_ast
-                    && typeid_cast<const StorageView *>(storage.get())
+                const bool view_is_security_barrier = typeid_cast<const StorageView *>(storage.get())
                     && StorageView::isSecurityBarrier(*storage_snapshot->metadata, query_context);
 
                 if (prewhere_actions && select_query_options.build_logical_plan)
@@ -2761,6 +2760,16 @@ JoinTreeQueryPlan buildQueryPlanForTableExpression(TableExpressionNodePtr table_
                     query_plan.addStep(std::move(alias_column_step));
                 }
 
+                /// A view-keyed additional filter and a row policy on the view itself hide rows of a
+                /// `SQL SECURITY DEFINER` / `NONE` view exactly like the view's own `WHERE` does, and
+                /// `StorageView::readImpl` already treats both as row-hiding when it seals the view's
+                /// subplan. The filters built here sit above that subplan (`StorageView` takes no
+                /// `PREWHERE`, so the policy is never pushed into the read), so they must be barriers
+                /// themselves: otherwise the invoker's predicate merges into them and is evaluated on
+                /// the rows they are about to drop. See IQueryPlanStep::isSecurityBarrier.
+                const bool where_filters_are_security_barriers = view_is_security_barrier
+                    && (table_expression_query_info.additional_filter_ast || row_policy_filter_not_pushed);
+
                 for (auto && [filter_info, description] : where_filters)
                 {
                     if (query_plan.isInitialized() &&
@@ -2771,7 +2780,7 @@ JoinTreeQueryPlan buildQueryPlanForTableExpression(TableExpressionNodePtr table_
                             filter_info.column_name,
                             filter_info.do_remove_column);
                         description->setStepDescription(*filter_step);
-                        if (additional_filter_is_security_barrier)
+                        if (where_filters_are_security_barriers)
                             filter_step->setSecurityBarrier();
                         query_plan.addStep(std::move(filter_step));
                     }
