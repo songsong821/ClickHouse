@@ -37,7 +37,7 @@ marks: 1
 status: applicable
 marks: 1
 skip_ratio: 0.0%
-verdict: would not be chosen, it does not read fewer marks than the base table
+verdict: would not be chosen, it reads the same marks as the base table and does not help with sorting
 source: empirical
 real:
 ReadFromMergeTree (default.t_real)
@@ -53,6 +53,29 @@ source: empirical
 real:
 ReadFromMergeTree (p_c)
 Granules: 4
+--- the projection's own index_granularity is used ---
+hypothetical:
+marks: 100
+status: applicable
+marks: 3
+skip_ratio: 97.0%
+verdict: would be chosen, it reads fewer marks than the base table
+source: empirical
+real:
+ReadFromMergeTree (p_g)
+Granules: 3
+--- no filter, the projection serves the ORDER BY ---
+hypothetical:
+marks: 100
+status: applicable
+marks: 100
+skip_ratio: 0.0%
+verdict: would be chosen, it reads the same marks as the base table and serves the ORDER BY
+source: empirical
+real:
+ReadFromMergeTree (p_b)
+Granules: 100
+reason: Query has no filter predicate
 --- not applicable cases ---
 With p_key (projection (normal), hypothetical):
 reason: Projection sort key cannot filter this predicate (always unknown or true)

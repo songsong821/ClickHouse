@@ -12,7 +12,9 @@
 #include <Interpreters/sortBlock.h>
 #include <Processors/Executors/PullingPipelineExecutor.h>
 #include <Processors/IProcessor.h>
+#include <Processors/QueryPlan/Optimizations/optimizeReadInOrder.h>
 #include <Processors/QueryPlan/Optimizations/projectionsCommon.h>
+#include <Processors/QueryPlan/SortingStep.h>
 #include <QueryPipeline/QueryPipeline.h>
 #include <QueryPipeline/SizeLimits.h>
 #include <Storages/MergeTree/AlterConversions.h>
@@ -37,6 +39,8 @@ namespace Setting
     extern const SettingsUInt64 max_bytes_to_read;
     extern const SettingsOverflowMode read_overflow_mode;
     extern const SettingsBool optimize_use_projections;
+    extern const SettingsBool optimize_read_in_order;
+    extern const SettingsBool force_optimize_projection;
 }
 
 namespace MergeTreeSetting
@@ -183,7 +187,7 @@ MarkRanges pruneSyntheticProjectionPart(
     ProjectionPartData & data,
     const ProjectionDescription & projection,
     const DataPartPtr & parent_part,
-    const KeyCondition & key_condition,
+    const KeyCondition * key_condition,
     const MergeTreeSettings & mt_settings,
     const Settings & query_settings,
     MergeTreeIndexGranularityPtr & granularity_out,
@@ -212,6 +216,10 @@ MarkRanges pruneSyntheticProjectionPart(
     granularity_out
         = std::make_shared<MergeTreeIndexGranularityConstant>(granule_rows, last_mark_rows, num_marks, /* has_final_mark */ false);
 
+    /// nothing to prune with, the projection reads all of its marks
+    if (!key_condition)
+        return MarkRanges{{0, num_marks}};
+
     /// primary index = the key at the first row of every granule
     Columns index_columns;
     index_columns.reserve(data.key_block.columns());
@@ -237,21 +245,24 @@ MarkRanges pruneSyntheticProjectionPart(
     synthetic_ranges.ranges = MarkRanges{{0, num_marks}};
 
     return MergeTreeDataSelectExecutor::markRangesFromPKRange(
-        synthetic_ranges, projection.metadata, key_condition, nullptr, nullptr, nullptr, nullptr, query_settings, log);
+        synthetic_ranges, projection.metadata, *key_condition, nullptr, nullptr, nullptr, nullptr, query_settings, log);
 }
 
 /// the optimizer only considers parts that survived the base analysis, so do the same
 bool tryEstimateProjection(
     WhatIfCandidateResult & result,
     const ProjectionDescription & projection,
-    const KeyCondition & key_condition,
+    const KeyCondition * key_condition,
+    bool sort_order_helps,
     ReadFromMergeTree * read_step,
     const RangesInDataParts & baseline_parts,
     UInt64 baseline_marks,
     const ContextPtr & context)
 {
     const auto & data = read_step->getMergeTreeData();
-    const auto & mt_settings = *data.getSettings();
+    /// the projection's own WITH SETTINGS win, same as when it is really written
+    const auto mt_settings_ptr = data.getSettings(&projection.settings_changes);
+    const auto & mt_settings = *mt_settings_ptr;
     const auto & query_settings = context->getSettingsRef();
 
     /// not the normal read pipeline, so enforce the read limits by hand
@@ -307,8 +318,17 @@ bool tryEstimateProjection(
     result.skip_ratio = baseline_marks > 0
         ? (static_cast<double>(baseline_marks) - static_cast<double>(projection_marks)) / static_cast<double>(baseline_marks)
         : 0.0;
-    /// the optimizer switches only for strictly fewer marks, every baseline part has the candidate so nothing to add
-    result.would_be_chosen = baseline_marks > 0 && projection_marks < baseline_marks;
+    /// the same rule as optimizeUseNormalProjections, every baseline part has the candidate so nothing to add
+    if (projection_marks < baseline_marks)
+        result.verdict = "would be chosen, it reads fewer marks than the base table";
+    else if (projection_marks > baseline_marks)
+        result.verdict = "would not be chosen, it reads more marks than the base table";
+    else if (sort_order_helps)
+        result.verdict = "would be chosen, it reads the same marks as the base table and serves the ORDER BY";
+    else if (query_settings[Setting::force_optimize_projection] || baseline_marks == 0)
+        result.verdict = "would be chosen, it reads the same marks as the base table and force_optimize_projection is set";
+    else
+        result.verdict = "would not be chosen, it reads the same marks as the base table and does not help with sorting";
     result.estimate_source = WhatIfCandidateResult::Empirical;
     result.empirical_status = WhatIfCandidateResult::Ok;
     result.sampled_parts = scanned_parts;
@@ -346,6 +366,8 @@ WhatIfCandidateResult evaluateProjection(
     const ReadFromMergeTree::AnalysisResult & analysis,
     const RangesInDataParts & baseline_parts,
     const WhatIfSettings & settings,
+    const SortingStep * outer_sorting,
+    const QueryPlan::Node * subtree_above_reading,
     ContextPtr context)
 {
     const auto & data = read_step->getMergeTreeData();
@@ -357,17 +379,18 @@ WhatIfCandidateResult evaluateProjection(
     result.total_parts = data.getActivePartsCount();
     result.total_marks = data.getTotalMarksCount();
 
+    /// a definition that no longer fits is the answer whatever the session settings say
+    auto metadata = read_step->getStorageMetadata();
+    auto projection = refreshHypotheticalProjection(stored_projection, data, metadata, context, result.not_applicable_reason);
+    if (!projection)
+        return result;
+
     /// context already carries the inner SELECT settings
     if (!context->getSettingsRef()[Setting::optimize_use_projections])
     {
         result.not_applicable_reason = "Projections are disabled by `optimize_use_projections = 0`";
         return result;
     }
-
-    auto metadata = read_step->getStorageMetadata();
-    auto projection = refreshHypotheticalProjection(stored_projection, data, metadata, context, result.not_applicable_reason);
-    if (!projection)
-        return result;
 
     if (projection->type == ProjectionDescription::Type::Aggregate)
     {
@@ -419,19 +442,27 @@ WhatIfCandidateResult evaluateProjection(
     if (!projection->required_columns.empty())
         context->checkAccess(AccessType::SELECT, data.getStorageID(), projection->required_columns);
 
-    const auto & filter_dag = read_step->getFilterActionsDAG();
-    if (!filter_dag)
-    {
-        result.not_applicable_reason = "Query has no filter predicate";
-        return result;
-    }
+    /// the other way a normal projection wins, it hands the outer ORDER BY rows already in order
+    const bool sort_order_helps = outer_sorting && subtree_above_reading && context->getSettingsRef()[Setting::optimize_read_in_order]
+        && QueryPlanOptimizations::wouldReadInOrderBeUseful(*outer_sorting, proj_key, *subtree_above_reading);
 
     /// PK-range condition over the projection key, from the query predicate
-    ActionsDAGWithInversionPushDown predicate_dag(filter_dag->getOutputs().front(), context, /* boolean_context */ true);
-    KeyCondition key_condition(predicate_dag, context, proj_key.column_names, proj_key.expression);
-    if (key_condition.alwaysUnknownOrTrue())
+    const auto & filter_dag = read_step->getFilterActionsDAG();
+    std::optional<ActionsDAGWithInversionPushDown> predicate_dag;
+    std::optional<KeyCondition> key_condition;
+    if (filter_dag)
     {
-        result.not_applicable_reason = "Projection sort key cannot filter this predicate (always unknown or true)";
+        predicate_dag.emplace(filter_dag->getOutputs().front(), context, /* boolean_context */ true);
+        key_condition.emplace(*predicate_dag, context, proj_key.column_names, proj_key.expression);
+        if (key_condition->alwaysUnknownOrTrue())
+            key_condition.reset();
+    }
+
+    /// without pruning the projection reads all of its marks, which only pays off when it serves the ORDER BY
+    if (!key_condition && !sort_order_helps)
+    {
+        result.not_applicable_reason = filter_dag ? "Projection sort key cannot filter this predicate (always unknown or true)"
+                                                  : "Query has no filter predicate";
         return result;
     }
 
@@ -439,7 +470,9 @@ WhatIfCandidateResult evaluateProjection(
 
     if (settings.empirical)
     {
-        if (tryEstimateProjection(result, *projection, key_condition, read_step, baseline_parts, analysis.selected_marks, context))
+        if (tryEstimateProjection(
+                result, *projection, key_condition ? &*key_condition : nullptr, sort_order_helps, read_step, baseline_parts,
+                analysis.selected_marks, context))
             return result;
         result.empirical_status = WhatIfCandidateResult::Unsupported;
     }

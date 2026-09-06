@@ -6,7 +6,7 @@ CUR_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$CUR_DIR"/../shell_config.sh
 
 # count() must reach the read step and the real projection must be allowed to win
-PIN="optimize_trivial_count_query = 0, optimize_use_implicit_projections = 0, optimize_use_projections = 1"
+PIN="optimize_trivial_count_query = 0, optimize_use_implicit_projections = 0, optimize_use_projections = 1, optimize_read_in_order = 1"
 
 $CLICKHOUSE_CLIENT -q "
     DROP TABLE IF EXISTS t_est; DROP TABLE IF EXISTS t_real;
@@ -24,19 +24,27 @@ $CLICKHOUSE_CLIENT -q "
     INSERT INTO t_real SELECT number, number % 100, number FROM numbers(3000);
     INSERT INTO t_real SELECT number, number % 100, number FROM numbers(3000, 3000);
     INSERT INTO t_real SELECT number, number % 100, number FROM numbers(6000, 4000);
+    -- WITH SETTINGS granularity overrides need an adaptive-granularity parent
+    DROP TABLE IF EXISTS t_est_g; DROP TABLE IF EXISTS t_real_g;
+    CREATE TABLE t_est_g (a UInt64, b UInt64, v UInt64) ENGINE = MergeTree ORDER BY a
+        SETTINGS index_granularity = 100, min_bytes_for_wide_part = 0, min_rows_for_wide_part = 0;
+    CREATE TABLE t_real_g AS t_est_g;
+    ALTER TABLE t_real_g ADD PROJECTION p_g (SELECT a, b, v ORDER BY b) WITH SETTINGS (index_granularity = 50);
+    INSERT INTO t_est_g SELECT number, number % 100, number FROM numbers(10000);
+    INSERT INTO t_real_g SELECT number, number % 100, number FROM numbers(10000);
 "
 
 # the read-step header holds the final granule count, the per-index lines vary by build
 compare()
 {
-    local projection_name="$1" projection_body="$2" query="$3"
+    local projection_name="$1" projection_body="$2" query="$3" est="${4:-t_est}" real="${5:-t_real}"
     echo "hypothetical:"
     $CLICKHOUSE_CLIENT -q "
-        CREATE HYPOTHETICAL PROJECTION ${projection_name} ON t_est ${projection_body};
-        EXPLAIN WHATIF ${query/TABLE/t_est} SETTINGS ${PIN};
+        CREATE HYPOTHETICAL PROJECTION ${projection_name} ON ${est} ${projection_body};
+        EXPLAIN WHATIF ${query/TABLE/$est} SETTINGS ${PIN};
     " | grep -E '^\s+(status|marks|skip_ratio|verdict|source):' | awk '{$1=$1; print}'
     echo "real:"
-    $CLICKHOUSE_CLIENT -q "EXPLAIN indexes = 1 ${query/TABLE/t_real} SETTINGS ${PIN}, preferred_optimize_projection_name = '${projection_name}'" \
+    $CLICKHOUSE_CLIENT -q "EXPLAIN indexes = 1 ${query/TABLE/$real} SETTINGS ${PIN}, preferred_optimize_projection_name = '${projection_name}'" \
         | grep -oE 'ReadFromMergeTree \([^)]*\)|Granules: [0-9]+$'
 }
 
@@ -54,6 +62,17 @@ compare p_b "(SELECT a, b, v ORDER BY b)" "SELECT count() FROM TABLE WHERE a < 1
 
 echo "--- key over a computed expression ---"
 compare p_c "(SELECT a, b, v, b * 2 AS c ORDER BY c)" "SELECT count() FROM TABLE WHERE b * 2 = 84"
+
+echo "--- the projection's own index_granularity is used ---"
+compare p_g "(SELECT a, b, v ORDER BY b) WITH SETTINGS (index_granularity = 50)" "SELECT count() FROM TABLE WHERE b = 42" t_est_g t_real_g
+
+echo "--- no filter, the projection serves the ORDER BY ---"
+compare p_b "(SELECT a, b, v ORDER BY b)" "SELECT a, b, v FROM TABLE ORDER BY b"
+# with read-in-order off there is nothing the projection could help with, as in the optimizer
+$CLICKHOUSE_CLIENT -q "
+    CREATE HYPOTHETICAL PROJECTION p_b ON t_est (SELECT a, b, v ORDER BY b);
+    EXPLAIN WHATIF SELECT a, b, v FROM t_est ORDER BY b SETTINGS ${PIN}, optimize_read_in_order = 0;
+" | grep -E '^\s+reason:' | awk '{$1=$1; print}'
 
 echo "--- not applicable cases ---"
 $CLICKHOUSE_CLIENT -q "
@@ -101,4 +120,4 @@ $CLICKHOUSE_CLIENT --user "${user}" -q "
 " 2>&1 | grep -E '^\s+status:' | awk '{$1=$1; print}'
 $CLICKHOUSE_CLIENT -q "DROP USER IF EXISTS ${user}"
 
-$CLICKHOUSE_CLIENT -q "DROP TABLE IF EXISTS t_est; DROP TABLE IF EXISTS t_real;"
+$CLICKHOUSE_CLIENT -q "DROP TABLE IF EXISTS t_est; DROP TABLE IF EXISTS t_real; DROP TABLE IF EXISTS t_est_g; DROP TABLE IF EXISTS t_real_g;"

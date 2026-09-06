@@ -10,7 +10,11 @@
 #include <Parsers/ASTSelectWithUnionQuery.h>
 #include <Parsers/ASTSetQuery.h>
 #include <Interpreters/parseIdentifiersOrStringLiteralsWithSettings.h>
+#include <Common/typeid_cast.h>
+#include <Processors/QueryPlan/ExpressionStep.h>
+#include <Processors/QueryPlan/FilterStep.h>
 #include <Processors/QueryPlan/QueryPlan.h>
+#include <Processors/QueryPlan/SortingStep.h>
 #include <Processors/QueryPlan/Optimizations/QueryPlanOptimizationSettings.h>
 #include <Processors/QueryPlan/ReadFromMergeTree.h>
 #include <Storages/MergeTree/KeyCondition.h>
@@ -60,6 +64,43 @@ void collectReadSteps(const QueryPlan::Node * node, std::vector<ReadFromMergeTre
 
     for (const auto & child : node->children)
         collectReadSteps(child, steps);
+}
+
+bool findPath(const QueryPlan::Node * node, const IQueryPlanStep * target, std::vector<const QueryPlan::Node *> & path)
+{
+    if (!node)
+        return false;
+    path.push_back(node);
+    if (node->step.get() == target)
+        return true;
+    for (const auto * child : node->children)
+        if (findPath(child, target, path))
+            return true;
+    path.pop_back();
+    return false;
+}
+
+/// the full sort right above the read, walking up through filters and expressions only, same as optimizeUseNormalProjections
+std::pair<const SortingStep *, const QueryPlan::Node *>
+findOuterSorting(const QueryPlan::Node * root, const ReadFromMergeTree * read_step)
+{
+    std::vector<const QueryPlan::Node *> path;
+    if (!findPath(root, read_step, path) || path.size() < 2)
+        return {};
+
+    size_t i = path.size() - 1;
+    while (i > 0)
+    {
+        --i;
+        const auto * step = path[i]->step.get();
+        if (!typeid_cast<const FilterStep *>(step) && !typeid_cast<const ExpressionStep *>(step))
+            break;
+    }
+
+    const auto * sort = typeid_cast<const SortingStep *>(path[i]->step.get());
+    if (sort && sort->getType() == SortingStep::Type::Full)
+        return {sort, path[i + 1]};
+    return {};
 }
 
 /// Resolve the source table from the query
@@ -379,7 +420,10 @@ WhatIfResult estimateHypotheticalIndexes(
             }
 
             return buildResultWithoutScan(
-                *mt, store, "The query is answered without reading the table's parts, so an index on them would not be read", local_context);
+                *mt,
+                store,
+                "The query is answered without reading the table's parts, so an index on them would not be read",
+                local_context);
         }
 
         throw Exception(ErrorCodes::NOT_IMPLEMENTED,
@@ -546,8 +590,10 @@ WhatIfResult estimateHypotheticalIndexes(
         result.candidates.push_back(std::move(combined));
     }
 
+    const auto [outer_sorting, subtree_above_reading] = findOuterSorting(plan.getRootNode(), read_step);
     for (const auto & projection : store.getProjectionsForTable(data.getStorageID()))
-        result.candidates.push_back(evaluateProjection(projection, read_step, analysis, baseline_parts, settings, plan_context));
+        result.candidates.push_back(evaluateProjection(
+            projection, read_step, analysis, baseline_parts, settings, outer_sorting, subtree_above_reading, plan_context));
 
     if (result.candidates.empty())
         appendNoCandidatesRow(result);

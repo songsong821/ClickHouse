@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Interpreters/Context_fwd.h>
+#include <Processors/QueryPlan/QueryPlan.h>
 #include <Processors/QueryPlan/ReadFromMergeTree.h>
 #include <Storages/MergeTree/RangesInDataPart.h>
 #include <Storages/MergeTree/WhatIfResult.h>
@@ -12,6 +13,7 @@ namespace DB
 {
 
 class MergeTreeData;
+class SortingStep;
 struct ProjectionDescription;
 struct WhatIfSettings;
 
@@ -30,6 +32,8 @@ WhatIfCandidateResult evaluateProjection(
     const ReadFromMergeTree::AnalysisResult & analysis,
     const RangesInDataParts & baseline_parts,
     const WhatIfSettings & settings,
+    const SortingStep * outer_sorting,
+    const QueryPlan::Node * subtree_above_reading,
     ContextPtr context);
 
 }

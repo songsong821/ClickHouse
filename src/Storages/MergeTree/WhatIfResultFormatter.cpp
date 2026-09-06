@@ -49,11 +49,8 @@ void WhatIfResult::format(WriteBuffer & out) const
         }
 
         writeString(fmt::format("  skip_ratio:   {:.1f}%\n", idx.skip_ratio * 100.0), out);
-        if (idx.would_be_chosen)
-            writeString(
-                *idx.would_be_chosen ? "  verdict:      would be chosen, it reads fewer marks than the base table\n"
-                                     : "  verdict:      would not be chosen, it does not read fewer marks than the base table\n",
-                out);
+        if (!idx.verdict.empty())
+            writeString(fmt::format("  verdict:      {}\n", idx.verdict), out);
         writeCString("\n", out);
 
         writeCString("Estimation:\n", out);
