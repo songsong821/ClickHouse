@@ -1,5 +1,10 @@
 #include <Disks/DiskFactory.h>
 
+#include <Common/Config/ConfigurationWithUsageTracking.h>
+#include <Interpreters/Context.h>
+
+#include <fmt/ranges.h>
+
 namespace DB
 {
 namespace ErrorCodes
@@ -47,7 +52,16 @@ DiskPtr DiskFactory::create(
     bool custom_disk,
     const std::unordered_set<String> & skip_types) const
 {
-    const auto disk_type = config.getString(config_prefix + ".type", "local");
+    /// The disk is created from the configuration through a proxy remembering which keys are read.
+    /// Everything that is left unread in its section is not an option of this disk type: it does
+    /// nothing, and reporting it is much better than surprising the user later, see below.
+    auto tracked_config = std::make_shared<ConfigurationWithUsageTracking>(config);
+
+    /// A disk defined in a query (`disk(type = ..., name = ...)`) has its own configuration,
+    /// in which `name` is read by the caller and not by the disk itself.
+    tracked_config->markAsUsed("name");
+
+    const auto disk_type = tracked_config->getString(config_prefix + ".type", "local");
 
     const auto found = registry.find(disk_type);
     if (found == registry.end())
@@ -62,7 +76,45 @@ DiskPtr DiskFactory::create(
     }
 
     const auto & disk_creator = found->second;
-    return disk_creator(name, config, config_prefix, context, map, attach, custom_disk);
+    DiskPtr disk = disk_creator(name, *tracked_config, config_prefix, context, map, attach, custom_disk);
+    if (!disk)
+        return disk;
+
+    disk->keepConfigurationAlive(tracked_config);
+
+    /// A disk of a table that is being attached has been accepted by an older version of the server
+    /// already, and its data has to be read even if the definition contains something we do not know.
+    if (!attach)
+        checkForUnknownKeys(*tracked_config, name, disk_type, config_prefix, context);
+
+    return disk;
+}
+
+void DiskFactory::checkForUnknownKeys(
+    const ConfigurationWithUsageTracking & tracked_config,
+    const String & name,
+    const String & disk_type,
+    const String & config_prefix,
+    const ContextPtr & context)
+{
+    const Strings unknown_keys = tracked_config.getUnusedKeys(config_prefix);
+    if (unknown_keys.empty())
+        return;
+
+    if (context->getConfigRef().getBool("skip_check_for_incorrect_settings", false))
+        return;
+
+    throw Exception(
+        ErrorCodes::UNKNOWN_ELEMENT_IN_CONFIG,
+        "The definition of the disk '{}' of type '{}' contains unknown element{}: {}. "
+        "Nothing reads {}, so {} without any effect - most likely it is a typo or an option that does not exist. "
+        "You can disable this check with <skip_check_for_incorrect_settings>1</skip_check_for_incorrect_settings>.",
+        name,
+        disk_type,
+        unknown_keys.size() == 1 ? "" : "s",
+        fmt::join(unknown_keys, ", "),
+        unknown_keys.size() == 1 ? "it" : "them",
+        unknown_keys.size() == 1 ? "it is accepted" : "they are accepted");
 }
 
 void DiskFactory::clearRegistry()
