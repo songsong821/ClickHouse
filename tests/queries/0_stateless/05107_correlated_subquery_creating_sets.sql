@@ -3,6 +3,9 @@
 -- supported"). `optimize_inverse_dictionary_lookup` (on by default) builds such a set out of a
 -- `dictGet(...) >= const` predicate, so an ordinary query failed at default settings.
 
+-- Correlated subqueries are a feature of the analyzer, so this test needs it.
+SET enable_analyzer = 1;
+
 DROP TABLE IF EXISTS t_dict_source;
 DROP DICTIONARY IF EXISTS d_correlated_sets;
 DROP TABLE IF EXISTS t_correlated_sets;
