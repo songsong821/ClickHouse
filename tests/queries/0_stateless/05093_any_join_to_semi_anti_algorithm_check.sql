@@ -4,6 +4,8 @@
 -- runs into `NOT_IMPLEMENTED`. The pass now converts only when an enabled algorithm can execute the
 -- result.
 
+-- Correlated subqueries are a feature of the analyzer, so this test needs it.
+SET enable_analyzer = 1;
 SET allow_experimental_correlated_subqueries = 1;
 
 DROP TABLE IF EXISTS t_semi_anti_algo;
