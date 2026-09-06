@@ -1,3 +1,4 @@
+#include <Common/Exception.h>
 #include <Common/parseGlobs.h>
 #include <Common/re2.h>
 #include <gtest/gtest.h>
@@ -89,4 +90,36 @@ TEST(Common, makeRegexpPatternFromGlobs)
         EXPECT_FALSE(RE2::FullMatch("data/part1.tsv", re));           /// zero directory levels: not matched
         EXPECT_TRUE(RE2::FullMatch("data/sub1/part1.tsv", re));       /// one directory level (name starts with any char)
     }
+}
+
+TEST(Common, expandSelectionGlob)
+{
+    EXPECT_EQ(expandSelectionGlob("file.csv"), std::vector<std::string>({"file.csv"}));
+    EXPECT_EQ(expandSelectionGlob("file{1,2,3}.csv"), std::vector<std::string>({"file1.csv", "file2.csv", "file3.csv"}));
+    EXPECT_EQ(expandSelectionGlob("{a}.csv"), std::vector<std::string>({"a.csv"}));
+    EXPECT_EQ(expandSelectionGlob("{a,b}/{c,d}"), std::vector<std::string>({"a/c", "a/d", "b/c", "b/d"}));
+    EXPECT_EQ(expandSelectionGlob("{a,,b}"), std::vector<std::string>({"a", "", "b"}));
+    EXPECT_EQ(expandSelectionGlob("dir/{ab}{cd}/*.csv"), std::vector<std::string>({"dir/abcd/*.csv"}));
+
+    /// A `{N..M}` range glob is not enumerated here: `makeRegexpPatternFromGlobs` turns it into a regexp.
+    EXPECT_EQ(expandSelectionGlob("file{1..3}.csv"), std::vector<std::string>({"file{1..3}.csv"}));
+    EXPECT_EQ(expandSelectionGlob("{a,b}file{1..3}.csv"), std::vector<std::string>({"{a,b}file{1..3}.csv"}));
+
+    /// `{a,b}{c,d}{e,f}...` is a Cartesian product, so a short pattern must not be allowed to expand
+    /// to an astronomical number of paths, or to an astronomical amount of data.
+    auto repeat = [](const std::string & what, size_t times)
+    {
+        std::string result;
+        for (size_t i = 0; i < times; ++i)
+            result += what;
+        return result;
+    };
+
+    /// Too many paths: 2^20 of them.
+    EXPECT_THROW(expandSelectionGlob(repeat("{a,b}", 20)), DB::Exception);
+    /// Too much data: 2^13 paths of 10 KiB each.
+    EXPECT_THROW(expandSelectionGlob(std::string(10000, 'x') + repeat("{a,b}", 13)), DB::Exception);
+    /// Too many globs: every group is a single element, so this expands to one path, but only after
+    /// looking at every one of the 2000 groups.
+    EXPECT_THROW(expandSelectionGlob(repeat("{ab}", 2000)), DB::Exception);
 }
