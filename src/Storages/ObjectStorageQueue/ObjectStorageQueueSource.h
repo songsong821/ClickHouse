@@ -20,6 +20,21 @@ namespace DB
 class IStreamingStorage;
 struct ObjectMetadata;
 
+/// Whether the `after_processing` step of the table acts on the generation of every object it
+/// ingested. An Azure `MOVE` copies and deletes exactly the generation that was read, so it has to
+/// know that generation - the `ETag` of the object - for every file before the file is committed
+/// as processed.
+bool afterProcessingNeedsIngestedGeneration(ObjectStorageType storage_type, ObjectStorageQueueAction after_processing);
+
+/// Makes `object_info` carry the generation (`etag`) that the read of the object is then pinned
+/// to (see `StorageObjectStorageSource::createReadBuffer`), so that the generation the read
+/// verified and the generation the post-processing acts on are one and the same. The listing
+/// normally reports it; when the listing entry carries none, one `HEAD` supplies the `etag`
+/// together with the size and modification time of that same generation. Returns whether the
+/// generation is known afterwards: it is not when the endpoint reports no `ETag` at all, and a
+/// table whose post-processing needs it must then refuse the file rather than read it.
+bool learnIngestedGeneration(const IObjectStorage & object_storage, RelativePathWithMetadata & object_info);
+
 class ObjectStorageQueueSource final : public ISource, WithContext
 {
 public:

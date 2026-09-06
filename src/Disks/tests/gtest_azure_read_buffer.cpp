@@ -18,6 +18,7 @@
 #include <IO/AzureBlobStorage/copyAzureBlobStorageFile.h>
 #include <IO/ReadHelpers.h>
 #include <IO/SharedThreadPools.h>
+#include <Storages/ObjectStorageQueue/ObjectStorageQueueSource.h>
 
 #include <azure/core/http/raw_response.hpp>
 #include <azure/core/http/transport.hpp>
@@ -203,9 +204,11 @@ public:
         /// The headers below are the ones the SDK reads from every such response.
         if (request.GetMethod() == Azure::Core::Http::HttpMethod::Head)
         {
+            ++head_requests;
             auto properties = std::make_unique<Azure::Core::Http::RawResponse>(1, 1, Azure::Core::Http::HttpStatusCode::Ok, "OK");
             properties->SetHeader("Content-Length", std::to_string(blob_size));
-            properties->SetHeader("ETag", current_etag);
+            if (send_etag)
+                properties->SetHeader("ETag", current_etag);
             properties->SetHeader("Last-Modified", "Wed, 21 Oct 2015 07:28:00 GMT");
             properties->SetHeader("x-ms-creation-time", "Wed, 21 Oct 2015 07:28:00 GMT");
             properties->SetHeader("x-ms-blob-type", "BlockBlob");
@@ -301,6 +304,9 @@ public:
     /// The `If-Match` header of each `Delete Blob` request, empty when it carried none.
     const std::vector<std::string> & deleteIfMatchHeaders() const { return delete_if_match_headers; }
 
+    /// How many times the properties of the object were asked for with a `HEAD`.
+    size_t headRequests() const { return head_requests; }
+
     /// The object is overwritten by somebody else: from now on the endpoint holds the generation
     /// `new_etag`, whatever `ETagBehaviour` said. Lets a test place the overwrite at an exact point
     /// of a sequence of requests, such as between the copy and the delete of a move.
@@ -331,6 +337,7 @@ private:
     std::vector<std::string> deleted_generations;
     std::vector<std::string> delete_if_match_headers;
     std::optional<std::string> overwritten_etag;
+    size_t head_requests = 0;
 };
 
 /// Reads a blob from an endpoint that answers every ranged request with at most
@@ -1921,6 +1928,110 @@ TEST(AzureBackupWriter, WholeCopyOfSourceReplacedByAnotherSizeIsRefused)
     }
     ASSERT_TRUE(transport->nativelyCopiedGenerations().empty());
     ASSERT_TRUE(transport->uploadedData().empty());
+}
+
+/// The entry of a blob listing for the blob `blob` of 100 bytes, whose `Etag` element is `etag`
+/// (an endpoint that omits the element yields an empty one).
+static DB::RelativePathWithMetadata listingEntry(const std::string & etag)
+{
+    DB::ObjectMetadata metadata;
+    metadata.size_bytes = 100;
+    metadata.etag = etag;
+    return DB::RelativePathWithMetadata("blob", metadata);
+}
+
+/// Only an Azure `MOVE` acts on the generation that was ingested: it copies and deletes that
+/// generation, so it is the only combination for which the generation must be known up front.
+TEST(AzureIngestedGeneration, OnlyAzureMoveNeedsIt)
+{
+    ASSERT_TRUE(DB::afterProcessingNeedsIngestedGeneration(DB::ObjectStorageType::Azure, DB::ObjectStorageQueueAction::MOVE));
+    ASSERT_FALSE(DB::afterProcessingNeedsIngestedGeneration(DB::ObjectStorageType::Azure, DB::ObjectStorageQueueAction::KEEP));
+    ASSERT_FALSE(DB::afterProcessingNeedsIngestedGeneration(DB::ObjectStorageType::Azure, DB::ObjectStorageQueueAction::DELETE));
+    ASSERT_FALSE(DB::afterProcessingNeedsIngestedGeneration(DB::ObjectStorageType::Azure, DB::ObjectStorageQueueAction::TAG));
+    ASSERT_FALSE(DB::afterProcessingNeedsIngestedGeneration(DB::ObjectStorageType::S3, DB::ObjectStorageQueueAction::MOVE));
+}
+
+/// The listing reported the generation: it is kept as is, and the endpoint is not asked again.
+TEST(AzureIngestedGeneration, ListingWithETagNeedsNoHead)
+{
+    auto transport = std::make_shared<MisbehavingRangeTransport>(100, 100, 100, /* send_etag */ true);
+    auto object_storage = objectStorageOver(transport);
+
+    auto entry = listingEntry(ETagBehaviour::first_generation_bare);
+    ASSERT_TRUE(DB::learnIngestedGeneration(*object_storage, entry));
+    ASSERT_EQ(entry.metadata->etag, ETagBehaviour::first_generation_bare);
+    ASSERT_EQ(entry.metadata->size_bytes, 100u);
+    ASSERT_EQ(transport->headRequests(), 0u);
+}
+
+/// `ListBlobs` omitted the `Etag` element: one `HEAD` supplies the generation, together with the
+/// size of that same generation, and the read pinned to it (the way `StorageObjectStorageSource`
+/// pins every read to the generation of its `ObjectInfo`) serves exactly that generation.
+TEST(AzureIngestedGeneration, ListingWithoutETagLearnedFromHead)
+{
+    auto transport = std::make_shared<MisbehavingRangeTransport>(
+        100, 100, 100, /* send_etag */ true, /* reported_length */ std::nullopt, /* ignore_range */ false,
+        ETagBehaviour{.etag = ETagBehaviour::first_generation, .etag_after_first = "", .honour_if_match = true});
+    auto object_storage = objectStorageOver(transport);
+
+    auto entry = listingEntry("");
+    ASSERT_TRUE(DB::learnIngestedGeneration(*object_storage, entry));
+    ASSERT_EQ(entry.metadata->etag, ETagBehaviour::first_generation);
+    ASSERT_EQ(entry.metadata->size_bytes, 100u);
+    ASSERT_EQ(transport->headRequests(), 1u);
+
+    DB::StoredObject object("blob", /* local_path */ "", entry.metadata->size_bytes);
+    object.etag = entry.metadata->etag;
+    auto buffer = object_storage->readObject(object, DB::ReadSettings{});
+
+    std::string data;
+    ASSERT_NO_THROW(DB::readStringUntilEOF(data, *buffer));
+    ASSERT_EQ(data.size(), 100u);
+    assertCountsUpFromZero(data);
+}
+
+/// The blob is overwritten between the `HEAD` that supplied the generation and the read: the read
+/// pinned to that generation is refused by the endpoint, so the generation the post-processing
+/// would later act on is never one that was not ingested.
+TEST(AzureIngestedGeneration, OverwrittenBetweenHeadAndRead)
+{
+    auto transport = std::make_shared<MisbehavingRangeTransport>(
+        100, 100, 100, /* send_etag */ true, /* reported_length */ std::nullopt, /* ignore_range */ false,
+        ETagBehaviour{.etag = ETagBehaviour::first_generation, .etag_after_first = ETagBehaviour::second_generation, .honour_if_match = true});
+    auto object_storage = objectStorageOver(transport);
+
+    auto entry = listingEntry("");
+    ASSERT_TRUE(DB::learnIngestedGeneration(*object_storage, entry));
+    ASSERT_EQ(entry.metadata->etag, ETagBehaviour::first_generation);
+
+    DB::StoredObject object("blob", /* local_path */ "", entry.metadata->size_bytes);
+    object.etag = entry.metadata->etag;
+    auto buffer = object_storage->readObject(object, DB::ReadSettings{});
+
+    std::string data;
+    try
+    {
+        DB::readStringUntilEOF(data, *buffer);
+        FAIL() << "the read of an overwritten generation must fail";
+    }
+    catch (const DB::Exception & e)
+    {
+        ASSERT_EQ(e.code(), DB::ErrorCodes::FILE_CHANGED_DURING_READ);
+    }
+}
+
+/// The endpoint reports no `ETag` at all, neither in the listing nor for a `HEAD`: the generation
+/// stays unknown, which the queue source turns into a failed file rather than a read.
+TEST(AzureIngestedGeneration, EndpointWithoutETag)
+{
+    auto transport = std::make_shared<MisbehavingRangeTransport>(100, 100, 100, /* send_etag */ false);
+    auto object_storage = objectStorageOver(transport);
+
+    auto entry = listingEntry("");
+    ASSERT_FALSE(DB::learnIngestedGeneration(*object_storage, entry));
+    ASSERT_TRUE(entry.metadata->etag.empty());
+    ASSERT_EQ(entry.metadata->size_bytes, 100u);
+    ASSERT_EQ(transport->headRequests(), 1u);
 }
 
 #endif

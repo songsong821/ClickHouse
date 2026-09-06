@@ -257,6 +257,16 @@ void ObjectStorageQueuePostProcessor::moveWithinBucket(const StoredObjects & obj
                 try
                 {
                     doWithRetries([&]{
+                        /// On Azure the move must be pinned to the ingested generation (see
+                        /// `moveAzureBlobs`); an untagged source would make `copyObject` select
+                        /// whatever generation exists now with a `HEAD`, and the source never
+                        /// hands over an untagged Azure object.
+                        if (type == ObjectStorageType::Azure && object_from.etag.empty())
+                            throw Exception(
+                                ErrorCodes::LOGICAL_ERROR,
+                                "Cannot move Azure blob {}: the generation that was ingested is not known",
+                                object_from.remote_path);
+
                         auto object_to = applyMovePrefixIfPresent(object_from, move_prefix, preserve_path);
                         LOG_TRACE(log, "Copying object {} to {}", object_from.remote_path, object_to.remote_path);
                         /// `object_from` names the generation that was ingested (its `ETag`, when

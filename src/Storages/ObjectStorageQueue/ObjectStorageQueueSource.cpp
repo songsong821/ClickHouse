@@ -87,6 +87,21 @@ namespace ErrorCodes
     extern const int TOO_MANY_PARTS;
     extern const int TABLE_IS_READ_ONLY;
     extern const int TABLE_IS_BEING_RESTARTED;
+    extern const int INCORRECT_DATA;
+}
+
+bool afterProcessingNeedsIngestedGeneration(ObjectStorageType storage_type, ObjectStorageQueueAction after_processing)
+{
+    return storage_type == ObjectStorageType::Azure && after_processing == ObjectStorageQueueAction::MOVE;
+}
+
+bool learnIngestedGeneration(const IObjectStorage & object_storage, RelativePathWithMetadata & object_info)
+{
+    if (object_info.metadata && !object_info.metadata->etag.empty())
+        return true;
+
+    object_info.metadata = object_storage.getObjectMetadata(object_info.getPath(), /* with_tags */ false);
+    return !object_info.metadata->etag.empty();
 }
 
 ObjectStorageQueueSource::ObjectStorageQueueObjectInfo::ObjectStorageQueueObjectInfo(
@@ -639,6 +654,15 @@ ObjectInfoPtr ObjectStorageQueueSource::FileIterator::next(size_t processor)
             file_metadata->resetProcessing();
             continue;
         }
+
+        /// An Azure `MOVE` after processing copies and deletes the very generation that was
+        /// ingested, so that generation must be known before the read is opened, and the read is
+        /// then pinned to it. The listing normally reports it; an endpoint that omits `Etag` from
+        /// `ListBlobs` is asked once with a `HEAD`. A file whose generation cannot be learned at all
+        /// is still returned: the source refuses to read it and fails it, so that it is never
+        /// committed as processed and then moved as whatever generation exists by then.
+        if (afterProcessingNeedsIngestedGeneration(object_storage->getType(), metadata->getTableMetadata().after_processing))
+            learnIngestedGeneration(*object_storage, object_info->relative_path_with_metadata);
 
         return std::make_shared<ObjectStorageQueueObjectInfo>(*object_info, std::move(file_metadata));
     }
@@ -1287,6 +1311,38 @@ Chunk ObjectStorageQueueSource::generateImpl()
                 /// Remember which generation of the object is being read, for the post-processing.
                 processed_files.back().bytes_size = object_metadata->size_bytes;
                 processed_files.back().etag = object_metadata->etag;
+            }
+
+            /// Fail closed: a file whose generation is unknown (neither the listing nor the `HEAD`
+            /// made by the file iterator reported an `ETag`) is not read when the post-processing
+            /// has to act on the ingested generation, because it could then only move whatever
+            /// generation exists at post-processing time. It is failed like a file whose read
+            /// failed, so it is never committed as processed.
+            if (afterProcessingNeedsIngestedGeneration(object_storage->getType(), files_metadata->getTableMetadata().after_processing)
+                && processed_files.back().etag.empty())
+            {
+                const auto message = fmt::format(
+                    "The generation (`ETag`) of the object {} is not reported by the endpoint, "
+                    "while `after_processing = 'move'` on Azure has to copy and delete exactly the generation that was ingested. "
+                    "The file is not read",
+                    file_metadata->getPath());
+                LOG_ERROR(log, "{}. Will set the file as failed", message);
+
+                processed_files.back().state = FileState::ErrorOnRead;
+                processed_files.back().exception_during_read = message;
+                processed_files.back().exception_during_read_code = ErrorCodes::INCORRECT_DATA;
+
+                if (mode == ObjectStorageQueueMode::ORDERED)
+                {
+                    /// Stop processing and commit what is already processed,
+                    /// because we must preserve order.
+                    return {};
+                }
+
+                /// Continue processing. This failed file will be committed along with processed files.
+                reader = {};
+                progress->processed_files -= 1;
+                continue;
             }
 
             /// Tags are not fetched during listing (it lists with with_tags = false), so populate
