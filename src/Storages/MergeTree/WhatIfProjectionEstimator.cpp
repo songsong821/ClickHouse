@@ -40,7 +40,6 @@ namespace Setting
     extern const SettingsOverflowMode read_overflow_mode;
     extern const SettingsBool optimize_use_projections;
     extern const SettingsBool optimize_read_in_order;
-    extern const SettingsBool force_optimize_projection;
 }
 
 namespace MergeTreeSetting
@@ -325,8 +324,8 @@ bool tryEstimateProjection(
         result.verdict = "would not be chosen, it reads more marks than the base table";
     else if (sort_order_helps)
         result.verdict = "would be chosen, it reads the same marks as the base table and serves the ORDER BY";
-    else if (query_settings[Setting::force_optimize_projection] || baseline_marks == 0)
-        result.verdict = "would be chosen, it reads the same marks as the base table and force_optimize_projection is set";
+    else if (baseline_marks == 0)
+        result.verdict = "would be chosen, the base table read selects no marks either";
     else
         result.verdict = "would not be chosen, it reads the same marks as the base table and does not help with sorting";
     result.estimate_source = WhatIfCandidateResult::Empirical;

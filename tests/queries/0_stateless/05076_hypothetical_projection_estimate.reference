@@ -76,6 +76,17 @@ real:
 ReadFromMergeTree (p_b)
 Granules: 100
 reason: Query has no filter predicate
+--- the INDEX form, which the optimizer serves the read from ---
+hypothetical:
+marks: 100
+status: applicable
+marks: 4
+skip_ratio: 96.0%
+verdict: would be chosen, it reads fewer marks than the base table
+source: empirical
+real:
+ReadFromMergeTree (p_idx)
+Granules: 4
 --- not applicable cases ---
 With p_key (projection (normal), hypothetical):
 reason: Projection sort key cannot filter this predicate (always unknown or true)

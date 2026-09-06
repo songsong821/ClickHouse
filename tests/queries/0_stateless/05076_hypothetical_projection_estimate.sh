@@ -16,6 +16,7 @@ $CLICKHOUSE_CLIENT -q "
     ALTER TABLE t_real ADD PROJECTION p_b (SELECT a, b, v ORDER BY b);
     ALTER TABLE t_real ADD PROJECTION p_ba (SELECT a, b, v ORDER BY (b, a));
     ALTER TABLE t_real ADD PROJECTION p_c (SELECT a, b, v, b * 2 AS c ORDER BY c);
+    ALTER TABLE t_real ADD PROJECTION p_idx INDEX b TYPE basic;
     SYSTEM STOP MERGES t_est; SYSTEM STOP MERGES t_real;
     -- three parts, b = a % 100 so every b value is one granule per part once sorted
     INSERT INTO t_est SELECT number, number % 100, number FROM numbers(3000);
@@ -73,6 +74,9 @@ $CLICKHOUSE_CLIENT -q "
     CREATE HYPOTHETICAL PROJECTION p_b ON t_est (SELECT a, b, v ORDER BY b);
     EXPLAIN WHATIF SELECT a, b, v FROM t_est ORDER BY b SETTINGS ${PIN}, optimize_read_in_order = 0;
 " | grep -E '^\s+reason:' | awk '{$1=$1; print}'
+
+echo "--- the INDEX form, which the optimizer serves the read from ---"
+compare p_idx "INDEX b TYPE basic" "SELECT count() FROM TABLE WHERE b = 42"
 
 echo "--- not applicable cases ---"
 $CLICKHOUSE_CLIENT -q "
