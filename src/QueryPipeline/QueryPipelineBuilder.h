@@ -19,9 +19,6 @@ class QueryPlan;
 
 class IQueryPlanStep;
 
-class PipelineExecutor;
-using PipelineExecutorPtr = std::shared_ptr<PipelineExecutor>;
-
 class SubqueryForSet;
 
 struct SizeLimits;
@@ -197,8 +194,6 @@ public:
     void addMaterializingCTETransform(
         SharedHeader res_header,
         MaterializedCTEPtr materialized_cte);
-
-    PipelineExecutorPtr execute();
 
     size_t getNumStreams() const { return pipe.numOutputPorts(); }
 
