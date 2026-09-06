@@ -713,8 +713,34 @@ FunctionCast::WrapperType FunctionCast::createDecimalWrapper(const DataTypePtr &
                 /// value of the source does not always fit the `Int64` ticks of the target (a scale-9 `DateTime64`
                 /// ends at 2262-04-11, and `Time64` holds at most 999:59:59), so `date_time_overflow_behavior` has to
                 /// reach the transform - unlike the other branches here, which cannot lose a value and therefore use
-                /// the default mode. `accurateCastOrNull` reports an unrepresentable value as NULL, so it must not be
-                /// turned into an exception by the `throw` mode.
+                /// the default mode.
+                if constexpr (IsDataTypeNumber<LeftDataType>)
+                {
+                    /// `accurateCast` rejects an unrepresentable value regardless of the overflow mode, and
+                    /// `accurateCastOrNull` reports it as NULL, so neither of them may reach the mode-specific
+                    /// transform, which would throw or clamp: the accurate additions check the range up front.
+                    if (cast_type == CastType::accurate)
+                    {
+                        AccurateConvertStrategyAdditions additions;
+                        additions.scale = scale;
+                        result_column = ConvertImpl<LeftDataType, RightDataType, FunctionCastName>::execute(
+                            arguments, result_type, input_rows_count, BehaviourOnErrorFromString::ConvertDefaultBehaviorTag, settings, additions);
+
+                        return true;
+                    }
+                    else if (cast_type == CastType::accurateOrNull)
+                    {
+                        AccurateOrNullConvertStrategyAdditions additions;
+                        additions.scale = scale;
+                        result_column = ConvertImpl<LeftDataType, RightDataType, FunctionCastName>::execute(
+                            arguments, result_type, input_rows_count, BehaviourOnErrorFromString::ConvertDefaultBehaviorTag, settings, additions);
+
+                        return true;
+                    }
+                }
+
+                /// `accurateCastOrNull` from a date or time source reports an unrepresentable value as NULL, so it
+                /// must not be turned into an exception by the `throw` mode.
                 if (cast_type != CastType::accurateOrNull)
                 {
 #define GENERATE_OVERFLOW_MODE_CASE(OVERFLOW_MODE) \

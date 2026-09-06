@@ -680,9 +680,11 @@ struct ToDateTime64TransformFloat
     static constexpr auto name = "toDateTime64";
 
     const UInt32 scale;
+    const DateTime64::NativeType scale_multiplier;
 
     ToDateTime64TransformFloat(UInt32 scale_) /// NOLINT
         : scale(scale_)
+        , scale_multiplier(DecimalUtils::scaleMultiplier<DateTime64::NativeType>(scale))
     {}
 
     NO_SANITIZE_UNDEFINED DateTime64::NativeType execute(FromType from, const DateLUTImpl &) const
@@ -691,7 +693,6 @@ struct ToDateTime64TransformFloat
         /// Clamping to the calendar-wide [MIN_DATETIME64_TIMESTAMP, MAX_DATETIME64_TIMESTAMP] window would still let
         /// precision 8/9 inputs overflow the Int64 in convertToDecimal and surface DECIMAL_OVERFLOW instead of
         /// saturating, so use the same scale-dependent bounds as the integer transforms.
-        const Int64 scale_multiplier = DecimalUtils::scaleMultiplier<DateTime64::NativeType>(scale);
         const time_t min_whole = minWholeSecondsForDateTime64(scale_multiplier);
         const time_t max_whole = maxWholeSecondsForDateTime64(scale_multiplier);
         if constexpr (date_time_overflow_behavior == FormatSettings::DateTimeOverflowBehavior::Throw)
@@ -1260,16 +1261,6 @@ enum class ConvertFromStringParsingMode : uint8_t
     Basic,
     BestEffort,  /// Only applicable for DateTime. Will use sophisticated method, that is slower.
     BestEffortUS
-};
-
-struct AccurateConvertStrategyAdditions
-{
-    UInt32 scale { 0 };
-};
-
-struct AccurateOrNullConvertStrategyAdditions
-{
-    UInt32 scale { 0 };
 };
 
 template <typename FromDataType, typename ToDataType, typename Name,
@@ -2044,6 +2035,18 @@ template <typename FromDataType, typename ToDataType, typename Name,
     FormatSettings::DateTimeOverflowBehavior date_time_overflow_behavior = default_date_time_overflow_behavior>
 struct ConvertImpl
 {
+    /// The scale of a `DateTime64` / `Time64` result, which its numeric transforms are constructed from.
+    /// A plain conversion passes the scale itself as the additions, while `accurateCast` and `accurateCastOrNull`
+    /// pass their strategy additions, which carry the scale.
+    template <typename Additions>
+    static UInt32 targetScale(const Additions & additions)
+    {
+        if constexpr (is_any_of<Additions, AccurateConvertStrategyAdditions, AccurateOrNullConvertStrategyAdditions>)
+            return additions.scale;
+        else
+            return additions;
+    }
+
     template <typename Additions = void *>
     static ColumnPtr NO_SANITIZE_UNDEFINED execute(
         const ColumnsWithTypeAndName & arguments, const DataTypePtr & result_type [[maybe_unused]], size_t input_rows_count,
@@ -2189,20 +2192,20 @@ struct ConvertImpl
         {
             if constexpr (std::is_same_v<ToDataType, DataTypeDateTime64>)
                 return DateTimeTransformImpl<FromDataType, ToDataType, ToDateTime64TransformSigned<typename FromDataType::FieldType, date_time_overflow_behavior>, false>::template execute<Additions>(
-                    arguments, result_type, input_rows_count, additions);
+                    arguments, result_type, input_rows_count, targetScale(additions));
             else
                 return DateTimeTransformImpl<FromDataType, ToDataType, ToTime64TransformSigned<typename FromDataType::FieldType, date_time_overflow_behavior>, false>::template execute<Additions>(
-                    arguments, result_type, input_rows_count, additions);
+                    arguments, result_type, input_rows_count, targetScale(additions));
         }
         else if constexpr (std::is_same_v<FromDataType, DataTypeUInt64>
             && (std::is_same_v<ToDataType, DataTypeDateTime64> || std::is_same_v<ToDataType, DataTypeTime64>))
         {
             if constexpr (std::is_same_v<ToDataType, DataTypeDateTime64>)
                 return DateTimeTransformImpl<FromDataType, ToDataType, ToDateTime64TransformUnsigned<UInt64, date_time_overflow_behavior>, false>::template execute<Additions>(
-                    arguments, result_type, input_rows_count, additions);
+                    arguments, result_type, input_rows_count, targetScale(additions));
             else
                 return DateTimeTransformImpl<FromDataType, ToDataType, ToTime64TransformUnsigned<UInt64, date_time_overflow_behavior>, false>::template execute<Additions>(
-                    arguments, result_type, input_rows_count, additions);
+                    arguments, result_type, input_rows_count, targetScale(additions));
         }
         else if constexpr ((
                 std::is_same_v<FromDataType, DataTypeFloat32>
@@ -2211,10 +2214,10 @@ struct ConvertImpl
         {
             if constexpr (std::is_same_v<ToDataType, DataTypeDateTime64>)
                 return DateTimeTransformImpl<FromDataType, ToDataType, ToDateTime64TransformFloat<FromDataType, typename FromDataType::FieldType, date_time_overflow_behavior>, false>::template execute<Additions>(
-                    arguments, result_type, input_rows_count, additions);
+                    arguments, result_type, input_rows_count, targetScale(additions));
             else
                 return DateTimeTransformImpl<FromDataType, ToDataType, ToTime64TransformFloat<FromDataType, typename FromDataType::FieldType, date_time_overflow_behavior>, false>::template execute<Additions>(
-                    arguments, result_type, input_rows_count, additions);
+                    arguments, result_type, input_rows_count, targetScale(additions));
         }
         /// Conversion of DateTime64 to Date or DateTime: discards fractional part.
         else if constexpr (std::is_same_v<FromDataType, DataTypeDateTime64>

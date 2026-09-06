@@ -1,0 +1,69 @@
+-- Numeric -> DateTime64 / Time64 conversions must honour `date_time_overflow_behavior`.
+
+SET enable_time_time64_type = 1;
+SET session_timezone = 'UTC';
+
+SELECT 'throw';
+SET date_time_overflow_behavior = 'throw';
+SELECT CAST(99999999999999::UInt64, 'DateTime64(3)'); -- { serverError VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE }
+SELECT CAST(-99999999999999::Int64, 'DateTime64(3)'); -- { serverError VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE }
+SELECT CAST(1e30::Float64, 'DateTime64(3)'); -- { serverError VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE }
+SELECT CAST(3600000::UInt64, 'Time64(3)'); -- { serverError VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE }
+SELECT CAST(-3600000::Int64, 'Time64(3)'); -- { serverError VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE }
+SELECT CAST(3.6e6::Float64, 'Time64(3)'); -- { serverError VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE }
+SELECT toDateTime64(materialize(99999999999999::UInt64), 3); -- { serverError VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE }
+SELECT toTime64(materialize(3.6e6::Float64), 3); -- { serverError VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE }
+-- The same setting reaches the numeric conversions to `Date`, `Date32`, `DateTime` and `Time`.
+SELECT CAST(99999999999::UInt64, 'Date'); -- { serverError VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE }
+SELECT CAST(1e30::Float64, 'Date32'); -- { serverError VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE }
+SELECT CAST(99999999999::UInt64, 'DateTime'); -- { serverError VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE }
+SELECT CAST(-5::Int64, 'DateTime'); -- { serverError VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE }
+SELECT CAST(3600000::UInt64, 'Time'); -- { serverError VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE }
+-- The value is representable, so nothing is thrown.
+SELECT CAST(1735689600::UInt32, 'DateTime64(3)'), CAST(3599999::UInt64, 'Time64(3)');
+
+SELECT 'ignore';
+SET date_time_overflow_behavior = 'ignore';
+SELECT CAST(99999999999999::UInt64, 'DateTime64(3)'), CAST(-99999999999999::Int64, 'DateTime64(3)'), CAST(1e30::Float64, 'DateTime64(3)');
+SELECT CAST(3600000::UInt64, 'Time64(3)'), CAST(-3600000::Int64, 'Time64(3)'), CAST(3.6e6::Float64, 'Time64(3)');
+SELECT CAST(99999999999::UInt64, 'Date'), CAST(1e30::Float64, 'Date32'), CAST(99999999999::UInt64, 'DateTime'), CAST(-5::Int64, 'DateTime'), CAST(3600000::UInt64, 'Time');
+
+SELECT 'saturate';
+SET date_time_overflow_behavior = 'saturate';
+SELECT CAST(99999999999999::UInt64, 'DateTime64(3)'), CAST(-99999999999999::Int64, 'DateTime64(3)'), CAST(1e30::Float64, 'DateTime64(3)');
+SELECT CAST(3600000::UInt64, 'Time64(3)'), CAST(-3600000::Int64, 'Time64(3)'), CAST(3.6e6::Float64, 'Time64(3)');
+SELECT CAST(99999999999::UInt64, 'Date'), CAST(1e30::Float64, 'Date32'), CAST(99999999999::UInt64, 'DateTime'), CAST(-5::Int64, 'DateTime'), CAST(3600000::UInt64, 'Time');
+
+-- The accurate casts keep their contract in every mode: `accurateCast` rejects an unrepresentable value instead of
+-- clamping it, `accurateCastOrNull` reports it as NULL and `accurateCastOrDefault` substitutes the default.
+SELECT 'accurate';
+SELECT accurateCast(1735689600::UInt32, 'DateTime64(3)'), accurateCast(-1.5::Float64, 'DateTime64(3)'), accurateCast(-3599999::Int64, 'Time64(3)'), accurateCast(3599998.5::Float64, 'Time64(3)');
+SELECT accurateCastOrNull(1735689600::UInt32, 'DateTime64(3)'), accurateCastOrNull(-1.5::Float64, 'DateTime64(3)'), accurateCastOrNull(-3599999::Int64, 'Time64(3)'), accurateCastOrNull(3599998.5::Float64, 'Time64(3)');
+-- The whole-seconds bound of `DateTime64` depends on the scale: 2262-04-11 is the last day of a scale-9 value.
+SELECT accurateCast(9223372036::Int64, 'DateTime64(9)'), accurateCastOrNull(9223372037::Int64, 'DateTime64(9)'), accurateCast(9223372037::Int64, 'DateTime64(8)');
+
+SELECT accurateCast(99999999999999::UInt64, 'DateTime64(3)') SETTINGS date_time_overflow_behavior = 'throw'; -- { serverError CANNOT_CONVERT_TYPE }
+SELECT accurateCast(99999999999999::UInt64, 'DateTime64(3)') SETTINGS date_time_overflow_behavior = 'ignore'; -- { serverError CANNOT_CONVERT_TYPE }
+SELECT accurateCast(99999999999999::UInt64, 'DateTime64(3)') SETTINGS date_time_overflow_behavior = 'saturate'; -- { serverError CANNOT_CONVERT_TYPE }
+SELECT accurateCast(-99999999999999::Int64, 'DateTime64(3)') SETTINGS date_time_overflow_behavior = 'ignore'; -- { serverError CANNOT_CONVERT_TYPE }
+SELECT accurateCast(1e30::Float64, 'DateTime64(3)') SETTINGS date_time_overflow_behavior = 'throw'; -- { serverError CANNOT_CONVERT_TYPE }
+SELECT accurateCast(1e30::Float64, 'DateTime64(3)') SETTINGS date_time_overflow_behavior = 'saturate'; -- { serverError CANNOT_CONVERT_TYPE }
+SELECT accurateCast(nan::Float64, 'DateTime64(3)') SETTINGS date_time_overflow_behavior = 'ignore'; -- { serverError CANNOT_CONVERT_TYPE }
+SELECT accurateCast(9223372037::Int64, 'DateTime64(9)') SETTINGS date_time_overflow_behavior = 'ignore'; -- { serverError CANNOT_CONVERT_TYPE }
+SELECT accurateCast(3600000::UInt64, 'Time64(3)') SETTINGS date_time_overflow_behavior = 'throw'; -- { serverError CANNOT_CONVERT_TYPE }
+SELECT accurateCast(3600000::UInt64, 'Time64(3)') SETTINGS date_time_overflow_behavior = 'ignore'; -- { serverError CANNOT_CONVERT_TYPE }
+SELECT accurateCast(-3600000::Int64, 'Time64(3)') SETTINGS date_time_overflow_behavior = 'saturate'; -- { serverError CANNOT_CONVERT_TYPE }
+SELECT accurateCast(3.6e6::Float64, 'Time64(3)') SETTINGS date_time_overflow_behavior = 'ignore'; -- { serverError CANNOT_CONVERT_TYPE }
+
+SELECT accurateCastOrNull(99999999999999::UInt64, 'DateTime64(3)'), accurateCastOrNull(-99999999999999::Int64, 'DateTime64(3)'), accurateCastOrNull(1e30::Float64, 'DateTime64(3)'), accurateCastOrNull(nan::Float64, 'DateTime64(3)') SETTINGS date_time_overflow_behavior = 'throw';
+SELECT accurateCastOrNull(99999999999999::UInt64, 'DateTime64(3)'), accurateCastOrNull(-99999999999999::Int64, 'DateTime64(3)'), accurateCastOrNull(1e30::Float64, 'DateTime64(3)'), accurateCastOrNull(nan::Float64, 'DateTime64(3)') SETTINGS date_time_overflow_behavior = 'ignore';
+SELECT accurateCastOrNull(99999999999999::UInt64, 'DateTime64(3)'), accurateCastOrNull(-99999999999999::Int64, 'DateTime64(3)'), accurateCastOrNull(1e30::Float64, 'DateTime64(3)'), accurateCastOrNull(nan::Float64, 'DateTime64(3)') SETTINGS date_time_overflow_behavior = 'saturate';
+SELECT accurateCastOrNull(3600000::UInt64, 'Time64(3)'), accurateCastOrNull(-3600000::Int64, 'Time64(3)'), accurateCastOrNull(3.6e6::Float64, 'Time64(3)') SETTINGS date_time_overflow_behavior = 'throw';
+SELECT accurateCastOrNull(3600000::UInt64, 'Time64(3)'), accurateCastOrNull(-3600000::Int64, 'Time64(3)'), accurateCastOrNull(3.6e6::Float64, 'Time64(3)') SETTINGS date_time_overflow_behavior = 'ignore';
+SELECT accurateCastOrNull(3600000::UInt64, 'Time64(3)'), accurateCastOrNull(-3600000::Int64, 'Time64(3)'), accurateCastOrNull(3.6e6::Float64, 'Time64(3)') SETTINGS date_time_overflow_behavior = 'saturate';
+
+SELECT accurateCastOrDefault(99999999999999::UInt64, 'DateTime64(3)'), accurateCastOrDefault(1e30::Float64, 'DateTime64(3)', toDateTime64('2025-01-01 00:00:00', 3)), accurateCastOrDefault(3600000::UInt64, 'Time64(3)'), accurateCastOrDefault(-3600000::Int64, 'Time64(3)', toTime64('1:00:00', 3)) SETTINGS date_time_overflow_behavior = 'ignore';
+SELECT accurateCastOrDefault(99999999999999::UInt64, 'DateTime64(3)'), accurateCastOrDefault(1e30::Float64, 'DateTime64(3)', toDateTime64('2025-01-01 00:00:00', 3)), accurateCastOrDefault(3600000::UInt64, 'Time64(3)'), accurateCastOrDefault(-3600000::Int64, 'Time64(3)', toTime64('1:00:00', 3)) SETTINGS date_time_overflow_behavior = 'saturate';
+
+-- The same holds for a block of values, where only the unrepresentable rows become NULL.
+SELECT number, accurateCastOrNull(number * 100000000000::UInt64, 'DateTime64(3)'), accurateCastOrNull(toInt64(number) * 1000000 - 2000000, 'Time64(3)') FROM numbers(5) SETTINGS date_time_overflow_behavior = 'ignore';

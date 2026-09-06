@@ -3000,6 +3000,17 @@ struct ToDateTimeComponentsImpl
 struct DateTimeAccurateConvertStrategyAdditions {};
 struct DateTimeAccurateOrNullConvertStrategyAdditions {};
 
+/// The same for `Decimal`, `DateTime64` and `Time64` results, which also need the scale of the result.
+struct AccurateConvertStrategyAdditions
+{
+    UInt32 scale { 0 };
+};
+
+struct AccurateOrNullConvertStrategyAdditions
+{
+    UInt32 scale { 0 };
+};
+
 template <typename FromType, typename ToType, typename Transform, bool is_extended_result = false, typename Additions = void *>
 struct Transformer
 {
@@ -3027,7 +3038,58 @@ struct Transformer
 
         for (size_t i = 0; i < input_rows_count; ++i)
         {
-            if constexpr (is_any_of<ToType, DataTypeDate, DataTypeDate32, DataTypeDateTime, DataTypeTime>)
+            if constexpr (is_any_of<ToType, DataTypeDateTime64, DataTypeTime64>)
+            {
+                if constexpr (is_any_of<Additions, AccurateConvertStrategyAdditions, AccurateOrNullConvertStrategyAdditions>)
+                {
+                    /// The numeric source is a count of whole seconds, and the transform below silently clamps it to
+                    /// the representable window of the result, which is exactly what the accurate cast must reject.
+                    /// A fractional floating-point value is representable by the sub-second digits, so only the
+                    /// range is checked. Every comparison with a NaN is false, so a NaN is rejected as well.
+                    using FromValueType = typename FromTypeVector::value_type;
+                    Int64 lower_bound;
+                    Int64 upper_bound;
+                    if constexpr (std::is_same_v<ToType, DataTypeTime64>)
+                    {
+                        lower_bound = -static_cast<Int64>(MAX_TIME_TIMESTAMP);
+                        upper_bound = MAX_TIME_TIMESTAMP;
+                    }
+                    else
+                    {
+                        /// The bounds depend on the scale, because the ticks are stored in an `Int64`.
+                        lower_bound = minWholeSecondsForDateTime64(transform.scale_multiplier);
+                        upper_bound = maxWholeSecondsForDateTime64(transform.scale_multiplier);
+                    }
+
+                    bool is_valid_input = false;
+                    if constexpr (is_floating_point<FromValueType>)
+                    {
+                        /// `Float64` represents every `BFloat16` and `Float32` value exactly, and both bounds too.
+                        const Float64 value = static_cast<Float64>(vec_from[i]);
+                        is_valid_input = value >= static_cast<Float64>(lower_bound) && value <= static_cast<Float64>(upper_bound);
+                    }
+                    else if constexpr (is_signed_v<FromValueType>)
+                        is_valid_input = vec_from[i] >= lower_bound && vec_from[i] <= upper_bound;
+                    else
+                        is_valid_input = vec_from[i] <= static_cast<UInt64>(upper_bound);
+
+                    if (!is_valid_input)
+                    {
+                        if constexpr (std::is_same_v<Additions, AccurateOrNullConvertStrategyAdditions>)
+                        {
+                            vec_to[i] = 0;
+                            (*vec_null_map_to)[i] = true;
+                            continue;
+                        }
+                        else
+                        {
+                            throw Exception(ErrorCodes::CANNOT_CONVERT_TYPE, "Value {} cannot be safely converted into type {}",
+                                static_cast<double>(vec_from[i]), ToType::family_name);
+                        }
+                    }
+                }
+            }
+            else if constexpr (is_any_of<ToType, DataTypeDate, DataTypeDate32, DataTypeDateTime, DataTypeTime>)
             {
                 if constexpr (is_any_of<Additions, DateTimeAccurateConvertStrategyAdditions, DateTimeAccurateOrNullConvertStrategyAdditions>)
                 {
@@ -3133,7 +3195,7 @@ struct DateTimeTransformImpl
         {
             ColumnUInt8::MutablePtr col_null_map_to;
             ColumnUInt8::Container * vec_null_map_to [[maybe_unused]] = nullptr;
-            if constexpr (std::is_same_v<Additions, DateTimeAccurateOrNullConvertStrategyAdditions>)
+            if constexpr (is_any_of<Additions, DateTimeAccurateOrNullConvertStrategyAdditions, AccurateOrNullConvertStrategyAdditions>)
             {
                 col_null_map_to = ColumnUInt8::create(sources->getData().size(), false);
                 vec_null_map_to = &col_null_map_to->getData();
@@ -3172,7 +3234,7 @@ struct DateTimeTransformImpl
                 Op::vector(sources->getData(), col_to->getData(), time_zone, transform, vec_null_map_to, input_rows_count);
             }
 
-            if constexpr (std::is_same_v<Additions, DateTimeAccurateOrNullConvertStrategyAdditions>)
+            if constexpr (is_any_of<Additions, DateTimeAccurateOrNullConvertStrategyAdditions, AccurateOrNullConvertStrategyAdditions>)
             {
                 if (vec_null_map_to)
                     return ColumnNullable::create(std::move(mutable_result_col), std::move(col_null_map_to));
