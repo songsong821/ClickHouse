@@ -137,6 +137,7 @@ namespace ErrorCodes
     extern const int NOT_IMPLEMENTED;
     extern const int CANNOT_FSTAT;
     extern const int CANNOT_TRUNCATE_FILE;
+    extern const int CANNOT_UNLINK;
     extern const int DATABASE_ACCESS_DENIED;
     extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
     extern const int UNKNOWN_IDENTIFIER;
@@ -2769,8 +2770,13 @@ static void removeStaleSplitFiles(const String & path, size_t sequence_number, b
         String stale_path = setSequenceNumberInFileName(path, sequence_number);
         ++sequence_number;
 
+        /// The sequence ends at the first name that does not exist. A failure to delete an existing file
+        /// is an error: otherwise the truncating insert would succeed with the stale data still visible.
         std::error_code error;
-        if (!fs::remove(stale_path, error) || error)
+        bool removed = fs::remove(stale_path, error);
+        if (error)
+            throw Exception(ErrorCodes::CANNOT_UNLINK, "Cannot remove the stale file {}: {}", stale_path, error.message());
+        if (!removed)
             break;
     }
 }
