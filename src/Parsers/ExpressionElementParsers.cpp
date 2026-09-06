@@ -2740,7 +2740,19 @@ bool ParserTTLElement::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
 
     if (mode == TTLMode::GROUP_BY)
     {
-        ttl_element->group_by_key = std::move(group_by_key->children);
+        /// `GROUP BY (a, b, c)` parses as a single `tuple(a, b, c)` expression, but it means the same list of
+        /// keys as `GROUP BY a, b, c`, exactly as `ORDER BY (a, b, c)` means the same key as `ORDER BY a, b, c`
+        /// (see `extractKeyExpressionList`). Flatten it here, otherwise the key would be compared against the
+        /// primary key as a single tuple expression and could never match.
+        const auto * tuple_func = group_by_key->children.size() == 1
+            ? group_by_key->children.front()->as<ASTFunction>()
+            : nullptr;
+
+        if (tuple_func && tuple_func->name == "tuple" && tuple_func->arguments && !tuple_func->arguments->children.empty())
+            ttl_element->group_by_key = tuple_func->arguments->children;
+        else
+            ttl_element->group_by_key = std::move(group_by_key->children);
+
         if (group_by_assignments)
             ttl_element->group_by_assignments = std::move(group_by_assignments->children);
     }

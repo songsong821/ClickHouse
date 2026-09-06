@@ -1,0 +1,4 @@
+ttl_group_by_no_parens	TTL d + toIntervalDay(8) GROUP BY a, c, toStartOfMonth(d) SET b = sum(b), d = min(toStartOfMonth(d)) SETTINGS
+ttl_group_by_parens	TTL d + toIntervalDay(8) GROUP BY a, c, toStartOfMonth(d) SET b = sum(b), d = min(toStartOfMonth(d)) SETTINGS
+x	3	y	2000-01-01
+x	4	z	2000-01-01
