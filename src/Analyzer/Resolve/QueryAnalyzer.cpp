@@ -3684,7 +3684,26 @@ ProjectionNames QueryAnalyzer::resolveExpressionNode(
         }
     }
 
-    if (!in_aggregate_or_grouping_function_scope || is_correlated_column_node)
+    /// Inside an aggregate or `grouping` function a GROUP BY key keeps its type. The same node may be shared
+    /// with an expression outside of them (`SELECT * APPLY x -> tuple(sum(x), x)`), where it has to become
+    /// Nullable, so it must not be remembered as resolved.
+    bool is_nullable_group_by_key_in_aggregate_function = false;
+
+    if (in_aggregate_or_grouping_function_scope && !is_correlated_column_node)
+    {
+        for (const auto * scope_ptr = &scope; scope_ptr; scope_ptr = scope_ptr->parent_scope)
+        {
+            if (!scope_ptr->nullable_group_by_keys.empty() && scope_ptr->nullable_group_by_keys.contains(node))
+            {
+                is_nullable_group_by_key_in_aggregate_function = true;
+                break;
+            }
+
+            if (scope_ptr->scope_node->getNodeType() == QueryTreeNodeType::QUERY)
+                break;
+        }
+    }
+    else
     {
         for (const auto * scope_ptr = &scope; scope_ptr; scope_ptr = scope_ptr->parent_scope)
         {
@@ -3742,7 +3761,8 @@ ProjectionNames QueryAnalyzer::resolveExpressionNode(
         }
     }
 
-    resolved_expressions.emplace(node, result_projection_names);
+    if (!is_nullable_group_by_key_in_aggregate_function)
+        resolved_expressions.emplace(node, result_projection_names);
 
     scope.popExpressionNode();
 
@@ -6593,6 +6613,33 @@ void QueryAnalyzer::resolveQuery(const QueryTreeNodePtr & query_node, Identifier
             throw Exception(ErrorCodes::EMPTY_LIST_OF_COLUMNS_QUERIED,
                 "Empty list of columns in projection. In scope {}",
                 scope.scope_node->formatASTForErrorMessage());
+    }
+    else
+    {
+        /** With `group_by_use_nulls` the projection is resolved after GROUP BY (see below), so that
+          * the expressions equal to a GROUP BY key become Nullable. Matchers are nevertheless expanded
+          * right away, as without the setting: `SELECT * REPLACE (expr AS c)` rewrites `c` in the other
+          * clauses while they are still unresolved identifiers, and positional arguments refer to the
+          * expanded columns. The expanded expressions are resolved again after GROUP BY.
+          */
+        auto & projection_nodes = query_node_typed.getProjection().getNodes();
+        QueryTreeNodes expanded_projection_nodes;
+
+        for (const auto & projection_node : projection_nodes)
+        {
+            auto node_to_resolve = projection_node;
+            if (node_to_resolve->getNodeType() != QueryTreeNodeType::MATCHER)
+            {
+                expanded_projection_nodes.push_back(std::move(node_to_resolve));
+                continue;
+            }
+
+            resolveExpressionNode(node_to_resolve, scope, false /*allow_lambda_expression*/, false /*allow_table_expression*/, false /*ignore_alias*/, true /*allow_niladic_functions*/, true /*is_top_level_projection*/);
+            const auto & matched_nodes = node_to_resolve->as<ListNode &>().getNodes();
+            expanded_projection_nodes.insert(expanded_projection_nodes.end(), matched_nodes.begin(), matched_nodes.end());
+        }
+
+        projection_nodes = std::move(expanded_projection_nodes);
     }
 
     if (auto & prewhere_node = query_node_typed.getPrewhere())
