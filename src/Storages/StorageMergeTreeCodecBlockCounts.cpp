@@ -24,7 +24,6 @@
 #include <Storages/StorageSnapshot.h>
 #include <Storages/VirtualColumnUtils.h>
 #include <Common/ZooKeeper/ZooKeeperCommon.h>
-#include <Common/assert_cast.h>
 #include <Common/logger_useful.h>
 
 namespace DB
@@ -348,8 +347,12 @@ void StorageMergeTreeCodecBlockCounts::read(
     auto source_table = resolveSourceTable(source_table_id, context);
     const auto source_storage_id = source_table->getStorageID();
 
+    /// A cast to a base class, so not `assert_cast`, which asserts the exact type and would reject every
+    /// `MergeTree` table. `resolveSourceTable` has already rejected a source table that is not a `MergeTree`.
+    const auto & merge_tree = dynamic_cast<const MergeTreeData &>(*source_table);
+
     /// `system.parts_columns` lists patch parts, so this function does too.
-    auto data_parts = assert_cast<const MergeTreeData &>(*source_table).getDataPartsVectorForInternalUsage(
+    auto data_parts = merge_tree.getDataPartsVectorForInternalUsage(
         {MergeTreeData::DataPartState::Active}, {MergeTreeData::DataPartKind::Regular, MergeTreeData::DataPartKind::Patch});
     std::erase_if(data_parts, [](const MergeTreeData::DataPartPtr & part) { return part->isEmpty(); });
 
