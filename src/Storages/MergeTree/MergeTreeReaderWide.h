@@ -119,6 +119,14 @@ private:
     bool read_without_marks = false;
     LoggerPtr log;
 
+    /// Names of the result columns as the query requests them, position by position with
+    /// `columns_to_read`, which holds the names in the part: for a column renamed after the part
+    /// was written, the part still knows it by its old name. Cache entries are identified by the
+    /// requested name, so `system.columns_cache` and its access checks see the column as the
+    /// current schema names it. The renames themselves invalidate the table's entries, so a
+    /// name never refers to two columns within one schema identity.
+    Names requested_column_names;
+
     /// State of the deferred columns cache write for the contiguous mark range being read.
     ///
     /// The range reader hands out the rows of one range over several `readRows` calls - one per

@@ -75,6 +75,10 @@ MergeTreeReaderWide::MergeTreeReaderWide(
         && all_mark_ranges.isOneRangeForWholePart(data_part_info_for_read->getMarksCount()))
     , log(getLogger("MergeTreeReaderWide"))
 {
+    requested_column_names.reserve(getColumns().size());
+    for (const auto & column : getColumns())
+        requested_column_names.push_back(column.name);
+
     try
     {
         for (size_t i = 0; i < columns_to_read.size(); ++i)
@@ -383,7 +387,7 @@ bool MergeTreeReaderWide::lookupColumnsCache(size_t row_begin, size_t row_end, s
         if (isColumnDroppedByPendingMutation(pos) || isSystemColumnInvalidated(pos))
             continue;
 
-        const auto & column_name = columns_to_read[pos].name;
+        const auto & column_name = requested_column_names[pos];
         auto intersecting = columns_cache->getIntersecting(
             data_part_info_for_read->getTableUUID(),
             data_part_info_for_read->getPartName(),
@@ -627,7 +631,7 @@ void MergeTreeReaderWide::writeToColumnsCacheIfRangeComplete()
         ColumnsCacheKey cache_key{
             data_part_info_for_read->getTableUUID(),
             data_part_info_for_read->getPartName(),
-            columns_to_read[pos].name,
+            requested_column_names[pos],
             cache_row_begin,
             column_row_end,
             settings.columns_cache_schema_identity};
@@ -645,7 +649,7 @@ void MergeTreeReaderWide::writeToColumnsCacheIfRangeComplete()
             bytes_written->fetch_add(entry_weight, std::memory_order_relaxed);
 
         LOG_TEST(log, "Cached column: {}, row_begin={}, row_end={}, rows={}",
-            columns_to_read[pos].name, cache_row_begin, column_row_end, rows_to_cache);
+            requested_column_names[pos], cache_row_begin, column_row_end, rows_to_cache);
     }
 
     cache_write_pending = false;
