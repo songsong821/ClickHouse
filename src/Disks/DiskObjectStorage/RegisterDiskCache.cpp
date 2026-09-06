@@ -124,7 +124,7 @@ void registerDiskCache(DiskFactory & factory, bool global_skip_access_check)
                     bool attach,
                     bool custom_disk) -> DiskPtr
     {
-        const bool skip_access_check = global_skip_access_check || config.getBool(config_prefix + ".skip_access_check", false);
+        const bool skip_access_check = config.getBool(config_prefix + ".skip_access_check", false) || global_skip_access_check;
 
         auto disk_name = config.getString(config_prefix + ".disk", "");
         if (disk_name.empty())
