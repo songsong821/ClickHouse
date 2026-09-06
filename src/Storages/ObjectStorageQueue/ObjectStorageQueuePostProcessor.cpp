@@ -79,6 +79,23 @@ ObjectStorageQueuePostProcessor::ObjectStorageQueuePostProcessor(
     , log(getLogger("ObjectStorageQueuePostProcessor"))
 { }
 
+void ObjectStorageQueuePostProcessor::ChangedGeneration::rememberIfCurrentExceptionIsOne()
+{
+    if (getCurrentExceptionCode() != ErrorCodes::FILE_CHANGED_DURING_READ)
+        return;
+
+    std::lock_guard lock(mutex);
+    if (!exception)
+        exception = std::current_exception();
+}
+
+void ObjectStorageQueuePostProcessor::ChangedGeneration::rethrowIfAny() const
+{
+    std::lock_guard lock(mutex);
+    if (exception)
+        std::rethrow_exception(exception);
+}
+
 void ObjectStorageQueuePostProcessor::process(const StoredObjects & objects) const
 {
     const ObjectStorageQueueAction after_processing_action = table_metadata.after_processing.load();
@@ -86,20 +103,40 @@ void ObjectStorageQueuePostProcessor::process(const StoredObjects & objects) con
     {
         LOG_TRACE(log, "Removing {} objects", objects.size());
 
+        /// On Azure the delete is pinned to the ingested generation: `removeObjectsIfExist` sends
+        /// the `ETag` of every object as `If-Match`, so an object overwritten after it was read is
+        /// left in place (`FILE_CHANGED_DURING_READ`) rather than deleted without the newer
+        /// generation ever having been ingested. An untagged object would be deleted by path; the
+        /// source never hands one over (it fails such a file instead of reading it).
+        if (type == ObjectStorageType::Azure)
+        {
+            for (const auto & object : objects)
+            {
+                if (object.etag.empty())
+                    throw Exception(
+                        ErrorCodes::LOGICAL_ERROR,
+                        "Cannot delete Azure blob {}: the generation that was ingested is not known",
+                        object.remote_path);
+            }
+        }
+
         /// We do need to apply after-processing action before committing requests to keeper.
         /// See explanation in ObjectStorageQueueSource::FileIterator::nextImpl().
+        ChangedGeneration changed_generation;
         try
         {
             doWithRetries([&]{
                 fiu_do_on(FailPoints::object_storage_queue_fail_delete, {
                     throw Exception(ErrorCodes::FAULT_INJECTED, "Failed to remove objects");
                 });
+                /// Deletes every object it can before reporting one that changed.
                 object_storage->removeObjectsIfExist(objects);
             });
             ProfileEvents::increment(ProfileEvents::ObjectStorageQueueRemovedObjects, objects.size());
         }
         catch (...)
         {
+            changed_generation.rememberIfCurrentExceptionIsOne();
             LOG_WARNING(
                 log,
                 "Failed to remove all {} objects with exception: {}",
@@ -107,6 +144,7 @@ void ObjectStorageQueuePostProcessor::process(const StoredObjects & objects) con
                 getExceptionMessage(std::current_exception(), /*with_stacktrace=*/ false)
             );
         }
+        changed_generation.rethrowIfAny();
     }
     else if (after_processing_action == ObjectStorageQueueAction::MOVE)
     {
@@ -248,6 +286,7 @@ void ObjectStorageQueuePostProcessor::moveWithinBucket(const StoredObjects & obj
     TaskTracker task_tracker(schedule, post_process_max_inflight_object_moves, limited_log);
 
     std::atomic<size_t> moved_objects = 0;
+    ChangedGeneration changed_generation;
 
     try
     {
@@ -285,6 +324,7 @@ void ObjectStorageQueuePostProcessor::moveWithinBucket(const StoredObjects & obj
                 }
                 catch (...)
                 {
+                    changed_generation.rememberIfCurrentExceptionIsOne();
                     LOG_WARNING(
                         log,
                         "Failed to move object {} within bucket with exception: {}",
@@ -310,6 +350,7 @@ void ObjectStorageQueuePostProcessor::moveWithinBucket(const StoredObjects & obj
         throw;
     }
     ProfileEvents::increment(ProfileEvents::ObjectStorageQueueMovedObjects, moved_objects);
+    changed_generation.rethrowIfAny();
 }
 
 void ObjectStorageQueuePostProcessor::moveS3Objects(const StoredObjects & objects) const
@@ -371,6 +412,7 @@ void ObjectStorageQueuePostProcessor::moveS3Objects(const StoredObjects & object
                 ThreadName::S3_COPY_POOL);
 
             size_t moved_objects = 0;
+            ChangedGeneration changed_generation;
             for (const auto & object_from : objects)
             {
                 try
@@ -408,6 +450,7 @@ void ObjectStorageQueuePostProcessor::moveS3Objects(const StoredObjects & object
                 }
                 catch (...)
                 {
+                    changed_generation.rememberIfCurrentExceptionIsOne();
                     LOG_WARNING(
                         log,
                         "Failed to move S3 object {} with exception: {}",
@@ -417,6 +460,7 @@ void ObjectStorageQueuePostProcessor::moveS3Objects(const StoredObjects & object
                 }
             }
             ProfileEvents::increment(ProfileEvents::ObjectStorageQueueMovedObjects, moved_objects);
+            changed_generation.rethrowIfAny();
         }
         else
         {
@@ -464,6 +508,7 @@ void ObjectStorageQueuePostProcessor::moveAzureBlobs(const StoredObjects & objec
                 is_readonly);
 
             size_t moved_objects = 0;
+            ChangedGeneration changed_generation;
             for (const auto & object_from : objects)
             {
                 try
@@ -473,7 +518,8 @@ void ObjectStorageQueuePostProcessor::moveAzureBlobs(const StoredObjects & objec
                         /// the copy and the delete below both carry its `ETag`, so a source blob
                         /// overwritten at any point after it was read is neither copied nor deleted
                         /// as if the newer generation had been ingested. Either step then fails with
-                        /// `FILE_CHANGED_DURING_READ` and the blob is left in place.
+                        /// `FILE_CHANGED_DURING_READ`, the blob is left in place, and the error is
+                        /// rethrown once the batch is done, so that the file is not committed.
                         const String & src_etag = object_from.etag;
                         if (src_etag.empty())
                             throw Exception(
@@ -526,6 +572,7 @@ void ObjectStorageQueuePostProcessor::moveAzureBlobs(const StoredObjects & objec
                 }
                 catch (...)
                 {
+                    changed_generation.rememberIfCurrentExceptionIsOne();
                     LOG_WARNING(
                         log,
                         "Failed to move Azure object {} with exception: {}",
@@ -535,6 +582,7 @@ void ObjectStorageQueuePostProcessor::moveAzureBlobs(const StoredObjects & objec
                 }
             }
             ProfileEvents::increment(ProfileEvents::ObjectStorageQueueMovedObjects, moved_objects);
+            changed_generation.rethrowIfAny();
         }
         else
         {

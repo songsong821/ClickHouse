@@ -29,6 +29,24 @@ namespace ErrorCodes
     extern const int LOGICAL_ERROR;
     extern const int BACKUP_DAMAGED;
     extern const int FILE_CHANGED_DURING_READ;
+    extern const int AZURE_BLOB_STORAGE_ERROR;
+}
+
+namespace
+{
+    /// Every read and every copy of a backup is pinned to the generation (`ETag`) of the blob a
+    /// `HEAD` selected. A generation that cannot be learned cannot be pinned to: a blob overwritten
+    /// between that `HEAD` and the read or the copy would then be taken for the one selected, and
+    /// the size alone does not tell two generations apart. Backups do not degrade to that silently:
+    /// an endpoint that reports no `ETag` for a blob is refused.
+    void requireBlobGeneration(const String & blob_path, const ObjectMetadata & metadata)
+    {
+        if (metadata.etag.empty())
+            throw Exception(ErrorCodes::AZURE_BLOB_STORAGE_ERROR,
+                "The endpoint reports no `ETag` for blob {}, so a read or a copy of the blob cannot be pinned "
+                "to one generation of it. Backups require the generation of every blob they read or copy",
+                blob_path);
+    }
 }
 
 String headSourceBlobOfWholeCopy(const IObjectStorage & src_object_storage, const String & blob_path, size_t expected_size)
@@ -39,6 +57,7 @@ String headSourceBlobOfWholeCopy(const IObjectStorage & src_object_storage, cons
             "Blob {} is {} bytes long, while the file being backed up is {} bytes long: "
             "the blob was replaced after the size of the file was taken",
             blob_path, metadata.size_bytes, expected_size);
+    requireBlobGeneration(blob_path, metadata);
     return metadata.etag;
 }
 
@@ -49,9 +68,12 @@ namespace
     /// blob overwritten while the backup is in use is reported as `FILE_CHANGED_DURING_READ` rather
     /// than restored as a mix of two generations or as a same-size wrong one, and the size is the
     /// end-of-file bound of a read, so the endpoint cannot move it by misreporting a length.
+    /// A blob whose generation the endpoint does not report is refused (see `requireBlobGeneration`).
     ObjectMetadata headBackupBlob(const AzureObjectStorage & object_storage, const String & key)
     {
-        return object_storage.getObjectMetadata(key, /*with_tags=*/ false);
+        ObjectMetadata metadata = object_storage.getObjectMetadata(key, /*with_tags=*/ false);
+        requireBlobGeneration(key, metadata);
+        return metadata;
     }
 
     /// A copy of a backup blob is given the size the backup metadata recorded for it, which is also

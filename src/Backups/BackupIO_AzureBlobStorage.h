@@ -15,7 +15,8 @@ namespace DB
 /// `HEAD`, so they describe the same generation of the blob: the size the disk reported was measured
 /// earlier, and a blob replaced in between could be of another size, which a copy pinned to the new
 /// generation would then copy in full under the old size. A blob of another size is refused with
-/// `FILE_CHANGED_DURING_READ`.
+/// `FILE_CHANGED_DURING_READ`, and a blob whose generation the endpoint does not report with
+/// `AZURE_BLOB_STORAGE_ERROR`: a copy that cannot be pinned to a generation is not made.
 String headSourceBlobOfWholeCopy(const IObjectStorage & src_object_storage, const String & blob_path, size_t expected_size);
 
 /// Represents a backup stored to Azure

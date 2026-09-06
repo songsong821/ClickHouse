@@ -92,7 +92,8 @@ namespace ErrorCodes
 
 bool afterProcessingNeedsIngestedGeneration(ObjectStorageType storage_type, ObjectStorageQueueAction after_processing)
 {
-    return storage_type == ObjectStorageType::Azure && after_processing == ObjectStorageQueueAction::MOVE;
+    return storage_type == ObjectStorageType::Azure
+        && (after_processing == ObjectStorageQueueAction::MOVE || after_processing == ObjectStorageQueueAction::DELETE);
 }
 
 bool learnIngestedGeneration(const IObjectStorage & object_storage, RelativePathWithMetadata & object_info)
@@ -656,11 +657,12 @@ ObjectInfoPtr ObjectStorageQueueSource::FileIterator::next(size_t processor)
         }
 
         /// An Azure `MOVE` after processing copies and deletes the very generation that was
-        /// ingested, so that generation must be known before the read is opened, and the read is
-        /// then pinned to it. The listing normally reports it; an endpoint that omits `Etag` from
-        /// `ListBlobs` is asked once with a `HEAD`. A file whose generation cannot be learned at all
-        /// is still returned: the source refuses to read it and fails it, so that it is never
-        /// committed as processed and then moved as whatever generation exists by then.
+        /// ingested, and an Azure `DELETE` deletes it, so that generation must be known before the
+        /// read is opened, and the read is then pinned to it. The listing normally reports it; an
+        /// endpoint that omits `Etag` from `ListBlobs` is asked once with a `HEAD`. A file whose
+        /// generation cannot be learned at all is still returned: the source refuses to read it and
+        /// fails it, so that it is never committed as processed and then moved or deleted as
+        /// whatever generation exists by then.
         if (afterProcessingNeedsIngestedGeneration(object_storage->getType(), metadata->getTableMetadata().after_processing))
             learnIngestedGeneration(*object_storage, object_info->relative_path_with_metadata);
 
@@ -1315,17 +1317,18 @@ Chunk ObjectStorageQueueSource::generateImpl()
 
             /// Fail closed: a file whose generation is unknown (neither the listing nor the `HEAD`
             /// made by the file iterator reported an `ETag`) is not read when the post-processing
-            /// has to act on the ingested generation, because it could then only move whatever
-            /// generation exists at post-processing time. It is failed like a file whose read
-            /// failed, so it is never committed as processed.
-            if (afterProcessingNeedsIngestedGeneration(object_storage->getType(), files_metadata->getTableMetadata().after_processing)
+            /// has to act on the ingested generation, because it could then only move or delete
+            /// whatever generation exists at post-processing time. It is failed like a file whose
+            /// read failed, so it is never committed as processed.
+            const auto after_processing = files_metadata->getTableMetadata().after_processing.load();
+            if (afterProcessingNeedsIngestedGeneration(object_storage->getType(), after_processing)
                 && processed_files.back().etag.empty())
             {
                 const auto message = fmt::format(
                     "The generation (`ETag`) of the object {} is not reported by the endpoint, "
-                    "while `after_processing = 'move'` on Azure has to copy and delete exactly the generation that was ingested. "
+                    "while `after_processing = '{}'` on Azure has to act on exactly the generation that was ingested. "
                     "The file is not read",
-                    file_metadata->getPath());
+                    file_metadata->getPath(), ObjectStorageQueueTableMetadata::actionToString(after_processing));
                 LOG_ERROR(log, "{}. Will set the file as failed", message);
 
                 processed_files.back().state = FileState::ErrorOnRead;
@@ -1898,6 +1901,8 @@ void ObjectStorageQueueSource::commit(bool insert_succeeded, const std::string &
     if (requests.empty() && successful_objects.empty())
         return;
 
+    /// As in `StorageObjectStorageQueue::commit`: an object that is no longer the generation that
+    /// was ingested (`FILE_CHANGED_DURING_READ`) throws out of here, and the batch is not committed.
     if (!successful_objects.empty()
         && files_metadata->getTableMetadata().after_processing != ObjectStorageQueueAction::KEEP)
     {

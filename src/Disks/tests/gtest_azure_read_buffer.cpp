@@ -18,7 +18,9 @@
 #include <IO/AzureBlobStorage/copyAzureBlobStorageFile.h>
 #include <IO/ReadHelpers.h>
 #include <IO/SharedThreadPools.h>
+#include <Storages/ObjectStorageQueue/ObjectStorageQueuePostProcessor.h>
 #include <Storages/ObjectStorageQueue/ObjectStorageQueueSource.h>
+#include <Storages/ObjectStorageQueue/ObjectStorageQueueTableMetadata.h>
 
 #include <azure/core/http/raw_response.hpp>
 #include <azure/core/http/transport.hpp>
@@ -33,6 +35,8 @@ namespace DB::ErrorCodes
     extern const int HTTP_RANGE_NOT_SATISFIABLE;
     extern const int FILE_CHANGED_DURING_READ;
     extern const int BACKUP_DAMAGED;
+    extern const int AZURE_BLOB_STORAGE_ERROR;
+    extern const int LOGICAL_ERROR;
 }
 
 namespace
@@ -1930,6 +1934,66 @@ TEST(AzureBackupWriter, WholeCopyOfSourceReplacedByAnotherSizeIsRefused)
     ASSERT_TRUE(transport->uploadedData().empty());
 }
 
+/// The endpoint reports no `ETag` for the blobs of the backup: a read cannot be pinned to one
+/// generation, so a restore would take whatever generation the `GET` happens to meet for the one
+/// the `HEAD` measured. The read is refused instead, before any byte is asked for.
+TEST(AzureBackupReader, EndpointWithoutETagIsRefused)
+{
+    auto transport = std::make_shared<MisbehavingRangeTransport>(100, 100, 100, /* send_etag */ false);
+    auto reader = backupReaderOver(transport);
+
+    try
+    {
+        reader->readFile("file");
+        FAIL() << "Expected an exception on a backup blob whose generation the endpoint does not report";
+    }
+    catch (const DB::Exception & e)
+    {
+        ASSERT_EQ(e.code(), DB::ErrorCodes::AZURE_BLOB_STORAGE_ERROR);
+    }
+    ASSERT_EQ(transport->headRequests(), 1u);
+}
+
+/// The same for a copy inside the backup: without a generation to pin the copy to, a same-size
+/// overwrite between the `HEAD` and the copy would be copied under the name of the blob the backup
+/// wrote, so no copy is made.
+TEST(AzureBackupWriter, CopyInsideBackupRefusedWithoutETag)
+{
+    auto transport = std::make_shared<MisbehavingRangeTransport>(100, 100, 100, /* send_etag */ false);
+    auto writer = backupWriterOver(transport);
+
+    try
+    {
+        writer->copyFile(/* destination */ "copy", /* source */ "file", /* size */ 100);
+        FAIL() << "Expected an exception on a copy of a backup blob whose generation the endpoint does not report";
+    }
+    catch (const DB::Exception & e)
+    {
+        ASSERT_EQ(e.code(), DB::ErrorCodes::AZURE_BLOB_STORAGE_ERROR);
+    }
+    ASSERT_TRUE(transport->nativelyCopiedGenerations().empty());
+    ASSERT_TRUE(transport->uploadedData().empty());
+}
+
+/// And for the whole-object copy of a file from an Azure disk into the backup: a source blob of the
+/// right size but of no reported generation is not copied either.
+TEST(AzureBackupWriter, WholeCopyRefusedWithoutETag)
+{
+    auto transport = std::make_shared<MisbehavingRangeTransport>(100, 100, 100, /* send_etag */ false);
+    auto object_storage = objectStorageOver(transport);
+
+    try
+    {
+        DB::headSourceBlobOfWholeCopy(*object_storage, "blob", /* expected_size */ 100);
+        FAIL() << "Expected an exception on a source blob whose generation the endpoint does not report";
+    }
+    catch (const DB::Exception & e)
+    {
+        ASSERT_EQ(e.code(), DB::ErrorCodes::AZURE_BLOB_STORAGE_ERROR);
+    }
+    ASSERT_EQ(transport->headRequests(), 1u);
+}
+
 /// The entry of a blob listing for the blob `blob` of 100 bytes, whose `Etag` element is `etag`
 /// (an endpoint that omits the element yields an empty one).
 static DB::RelativePathWithMetadata listingEntry(const std::string & etag)
@@ -1940,15 +2004,17 @@ static DB::RelativePathWithMetadata listingEntry(const std::string & etag)
     return DB::RelativePathWithMetadata("blob", metadata);
 }
 
-/// Only an Azure `MOVE` acts on the generation that was ingested: it copies and deletes that
-/// generation, so it is the only combination for which the generation must be known up front.
-TEST(AzureIngestedGeneration, OnlyAzureMoveNeedsIt)
+/// An Azure `MOVE` copies and deletes the generation that was ingested, and an Azure `DELETE`
+/// deletes it: both act on that generation, so for both it must be known up front. A `TAG` or a
+/// `KEEP` leaves the object as it is, and the S3 post-processing is not pinned to a generation.
+TEST(AzureIngestedGeneration, AzureMoveAndDeleteNeedIt)
 {
     ASSERT_TRUE(DB::afterProcessingNeedsIngestedGeneration(DB::ObjectStorageType::Azure, DB::ObjectStorageQueueAction::MOVE));
+    ASSERT_TRUE(DB::afterProcessingNeedsIngestedGeneration(DB::ObjectStorageType::Azure, DB::ObjectStorageQueueAction::DELETE));
     ASSERT_FALSE(DB::afterProcessingNeedsIngestedGeneration(DB::ObjectStorageType::Azure, DB::ObjectStorageQueueAction::KEEP));
-    ASSERT_FALSE(DB::afterProcessingNeedsIngestedGeneration(DB::ObjectStorageType::Azure, DB::ObjectStorageQueueAction::DELETE));
     ASSERT_FALSE(DB::afterProcessingNeedsIngestedGeneration(DB::ObjectStorageType::Azure, DB::ObjectStorageQueueAction::TAG));
     ASSERT_FALSE(DB::afterProcessingNeedsIngestedGeneration(DB::ObjectStorageType::S3, DB::ObjectStorageQueueAction::MOVE));
+    ASSERT_FALSE(DB::afterProcessingNeedsIngestedGeneration(DB::ObjectStorageType::S3, DB::ObjectStorageQueueAction::DELETE));
 }
 
 /// The listing reported the generation: it is kept as is, and the endpoint is not asked again.
@@ -2032,6 +2098,108 @@ TEST(AzureIngestedGeneration, EndpointWithoutETag)
     ASSERT_TRUE(entry.metadata->etag.empty());
     ASSERT_EQ(entry.metadata->size_bytes, 100u);
     ASSERT_EQ(transport->headRequests(), 1u);
+}
+
+namespace
+{
+
+/// The metadata of an `ObjectStorageQueue` table whose `after_processing` is `action`.
+DB::ObjectStorageQueueTableMetadata queueTableMetadataWith(const std::string & action)
+{
+    return DB::ObjectStorageQueueTableMetadata::parse(
+        "{\"format_name\": \"CSV\", \"columns\": \"columns format version: 1\\n0 columns:\\n\", "
+        "\"mode\": \"unordered\", \"after_processing\": \"" + action + "\"}");
+}
+
+/// What the `after_processing` step of an Azure `ObjectStorageQueue` table (the step that runs just
+/// before the batch is committed to Keeper) did to the endpoint.
+struct PostProcessingOutcome
+{
+    /// The generation that each successful `Delete Blob` removed.
+    std::vector<std::string> deleted_generations;
+    /// The bytes uploaded to the destination of a move.
+    std::string copied;
+    /// The error code `process` threw, if it did throw.
+    std::optional<int> error_code;
+};
+
+/// Runs the `after_processing = action` step of an Azure table over `objects`, the way a commit does,
+/// against an endpoint that holds `generation_at_endpoint` and evaluates `If-Match`. A `MOVE` moves
+/// within the container, under the prefix `moved`.
+PostProcessingOutcome postProcess(const std::string & action, const DB::StoredObjects & objects, const std::string & generation_at_endpoint)
+{
+    auto transport = std::make_shared<MisbehavingRangeTransport>(
+        100, 100, 100, /* send_etag */ true, /* reported_length */ std::nullopt, /* ignore_range */ false,
+        ETagBehaviour{.etag = generation_at_endpoint, .etag_after_first = "", .honour_if_match = true});
+    std::shared_ptr<DB::IObjectStorage> object_storage = objectStorageOver(transport);
+
+    const auto table_metadata = queueTableMetadataWith(action);
+    DB::ObjectStorageQueuePostProcessor::AfterProcessingSettings settings;
+    settings.after_processing_retries = 1;
+    settings.after_processing_move_prefix = "moved";
+
+    DB::ObjectStorageQueuePostProcessor post_processor(
+        getContext().context, DB::ObjectStorageType::Azure, object_storage, "AzureQueue", table_metadata, settings);
+
+    std::optional<int> error_code;
+    try
+    {
+        post_processor.process(objects);
+    }
+    catch (const DB::Exception & e)
+    {
+        error_code = e.code();
+    }
+
+    return PostProcessingOutcome{
+        .deleted_generations = transport->deletedGenerations(), .copied = transport->uploadedData(), .error_code = error_code};
+}
+
+/// A `StoredObject` for the blob `blob` of 100 bytes, as `prepareCommitRequests` hands it over: the
+/// generation that was ingested is `etag`.
+DB::StoredObject ingestedGeneration(const std::string & etag)
+{
+    DB::StoredObject object("blob", /* local_path */ "", 100);
+    object.etag = etag;
+    return object;
+}
+
+}
+
+/// The source of a `MOVE` is still the generation that was ingested: it is copied and deleted, and
+/// the step completes, so the batch is committed.
+TEST(AzurePostProcessing, MoveOfIngestedGenerationCompletes)
+{
+    const auto outcome = postProcess("move", {ingestedGeneration(ETagBehaviour::first_generation)}, ETagBehaviour::first_generation);
+
+    ASSERT_FALSE(outcome.error_code.has_value());
+    ASSERT_EQ(outcome.copied.size(), 100u);
+    ASSERT_EQ(outcome.deleted_generations, (std::vector<std::string>{ETagBehaviour::first_generation}));
+}
+
+/// The source of a `MOVE` was overwritten after it was ingested. Reporting that to the log only would
+/// let the commit mark the file processed while the newer generation, never ingested, stays in the
+/// bucket untracked. The step throws `FILE_CHANGED_DURING_READ` out of `process` instead, so the
+/// commit does not happen and the file is ingested again as its newer generation; the object itself
+/// is left in place.
+TEST(AzurePostProcessing, MoveOfOverwrittenGenerationAbortsTheCommit)
+{
+    const auto outcome = postProcess("move", {ingestedGeneration(ETagBehaviour::first_generation)}, ETagBehaviour::second_generation);
+
+    ASSERT_EQ(outcome.error_code, DB::ErrorCodes::FILE_CHANGED_DURING_READ);
+    ASSERT_TRUE(outcome.copied.empty());
+    ASSERT_TRUE(outcome.deleted_generations.empty());
+}
+
+/// An Azure `DELETE` acts on the ingested generation as well, so the source never hands over an
+/// object whose generation is unknown; if one did arrive, deleting it by path could delete a
+/// generation that was never ingested. That is a logical error, and nothing is deleted.
+TEST(AzurePostProcessing, DeleteOfUntaggedObjectIsRefused)
+{
+    const auto outcome = postProcess("delete", {ingestedGeneration("")}, ETagBehaviour::first_generation);
+
+    ASSERT_EQ(outcome.error_code, DB::ErrorCodes::LOGICAL_ERROR);
+    ASSERT_TRUE(outcome.deleted_generations.empty());
 }
 
 #endif
