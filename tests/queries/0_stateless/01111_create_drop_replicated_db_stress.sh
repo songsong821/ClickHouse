@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Tags: race, zookeeper, long, no-msan, no-flaky-check
+# Tags: race, zookeeper, long, no-msan, no-flaky-check, no-parallel
+# Tag no-parallel: concurrent suite load makes replicated database DDL workers exceed the TSan test timeout.
 # no-flaky-check: stress test, runs up to ~6 min on sanitizer builds - repeated runs exceed the 180 s per-test budget
 
 CLICKHOUSE_CLIENT_SERVER_LOGS_LEVEL=fatal
