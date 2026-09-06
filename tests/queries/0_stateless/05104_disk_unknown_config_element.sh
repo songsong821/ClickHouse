@@ -13,9 +13,9 @@ ERROR=$(${CLICKHOUSE_CLIENT} -q "
     SETTINGS disk = disk(type = local, path = '${CLICKHOUSE_DISKS_FILES}/${CLICKHOUSE_DATABASE}_unknown/', lazy_initialization = 1, background_load = 1)
 " 2>&1)
 
-echo "$ERROR" | grep -c "UNKNOWN_ELEMENT_IN_CONFIG"
-echo "$ERROR" | grep -c "lazy_initialization"
-echo "$ERROR" | grep -c "background_load"
+echo "$ERROR" | grep -oF "UNKNOWN_ELEMENT_IN_CONFIG" | head -n 1
+# Both of them are reported, and in the order they are written in.
+echo "$ERROR" | grep -oF "lazy_initialization, background_load" | head -n 1
 
 # The same disk without these elements is fine.
 
