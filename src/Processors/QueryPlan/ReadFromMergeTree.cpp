@@ -1178,6 +1178,22 @@ Pipe ReadFromMergeTree::readByLayers(
             in_order_column_names_to_read.push_back(column_name);
             column_names_set.insert(column_name);
         }
+
+        /// PREWHERE actions can remove an input column that only the prewhere condition needs, and the read
+        /// below applies PREWHERE before the sorting expression, so a column of the sorting key can be
+        /// missing from the block that expression is computed on ("Not found column ... in block"). Keep such
+        /// inputs, as the in-order read without layers does in `spreadMarkRangesAmongStreamsWithOrder`; the
+        /// columns the query does not need are dropped by the converting step at the end of
+        /// `initializePipeline`.
+        if (query_info.prewhere_info || query_info.row_level_filter)
+        {
+            NameSet sorting_columns;
+            for (const auto & column : storage_snapshot->metadata->getSortingKey().expression->getRequiredColumnsWithTypes())
+                sorting_columns.insert(column.name);
+
+            restorePrewhereInputs(query_info.row_level_filter.get(), query_info.prewhere_info.get(), sorting_columns);
+        }
+
         auto sorting_expr = storage_snapshot->metadata->getSortingKey().expression;
         const auto & sorting_columns = storage_snapshot->metadata->getSortingKey().column_names;
         std::vector<bool> reverse_flags = storage_snapshot->metadata->getSortingKeyReverseFlags();

@@ -1,0 +1,10 @@
+a correlated EXISTS under OR, whose decorrelated join is sharded
+700
+700
+700
+a plain join with a filter that only PREWHERE reads
+42800
+42800
+and one that reads both key columns of the join
+71357
+71357
