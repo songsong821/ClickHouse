@@ -1,3 +1,5 @@
+-- Tags: no-fasttest
+-- no-fasttest: system.unicode requires ICU, which the fast-test build excludes
 -- Coverage for src/Storages/System/StorageSystemUnicode.cpp.
 -- The `notation` column (U+XXXX representation) is never queried in CI.
 -- Exercises the 4-hex (U+XXXX), 5-hex (U+XXXXX), and 6-hex (U+XXXXXX) notation
