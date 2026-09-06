@@ -154,6 +154,14 @@ void MergeTreeReaderStream::init()
 void MergeTreeReaderStream::seekToMarkAndColumn(size_t row_index, size_t column_position)
 {
     init();
+
+    /// All marks of an empty file point to its beginning, so don't load them.
+    if (file_size == 0)
+    {
+        seekToMark(MarkInCompressedFile{0, 0});
+        return;
+    }
+
     loadMarks();
 
     const auto & mark = marks_getter->getMark(row_index, column_position);
@@ -286,6 +294,10 @@ size_t MergeTreeReaderStreamSingleColumn::getRightOffset(size_t right_mark)
     if (marks_count == 0)
         return 0;
 
+    /// All marks of an empty file point to its beginning, so don't load them.
+    if (file_size == 0)
+        return 0;
+
     chassert(right_mark <= marks_count);
     loadMarks();
 
@@ -376,6 +388,10 @@ size_t MergeTreeReaderStreamSingleColumn::getRightOffset(size_t right_mark)
 
 std::pair<size_t, size_t> MergeTreeReaderStreamSingleColumn::estimateMarkRangeBytes(const MarkRanges & mark_ranges)
 {
+    /// All marks of an empty file point to its beginning, so don't load them.
+    if (file_size == 0)
+        return {0, 0};
+
     loadMarks();
 
     size_t max_range_bytes = 0;
