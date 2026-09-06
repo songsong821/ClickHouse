@@ -7,6 +7,8 @@
 #include <Access/ContextAccess.h>
 #include <Access/User.h>
 #include <Interpreters/Context.h>
+#include <Interpreters/executeDDLQueryOnCluster.h>
+#include <Interpreters/removeOnClusterClauseIfNeeded.h>
 
 
 namespace DB
@@ -19,11 +21,13 @@ namespace ErrorCodes
 
 BlockIO InterpreterSetRoleQuery::execute()
 {
-    const auto & query = query_ptr->as<const ASTSetRoleQuery &>();
+    const auto updated_query_ptr = removeOnClusterClauseIfNeeded(query_ptr, getContext());
+    const auto & query = updated_query_ptr->as<const ASTSetRoleQuery &>();
+
     if (query.kind == ASTSetRoleQuery::Kind::SET_DEFAULT_ROLE)
-        setDefaultRole(query);
-    else
-        setRole(query);
+        return setDefaultRole(updated_query_ptr, query);
+
+    setRole(query);
     return {};
 }
 
@@ -39,10 +43,17 @@ void InterpreterSetRoleQuery::setRole(const ASTSetRoleQuery & query)
 }
 
 
-void InterpreterSetRoleQuery::setDefaultRole(const ASTSetRoleQuery & query)
+BlockIO InterpreterSetRoleQuery::setDefaultRole(const ASTPtr & updated_query_ptr, const ASTSetRoleQuery & query)
 {
+    /// `CURRENT_USER` must be resolved here, on the initiator: the AST text is what reaches every host, and a
+    /// DDL worker there runs as its own user, so an unresolved tag would set the default roles of the wrong user.
+    query.replaceCurrentUserTag(getContext()->getUserName());
+
     getContext()->getAccess()->checkCanAdministerDefaultRoles();
     getContext()->checkAccess(query.to_users->collectRequiredGrants(AccessType::ALTER_USER));
+
+    if (!query.cluster.empty())
+        return executeDDLQueryOnCluster(updated_query_ptr, getContext());
 
     auto & access_control = getContext()->getAccessControl();
     std::vector<UUID> to_users = RolesOrUsersSet{*query.to_users, access_control, getContext()->getUserID()}.getMatchingIDs(access_control);
@@ -56,6 +67,7 @@ void InterpreterSetRoleQuery::setDefaultRole(const ASTSetRoleQuery & query)
     };
 
     access_control.update(to_users, update_func);
+    return {};
 }
 
 
