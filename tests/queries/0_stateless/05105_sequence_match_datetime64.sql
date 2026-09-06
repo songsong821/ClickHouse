@@ -13,24 +13,24 @@ ORDER BY test_key;
 DROP TABLE t_seq_dt64;
 
 SELECT 'durations are seconds at every scale';
+-- `toTypeName(any(ts))` rather than `toTypeName(ts)` with a `GROUP BY`: the type is only wanted as a
+-- label, and referring to the column outside an aggregate needs a `GROUP BY` that the old analyzer
+-- does not accept as covering `ts`.
 SELECT
-    toTypeName(ts) AS type,
+    toTypeName(any(ts)) AS type,
     sequenceMatch('(?1)(?t<10)(?2)')(ts, e = 1, e = 2) AS within_10s,
     sequenceMatch('(?1)(?t<5)(?2)')(ts, e = 1, e = 2) AS within_5s
-FROM (SELECT arrayJoin([(toDateTime64('2020-01-01 00:00:00', 0), 1), (toDateTime64('2020-01-01 00:00:07', 0), 2)]) AS x, x.1 AS ts, x.2 AS e)
-GROUP BY type;
+FROM (SELECT arrayJoin([(toDateTime64('2020-01-01 00:00:00', 0), 1), (toDateTime64('2020-01-01 00:00:07', 0), 2)]) AS x, x.1 AS ts, x.2 AS e);
 SELECT
-    toTypeName(ts) AS type,
+    toTypeName(any(ts)) AS type,
     sequenceMatch('(?1)(?t<10)(?2)')(ts, e = 1, e = 2) AS within_10s,
     sequenceMatch('(?1)(?t<5)(?2)')(ts, e = 1, e = 2) AS within_5s
-FROM (SELECT arrayJoin([(toDateTime64('2020-01-01 00:00:00', 6), 1), (toDateTime64('2020-01-01 00:00:07', 6), 2)]) AS x, x.1 AS ts, x.2 AS e)
-GROUP BY type;
+FROM (SELECT arrayJoin([(toDateTime64('2020-01-01 00:00:00', 6), 1), (toDateTime64('2020-01-01 00:00:07', 6), 2)]) AS x, x.1 AS ts, x.2 AS e);
 SELECT
-    toTypeName(ts) AS type,
+    toTypeName(any(ts)) AS type,
     sequenceMatch('(?1)(?t<10)(?2)')(ts, e = 1, e = 2) AS within_10s,
     sequenceMatch('(?1)(?t<5)(?2)')(ts, e = 1, e = 2) AS within_5s
-FROM (SELECT arrayJoin([(toDateTime64('2020-01-01 00:00:00', 9), 1), (toDateTime64('2020-01-01 00:00:07', 9), 2)]) AS x, x.1 AS ts, x.2 AS e)
-GROUP BY type;
+FROM (SELECT arrayJoin([(toDateTime64('2020-01-01 00:00:00', 9), 1), (toDateTime64('2020-01-01 00:00:07', 9), 2)]) AS x, x.1 AS ts, x.2 AS e);
 
 SELECT 'the same answer as DateTime for a whole-second pattern';
 SELECT
