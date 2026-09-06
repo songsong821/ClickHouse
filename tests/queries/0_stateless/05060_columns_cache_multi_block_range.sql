@@ -27,8 +27,10 @@ SYSTEM DROP COLUMNS CACHE;
 SELECT uniqExact(blockNumber()) > 1, sum(id), uniqExact(s) FROM t_cc_multi_block
 SETTINGS max_block_size = 65536, preferred_block_size_bytes = 1000000;
 
--- Every read column of the part is cached as a whole.
-SELECT column, min(row_begin), max(row_end), sum(rows), count()
+-- Every read column of the part is cached as a whole. The part may be read as one task or as
+-- several (remote disks size tasks differently), so the entries are checked for their coverage
+-- of the part, not for their number.
+SELECT column, min(row_begin), max(row_end), sum(rows)
 FROM system.columns_cache
 WHERE database = currentDatabase() AND table = 't_cc_multi_block'
 GROUP BY column
@@ -80,7 +82,7 @@ SETTINGS max_block_size = 65536, preferred_block_size_bytes = 1000000;
 SELECT sum(arraySum(n.a)), sum(length(arrayStringConcat(n.b))), countIf(n.c != [0., 0.]) FROM t_cc_nested_added
 SETTINGS max_block_size = 65536, preferred_block_size_bytes = 1000000;
 
-SELECT column, min(row_begin), max(row_end), sum(rows), count()
+SELECT column, min(row_begin), max(row_end), sum(rows)
 FROM system.columns_cache
 WHERE database = currentDatabase() AND table = 't_cc_nested_added'
 GROUP BY column
