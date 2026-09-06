@@ -734,7 +734,12 @@ void AggregatingStep::transformPipeline(QueryPipelineBuilder & pipeline, const B
         /// But not if we execute aggregation over partitioned data in which case data streams shouldn't be mixed.
         if (!storage_has_evenly_distributed_read && !skip_merging)
         {
-            /// Use gradual resize only when there are GROUP BY keys.
+            /// Use gradual resize only for the pre-aggregation of an ordinary `GROUP BY` (see
+            /// `enableGradualResize`; the internal aggregations ClickHouse plans on its own never opt
+            /// in), and never for a merge-only step: its input rows are aggregate states, not the
+            /// source rows the thresholds are documented to count, and merging them builds no hash
+            /// table whose fan-out would be worth throttling.
+            /// Use it only when there are GROUP BY keys.
             /// For global aggregates (no keys) the number of partial states is one per stream
             /// regardless of cardinality, so reducing parallelism would not save any merging work
             /// proportional to the result; it would only serialize the upstream scan/filter and
@@ -743,7 +748,9 @@ void AggregatingStep::transformPipeline(QueryPipelineBuilder & pipeline, const B
             /// therefore one partial state per stream - and is excluded for the same reason. The header
             /// check misses keys whose constness was stripped by `materialize`; those are caught by the
             /// callers via `markGroupByKeysSemanticallyConstant`.
-            bool use_gradual_resize = !params.keys.empty()
+            bool use_gradual_resize = gradual_resize_enabled
+                && !params.only_merge
+                && !params.keys.empty()
                 && !group_by_keys_semantically_constant
                 && !allAggregationKeysAreConstant(pipeline.getHeader(), params.keys)
                 && (settings.min_rows_per_stream_for_gradual_resize || settings.min_bytes_per_stream_for_gradual_resize);
@@ -1120,7 +1127,7 @@ void AggregatingStep::serialize(Serialization & ctx) const
     ///             128=only_merge.
     /// A second flags byte follows since query plan serialization version
     /// `DBMS_MIN_QUERY_PLAN_SERIALIZATION_VERSION_WITH_SEMANTICALLY_CONSTANT_GROUP_BY_KEYS`:
-    ///             1=group_by_keys_semantically_constant.
+    ///             1=group_by_keys_semantically_constant, 2=gradual_resize_enabled.
     UInt8 flags = 0;
     if (final && !ctx.for_cache_key)
         flags |= 1;
@@ -1168,16 +1175,18 @@ void AggregatingStep::serialize(Serialization & ctx) const
     writeIntBinary(flags, ctx.out);
 
     /// The second flags byte exists only since query plan serialization version
-    /// `DBMS_MIN_QUERY_PLAN_SERIALIZATION_VERSION_WITH_SEMANTICALLY_CONSTANT_GROUP_BY_KEYS`. Its only
-    /// bit picks between the strict and the gradual pre-aggregation resize, so it does not belong to
-    /// the hash table statistics cache key, and it needs no throwing gate either: towards an older
+    /// `DBMS_MIN_QUERY_PLAN_SERIALIZATION_VERSION_WITH_SEMANTICALLY_CONSTANT_GROUP_BY_KEYS`. Its bits
+    /// only pick between the strict and the gradual pre-aggregation resize, so they do not belong to
+    /// the hash table statistics cache key, and they need no throwing gate either: towards an older
     /// peer the byte is simply left off the wire and the peer falls back to the header-based
-    /// constness check, which is exactly the behavior before this bit existed.
+    /// constness check, which is exactly the behavior before these bits existed.
     if (ctx.version >= DBMS_MIN_QUERY_PLAN_SERIALIZATION_VERSION_WITH_SEMANTICALLY_CONSTANT_GROUP_BY_KEYS)
     {
         UInt8 extra_flags = 0;
         if (group_by_keys_semantically_constant && !ctx.for_cache_key)
             extra_flags |= 1;
+        if (gradual_resize_enabled && !ctx.for_cache_key)
+            extra_flags |= 2;
         writeIntBinary(extra_flags, ctx.out);
     }
 
@@ -1241,13 +1250,15 @@ QueryPlanStepPtr AggregatingStep::deserialize(Deserialization & ctx)
             ctx.version, DBMS_MIN_QUERY_PLAN_SERIALIZATION_VERSION_WITH_ONLY_MERGE_AGGREGATION);
 
     /// The second flags byte (see `serialize`); an older stream has none, and the step then falls
-    /// back to the header-based constness check.
+    /// back to the header-based constness check and keeps the strict pre-aggregation resize.
     bool group_by_keys_semantically_constant = false;
+    bool gradual_resize_enabled = false;
     if (ctx.version >= DBMS_MIN_QUERY_PLAN_SERIALIZATION_VERSION_WITH_SEMANTICALLY_CONSTANT_GROUP_BY_KEYS)
     {
         UInt8 extra_flags = 0;
         readIntBinary(extra_flags, ctx.in);
         group_by_keys_semantically_constant = bool(extra_flags & 1);
+        gradual_resize_enabled = bool(extra_flags & 2);
     }
 
     SortDescription sort_description_for_merging;
@@ -1350,6 +1361,8 @@ QueryPlanStepPtr AggregatingStep::deserialize(Deserialization & ctx)
 
     if (group_by_keys_semantically_constant)
         aggregating_step->markGroupByKeysSemanticallyConstant();
+    if (gradual_resize_enabled)
+        aggregating_step->enableGradualResize();
 
     return aggregating_step;
 }
@@ -1378,6 +1391,9 @@ QueryPlanStepPtr AggregatingStep::clone() const
     /// which a step consumer (the cascades optimizer, for one) no longer has at hand.
     if (group_by_keys_semantically_constant)
         cloned->markGroupByKeysSemanticallyConstant();
+    /// Same: only the planner knows whether this is the pre-aggregation of an ordinary `GROUP BY`.
+    if (gradual_resize_enabled)
+        cloned->enableGradualResize();
 
     return cloned;
 }

@@ -901,6 +901,10 @@ void addAggregationStep(QueryPlan & query_plan,
     if (group_by_keys_semantically_constant)
         aggregating_step->markGroupByKeysSemanticallyConstant();
 
+    /// The pre-aggregation of the user's `GROUP BY` is the only aggregation that may take the gradual
+    /// resize (see `AggregatingStep::enableGradualResize`).
+    aggregating_step->enableGradualResize();
+
     if (!query_analysis_result.aggregate_final)
         applyTopKPushdownToPartialAggregation(*aggregating_step, query_node, expression_analysis_result, query_analysis_result, settings);
 

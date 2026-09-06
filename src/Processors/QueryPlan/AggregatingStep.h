@@ -107,6 +107,16 @@ public:
     /// serialized bit simply ignores it and falls back to the header-based `ColumnConst` check,
     /// which affects only the choice between the strict and the gradual resize.
     void markGroupByKeysSemanticallyConstant() { group_by_keys_semantically_constant = true; }
+    /// The step is the pre-aggregation stage of an ordinary `GROUP BY` planned from a user query, which is the
+    /// only surface that `min_rows_per_stream_for_gradual_resize` / `min_bytes_per_stream_for_gradual_resize`
+    /// are documented to affect. `AggregatingStep` is also built by ClickHouse itself for internal
+    /// aggregations (the deduplication of `FINAL` in `LazyReadReplacingFinalSource`, merge-only steps over
+    /// aggregate projections or Cascades pushdown, the decorrelation of correlated subqueries); those keep the
+    /// strict resize because the bit is never set on them. Preserved by `clone` and by the query plan
+    /// serialization round-trip, exactly like `markGroupByKeysSemanticallyConstant`; a plan from a peer that
+    /// predates the serialized bit keeps the strict resize.
+    void enableGradualResize() { gradual_resize_enabled = true; }
+    bool isGradualResizeEnabled() const { return gradual_resize_enabled; }
     void setLimitHint(size_t limit) { limit_hint = limit; }
     size_t getLimitHint() const { return limit_hint; }
     const SortDescription & getGroupBySortDescription() const { return group_by_sort_description; }
@@ -183,6 +193,7 @@ private:
     size_t temporary_data_merge_threads;
     bool skip_merging = false; // if we aggregate partitioned data merging is not needed
     bool group_by_keys_semantically_constant = false; /// See `markGroupByKeysSemanticallyConstant`.
+    bool gradual_resize_enabled = false; /// See `enableGradualResize`.
 
     bool storage_has_evenly_distributed_read;
     bool group_by_use_nulls;

@@ -3193,6 +3193,10 @@ void InterpreterSelectQuery::executeAggregation(
     if (expression && allAggregationKeysAreSemanticallyConstant(expression->dag, keys))
         aggregating_step->markGroupByKeysSemanticallyConstant();
 
+    /// The pre-aggregation of the user's `GROUP BY` is the only aggregation that may take the gradual
+    /// resize (see `AggregatingStep::enableGradualResize`).
+    aggregating_step->enableGradualResize();
+
     query_plan.addStep(std::move(aggregating_step));
 }
 
