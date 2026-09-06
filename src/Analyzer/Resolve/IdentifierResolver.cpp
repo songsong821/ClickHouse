@@ -48,7 +48,7 @@ namespace Setting
     extern const SettingsBool single_join_prefer_left_table;
     extern const SettingsBool analyzer_compatibility_allow_compound_identifiers_in_unflatten_nested;
     extern const SettingsBool analyzer_compatibility_prefer_alias_over_subcolumn;
-    extern const SettingsBool analyzer_compatibility_qualify_aliased_table_by_name;
+    extern const SettingsBool analyzer_alias_hides_table_name;
 }
 
 namespace ErrorCodes
@@ -622,14 +622,19 @@ QueryTreeNodePtr IdentifierResolver::tryResolveIdentifierFromTableColumns(const 
   *
   * SELECT count() FROM t WHERE EXISTS (SELECT 1 FROM t AS c WHERE c.grp = t.grp AND c.val > t.val)
   *
-  * Binding `t.grp` to the aliased `t AS c` silently turns the correlated predicate into a comparison of
-  * the inner row with itself - `c.grp = c.grp AND c.val > c.val` - which is never true, so the query
-  * answers 0 instead of the correlated count, with nothing to indicate it. The alias hides the name from
-  * the qualifier there, as the standard requires, and `t.grp` refers to the outer table.
+  * Binding `t.grp` to the aliased `t AS c` turns the correlated predicate into a comparison of the inner
+  * row with itself - `c.grp = c.grp AND c.val > c.val` - which is never true, so the query answers 0
+  * instead of the correlated count, with nothing to indicate it. Under
+  * `analyzer_alias_hides_table_name` the alias hides the name from the qualifier there, as the standard
+  * requires, and `t.grp` refers to the outer table.
   *
-  * The name is only hidden when an enclosing scope carries it: a qualifier that means nothing outside
-  * the subquery keeps resolving to the aliased table expression, so the accepted spelling still works
-  * wherever it is unambiguous.
+  * The setting is off by default: the previous resolution is what the `distributed_product_mode = 'local'`
+  * rewrite of an `IN` subquery relies on, among others (see `00858_issue_4756`,
+  * `01103_distributed_product_mode_local_column_renames` and `03148_asof_join_ddb_subquery`, all written
+  * in this spelling), so flipping it is a compatibility decision rather than a bug fix.
+  *
+  * Either way the name is only hidden when an enclosing scope carries it: a qualifier that means nothing
+  * outside the subquery keeps resolving to the aliased table expression.
   */
 bool IdentifierResolver::tableNameIsHiddenByAlias(
     const IdentifierLookup & identifier_lookup,
@@ -643,7 +648,7 @@ bool IdentifierResolver::tableNameIsHiddenByAlias(
         return false;
     if (identifier.getPartsSize() <= identifier_column_qualifier_parts)
         return false;
-    if (scope.context->getSettingsRef()[Setting::analyzer_compatibility_qualify_aliased_table_by_name])
+    if (!scope.context->getSettingsRef()[Setting::analyzer_alias_hides_table_name])
         return false;
     if (identifier_column_qualifier_parts == 1 && identifier.getParts().front() == table_expression_node->getAlias())
         return false;

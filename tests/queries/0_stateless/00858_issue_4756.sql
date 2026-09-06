@@ -34,10 +34,6 @@ where d0.id in
     where d1.id > 0
 );
 
--- The inner tables are aliased here, so by default `distr1.id` and `distr2.id` refer to the enclosing
--- query and the subquery is correlated, which `IN` does not support yet. This query keeps the previous
--- resolution, where the name of an aliased table expression qualifies it even inside a query that
--- selects from the same table.
 select distinct(distr1.id) from distr1
 where distr1.id in
 (
@@ -45,8 +41,7 @@ where distr1.id in
    from distr1 as d1
    join distr2 as d2 on distr1.id = distr2.id
    where distr1.id > 0
-)
-settings analyzer_compatibility_qualify_aliased_table_by_name = 1;
+);
 
 drop table shard1;
 drop table shard2;
