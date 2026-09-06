@@ -3,6 +3,9 @@
 -- drop an input column that only the prewhere condition needs, so a column of the sorting key could be
 -- missing there and the query failed at execution with 10 `NOT_FOUND_COLUMN_IN_BLOCK`.
 
+-- The correlated `EXISTS` below is a feature of the analyzer, so this test needs it.
+SET enable_analyzer = 1;
+
 DROP TABLE IF EXISTS t_shard_pk_prewhere;
 CREATE TABLE t_shard_pk_prewhere (s String, n UInt32, v Int64) ENGINE = MergeTree ORDER BY (s, n);
 INSERT INTO t_shard_pk_prewhere SELECT toString(number % 10), number, number % 7 FROM numbers(1000);
