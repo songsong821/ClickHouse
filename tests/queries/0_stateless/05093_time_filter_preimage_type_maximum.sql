@@ -6,6 +6,8 @@
 -- now declined when an endpoint does not fit the column type.
 
 SET session_timezone = 'UTC';
+-- The optimization pass and `EXPLAIN QUERY TREE` exist only in the analyzer; the old-analyzer CI run turns it off.
+SET enable_analyzer = 1;
 -- The flaky check randomizes `optimize_time_filter_with_preimage`; the `EXPLAIN` checks below need it on.
 SET optimize_time_filter_with_preimage = 1;
 

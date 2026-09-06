@@ -5,6 +5,8 @@
 -- `toStartOfYear` / `toStartOfMonth` preimages already do, or the rows in the transition hour are misclassified.
 
 SET session_timezone = 'UTC';
+-- The optimization pass and `EXPLAIN QUERY TREE` exist only in the analyzer; the old-analyzer CI run turns it off.
+SET enable_analyzer = 1;
 SET optimize_time_filter_with_preimage = 1;
 
 DROP TABLE IF EXISTS t_preimage_transition;
