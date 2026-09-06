@@ -165,6 +165,7 @@ namespace DB
 {
 namespace Setting
 {
+    extern const SettingsString ddl_workload;
     extern const SettingsBool allow_experimental_analyzer;
     extern const SettingsBool enable_json_ast_dialect;
     extern const SettingsBool allow_experimental_polyglot_dialect;
@@ -310,6 +311,26 @@ static TSA_NO_THREAD_SAFETY_ANALYSIS void triggerSanitizerError()
     if (data[7] == 42)
         __builtin_trap();
 #endif
+}
+
+/// DDL / administrative statements, identified by query kind. Used to route them through the
+/// `ddl_workload` setting when `use_ddl_workload` is enabled, so they are not scheduled under the
+/// same workload as regular queries.
+static bool isDDLQuery(const IAST & ast)
+{
+    switch (ast.getQueryKind())
+    {
+        case IAST::QueryKind::Create:
+        case IAST::QueryKind::Drop:
+        case IAST::QueryKind::Undrop:
+        case IAST::QueryKind::Rename:
+        case IAST::QueryKind::Alter:
+        case IAST::QueryKind::Optimize:
+        case IAST::QueryKind::Move:
+            return true;
+        default:
+            return false;
+    }
 }
 
 static void checkASTSizeLimits(const IAST & ast, const Settings & settings)
@@ -2648,6 +2669,18 @@ static BlockIO executeQueryImpl(
             /// Interpret SETTINGS clauses as early as possible (before invoking the corresponding interpreter),
             /// to allow settings to take effect.
             InterpreterSetQuery::applySettingsFromQuery(out_ast, context);
+
+            /// Route DDL queries through the `ddl_workload` setting instead of `workload`, so
+            /// administrative statements do not compete with regular queries for the same workload
+            /// resources (query slots, memory reservations, CPU, IO). Gated by the `use_ddl_workload`
+            /// server setting (off by default — behavior is unchanged). This runs before the workload
+            /// classifier is first acquired (in `ProcessList::insert`), and the classifier is cached
+            /// once, so a single override of the effective `workload` redirects every resource dimension.
+            if (out_ast && context->getUseDdlWorkload() && isDDLQuery(*out_ast))
+            {
+                const String & ddl_workload = settings[Setting::ddl_workload];
+                context->setSetting("workload", ddl_workload.empty() ? String("default") : ddl_workload);
+            }
 
             /// The `database` setting is documented as equivalent to `USE`. To behave that way it must
             /// change the database that unqualified names resolve to, not just be stored as a string.
