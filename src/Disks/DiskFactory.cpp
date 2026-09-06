@@ -58,8 +58,10 @@ DiskPtr DiskFactory::create(
     auto tracked_config = std::make_shared<ConfigurationWithUsageTracking>(config);
 
     /// A disk defined in a query (`disk(type = ..., name = ...)`) has its own configuration,
-    /// in which `name` is read by the caller and not by the disk itself.
+    /// in which these elements are read by the caller and not by the disk itself:
+    /// `name` in `getOrCreateCustomDisk` and `_server_credentials_allowed` in `getDiskConfigurationFromAST`.
     tracked_config->markAsUsed("name");
+    tracked_config->markAsUsed("_server_credentials_allowed");
 
     const auto disk_type = tracked_config->getString(config_prefix + ".type", "local");
 

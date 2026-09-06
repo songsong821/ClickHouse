@@ -1,6 +1,6 @@
 #pragma once
 
-#include <base/types.h>
+#include <Core/Types_fwd.h>
 
 #include <mutex>
 #include <unordered_set>
