@@ -60,6 +60,7 @@ namespace ErrorCodes
     extern const int BAD_ARGUMENTS;
     extern const int LOGICAL_ERROR;
     extern const int FAULT_INJECTED;
+    extern const int FILE_CHANGED_DURING_READ;
 }
 
 ObjectStorageQueuePostProcessor::ObjectStorageQueuePostProcessor(
@@ -188,6 +189,11 @@ void ObjectStorageQueuePostProcessor::doWithRetries(std::function<void()> action
                 retries + 1,
                 getExceptionMessage(std::current_exception(), /*with_stacktrace=*/ false)
             );
+            /// The object is no longer the generation that was ingested. That does not heal with
+            /// time: every retry would be pinned to the same, now gone, generation and be refused
+            /// again, so the object is left in place for the caller to report.
+            if (getCurrentExceptionCode() == ErrorCodes::FILE_CHANGED_DURING_READ)
+                throw;
             if (try_no >= retries)
             {
                 // Letting the caller to catch the exception and log it with a meaningful message
@@ -253,6 +259,10 @@ void ObjectStorageQueuePostProcessor::moveWithinBucket(const StoredObjects & obj
                     doWithRetries([&]{
                         auto object_to = applyMovePrefixIfPresent(object_from, move_prefix, preserve_path);
                         LOG_TRACE(log, "Copying object {} to {}", object_from.remote_path, object_to.remote_path);
+                        /// `object_from` names the generation that was ingested (its `ETag`, when
+                        /// the object storage reports one): the copy transfers that generation or
+                        /// fails, and the delete removes that generation or fails, so an object
+                        /// overwritten after it was read is never lost on the way.
                         object_storage->copyObject(
                             object_from,
                             object_to,
@@ -267,7 +277,7 @@ void ObjectStorageQueuePostProcessor::moveWithinBucket(const StoredObjects & obj
                 {
                     LOG_WARNING(
                         log,
-                        "Failed to move S3 object {} within bucket with exception: {}",
+                        "Failed to move object {} within bucket with exception: {}",
                         object_from.remote_path,
                         getExceptionMessage(std::current_exception(), /*with_stacktrace=*/ false)
                     );
@@ -449,15 +459,33 @@ void ObjectStorageQueuePostProcessor::moveAzureBlobs(const StoredObjects & objec
                 try
                 {
                     doWithRetries([&]{
-                        Azure::Storage::Blobs::BlobClient blobClient = src_client->GetBlobClient(object_from.remote_path);
-                        auto properties = blobClient.GetProperties().Value;
-                        auto blob_size = properties.BlobSize;
-                        /// The generation of the source that this attempt moves: the copy and the
-                        /// delete below are both pinned to it, so a source blob overwritten at any
-                        /// point in between is never deleted without its newer generation having
-                        /// been copied. Either step then fails with `FILE_CHANGED_DURING_READ`, and
-                        /// the retry starts over from the properties of the new generation.
-                        const String src_etag = AzureBlobStorage::getETagOrEmpty(properties.ETag);
+                        /// The move is pinned to the generation of the source that was ingested:
+                        /// the copy and the delete below both carry its `ETag`, so a source blob
+                        /// overwritten at any point after it was read is neither copied nor deleted
+                        /// as if the newer generation had been ingested. Either step then fails with
+                        /// `FILE_CHANGED_DURING_READ` and the blob is left in place.
+                        const String & src_etag = object_from.etag;
+                        if (src_etag.empty())
+                            throw Exception(
+                                ErrorCodes::LOGICAL_ERROR,
+                                "Cannot move Azure blob {}: the generation that was ingested is not known",
+                                object_from.remote_path);
+
+                        /// The size normally comes from the same listing entry as the `ETag`. When
+                        /// it does not, a `HEAD` supplies it, and only if it still describes the
+                        /// ingested generation.
+                        size_t blob_size = object_from.bytes_size;
+                        if (blob_size == StoredObject::UnknownSize)
+                        {
+                            auto properties = src_client->GetBlobClient(object_from.remote_path).GetProperties().Value;
+                            const String current_etag = AzureBlobStorage::getETagOrEmpty(properties.ETag);
+                            if (AzureBlobStorage::normalizeETag(current_etag) != AzureBlobStorage::normalizeETag(src_etag))
+                                throw Exception(
+                                    ErrorCodes::FILE_CHANGED_DURING_READ,
+                                    "Azure blob {} was not moved: it changed after it was ingested (its `ETag` is {} instead of {})",
+                                    object_from.remote_path, current_etag, src_etag);
+                            blob_size = properties.BlobSize;
+                        }
                         auto object_to = applyMovePrefixIfPresent(object_from, move_prefix, settings.after_processing_move_preserve_path);
                         auto request_settings = azure_storage->getSettings();
                         auto read_settings = getReadSettings();
@@ -482,9 +510,7 @@ void ObjectStorageQueuePostProcessor::moveAzureBlobs(const StoredObjects & objec
                             scheduler
                         );
                         LOG_INFO(log, "Removing object {}", object_from.remote_path);
-                        StoredObject copied_generation = object_from;
-                        copied_generation.etag = src_etag;
-                        object_storage->removeObjectIfExists(copied_generation);
+                        object_storage->removeObjectIfExists(object_from);
                     });
                     moved_objects += 1;
                 }

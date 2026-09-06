@@ -300,6 +300,12 @@ private:
         /// The object's own last-modified time, if object storage reported one.
         /// Used to update the "newest object committed" pipeline-lag watermark.
         time_t last_modified = 0;
+        /// The generation of the object the reader was opened on: the size and the `ETag` of its
+        /// listing entry. The `after_processing` step is pinned to exactly this generation, so an
+        /// object overwritten after it was ingested is neither moved nor deleted as if the newer
+        /// generation had been ingested.
+        uint64_t bytes_size = StoredObject::UnknownSize;
+        String etag;
     };
     std::vector<ProcessedFile> processed_files;
     Source::ReaderHolder reader;

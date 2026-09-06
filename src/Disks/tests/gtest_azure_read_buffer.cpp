@@ -689,43 +689,59 @@ struct MoveOutcome
     std::vector<std::string> copied_generations;
     /// The generation that each successful `Delete Blob` removed.
     std::vector<std::string> deleted_generations;
+    /// The error code the copy failed with, if it did (the delete is then not attempted).
+    std::optional<int> copy_error_code;
     /// The error code the delete failed with, if it did.
     std::optional<int> delete_error_code;
 };
 
 /// Drives the sequence of an Azure `MOVE` the way `ObjectStorageQueuePostProcessor::moveAzureBlobs`
-/// does it: `HEAD` the source, copy the generation it reports (natively, pinned to its `ETag`),
-/// then delete the same generation through the object storage. With `overwrite_between_copy_and_delete`,
-/// the source is overwritten by somebody else after the copy has completed and before the delete.
-MoveOutcome moveBlob(bool overwrite_between_copy_and_delete)
+/// does it for a source whose ingested generation is `ingested_etag` (size 100, both recorded from
+/// the listing entry the reader was opened on): copy that generation (natively, pinned to its
+/// `ETag`), then delete the same generation through the object storage; the endpoint holds
+/// `generation_at_endpoint` when the move starts. With `overwrite_between_copy_and_delete`, the
+/// source is overwritten by somebody else after the copy has completed and before the delete.
+MoveOutcome moveBlob(const std::string & ingested_etag, const std::string & generation_at_endpoint, bool overwrite_between_copy_and_delete)
 {
     auto transport = std::make_shared<MisbehavingRangeTransport>(
         100, 100, 100, /* send_etag */ true, /* reported_length */ std::nullopt, /* ignore_range */ false,
-        ETagBehaviour{.etag = ETagBehaviour::first_generation, .etag_after_first = "", .honour_if_match = true});
+        ETagBehaviour{.etag = generation_at_endpoint, .etag_after_first = "", .honour_if_match = true});
     auto src_client = containerClientOver(transport);
     auto object_storage = objectStorageOver(transport);
 
-    auto properties = src_client->GetBlobClient("blob").GetProperties().Value;
-    const std::string src_etag = DB::AzureBlobStorage::getETagOrEmpty(properties.ETag);
-
     auto settings = std::make_shared<DB::AzureBlobStorage::RequestSettings>();
     settings->use_native_copy = true;
-    settings->max_single_part_copy_size = properties.BlobSize + 1;
+    settings->max_single_part_copy_size = 101;
     settings->max_single_read_retries = 1;
     settings->max_single_download_retries = 1;
 
-    DB::copyAzureBlobStorageFile(
-        src_client,
-        src_client,
-        /* src_container_for_logging */ "container",
-        /* src_blob */ "blob",
-        /* src_size */ properties.BlobSize,
-        src_etag,
-        /* dest_container_for_logging */ "container",
-        /* dest_blob */ "moved/blob",
-        settings,
-        DB::ReadSettings{},
-        /* object_to_attributes */ std::nullopt);
+    std::optional<int> copy_error_code;
+    try
+    {
+        DB::copyAzureBlobStorageFile(
+            src_client,
+            src_client,
+            /* src_container_for_logging */ "container",
+            /* src_blob */ "blob",
+            /* src_size */ 100,
+            ingested_etag,
+            /* dest_container_for_logging */ "container",
+            /* dest_blob */ "moved/blob",
+            settings,
+            DB::ReadSettings{},
+            /* object_to_attributes */ std::nullopt);
+    }
+    catch (const DB::Exception & e)
+    {
+        copy_error_code = e.code();
+    }
+
+    if (copy_error_code)
+        return MoveOutcome{
+            .copied_generations = transport->nativelyCopiedGenerations(),
+            .deleted_generations = transport->deletedGenerations(),
+            .copy_error_code = copy_error_code,
+            .delete_error_code = std::nullopt};
 
     if (overwrite_between_copy_and_delete)
         transport->overwriteObject(ETagBehaviour::second_generation);
@@ -733,7 +749,7 @@ MoveOutcome moveBlob(bool overwrite_between_copy_and_delete)
     std::optional<int> delete_error_code;
     try
     {
-        object_storage->removeObjectIfExists(blobGeneration(src_etag));
+        object_storage->removeObjectIfExists(blobGeneration(ingested_etag));
     }
     catch (const DB::Exception & e)
     {
@@ -743,7 +759,43 @@ MoveOutcome moveBlob(bool overwrite_between_copy_and_delete)
     return MoveOutcome{
         .copied_generations = transport->nativelyCopiedGenerations(),
         .deleted_generations = transport->deletedGenerations(),
+        .copy_error_code = std::nullopt,
         .delete_error_code = delete_error_code};
+}
+
+/// What `AzureObjectStorage::copyObject` (the same-container `MOVE` of `ObjectStorageQueue`, which
+/// copies through a read and a write) left behind at the endpoint.
+struct CopyObjectOutcome
+{
+    /// The bytes the copy uploaded to the destination.
+    std::string copied;
+    /// The error code the copy failed with, if it did.
+    std::optional<int> error_code;
+};
+
+/// Copies the blob `blob` (100 bytes) through `AzureObjectStorage::copyObject` from a source
+/// `StoredObject` that carries the generation `caller_etag` (unpinned when empty) and the size
+/// `caller_size`, while the endpoint holds `generation_at_endpoint`.
+CopyObjectOutcome copyObjectThroughObjectStorage(const std::string & caller_etag, uint64_t caller_size, const std::string & generation_at_endpoint)
+{
+    auto transport = std::make_shared<MisbehavingRangeTransport>(
+        100, 100, 100, /* send_etag */ true, /* reported_length */ std::nullopt, /* ignore_range */ false,
+        ETagBehaviour{.etag = generation_at_endpoint, .etag_after_first = "", .honour_if_match = true});
+
+    DB::StoredObject object_from("blob", /* local_path */ "", caller_size);
+    object_from.etag = caller_etag;
+
+    std::optional<int> error_code;
+    try
+    {
+        objectStorageOver(transport)->copyObject(object_from, DB::StoredObject("moved/blob"), DB::ReadSettings{}, DB::WriteSettings{});
+    }
+    catch (const DB::Exception & e)
+    {
+        error_code = e.code();
+    }
+
+    return CopyObjectOutcome{.copied = transport->uploadedData(), .error_code = error_code};
 }
 
 }
@@ -1486,11 +1538,85 @@ TEST(AzureConditionalDelete, NoETagMeansNoCondition)
 TEST(AzureMove, UnchangedSource)
 {
     MoveOutcome outcome;
-    ASSERT_NO_THROW(outcome = moveBlob(/* overwrite_between_copy_and_delete */ false));
+    ASSERT_NO_THROW(outcome = moveBlob(ETagBehaviour::first_generation, ETagBehaviour::first_generation, /* overwrite_between_copy_and_delete */ false));
 
+    ASSERT_FALSE(outcome.copy_error_code.has_value());
     ASSERT_FALSE(outcome.delete_error_code.has_value());
     ASSERT_EQ(outcome.copied_generations, (std::vector<std::string>{ETagBehaviour::first_generation}));
     ASSERT_EQ(outcome.deleted_generations, (std::vector<std::string>{ETagBehaviour::first_generation}));
+}
+
+/// The source was overwritten after it was ingested and before the move started: the move is
+/// pinned to the ingested generation, so the endpoint refuses the copy, nothing is copied, and the
+/// newer generation, which was never ingested, is neither copied nor deleted.
+TEST(AzureMove, SourceOverwrittenAfterIngestion)
+{
+    MoveOutcome outcome;
+    ASSERT_NO_THROW(outcome = moveBlob(ETagBehaviour::first_generation, ETagBehaviour::second_generation, /* overwrite_between_copy_and_delete */ false));
+
+    ASSERT_EQ(outcome.copy_error_code, std::optional<int>(DB::ErrorCodes::FILE_CHANGED_DURING_READ));
+    ASSERT_TRUE(outcome.copied_generations.empty());
+    ASSERT_TRUE(outcome.deleted_generations.empty());
+}
+
+/// The same-container `MOVE` copies through `AzureObjectStorage::copyObject`. A source that carries
+/// the ingested generation and its size is copied without any further lookup: the read is pinned to
+/// that generation and the whole object arrives at the destination.
+TEST(AzureCopyObject, PinnedToCallerGeneration)
+{
+    CopyObjectOutcome outcome;
+    ASSERT_NO_THROW(outcome = copyObjectThroughObjectStorage(ETagBehaviour::first_generation, /* caller_size */ 100, ETagBehaviour::first_generation));
+
+    ASSERT_FALSE(outcome.error_code.has_value());
+    ASSERT_EQ(outcome.copied.size(), static_cast<size_t>(100));
+    assertCountsUpFromZero(outcome.copied);
+}
+
+/// The source was overwritten after the caller selected its generation: the pinned read is refused
+/// by the endpoint, the copy fails with the object having changed, and nothing reaches the
+/// destination, so the newer generation is not copied under the name of the ingested one.
+TEST(AzureCopyObject, CallerGenerationOverwritten)
+{
+    CopyObjectOutcome outcome;
+    ASSERT_NO_THROW(outcome = copyObjectThroughObjectStorage(ETagBehaviour::first_generation, /* caller_size */ 100, ETagBehaviour::second_generation));
+
+    ASSERT_EQ(outcome.error_code, std::optional<int>(DB::ErrorCodes::FILE_CHANGED_DURING_READ));
+    ASSERT_TRUE(outcome.copied.empty());
+}
+
+/// The caller knows the generation but not its size: the `HEAD` that supplies the size must
+/// describe that same generation, or the copy is refused before a single byte is read.
+TEST(AzureCopyObject, SizeFromHeadOfAnotherGenerationIsRefused)
+{
+    CopyObjectOutcome outcome;
+    ASSERT_NO_THROW(outcome = copyObjectThroughObjectStorage(ETagBehaviour::first_generation, DB::StoredObject::UnknownSize, ETagBehaviour::second_generation));
+
+    ASSERT_EQ(outcome.error_code, std::optional<int>(DB::ErrorCodes::FILE_CHANGED_DURING_READ));
+    ASSERT_TRUE(outcome.copied.empty());
+}
+
+/// The same lookup for an unchanged object supplies the size, and the copy proceeds pinned to
+/// the caller's generation.
+TEST(AzureCopyObject, SizeFromHeadOfSameGeneration)
+{
+    CopyObjectOutcome outcome;
+    ASSERT_NO_THROW(outcome = copyObjectThroughObjectStorage(ETagBehaviour::first_generation, DB::StoredObject::UnknownSize, ETagBehaviour::first_generation));
+
+    ASSERT_FALSE(outcome.error_code.has_value());
+    ASSERT_EQ(outcome.copied.size(), static_cast<size_t>(100));
+    assertCountsUpFromZero(outcome.copied);
+}
+
+/// A source without a generation (every caller that copies by path) is copied the way it always
+/// was: one `HEAD` supplies both the size and the generation the copy is then pinned to.
+TEST(AzureCopyObject, UnpinnedSource)
+{
+    CopyObjectOutcome outcome;
+    ASSERT_NO_THROW(outcome = copyObjectThroughObjectStorage(/* caller_etag */ "", DB::StoredObject::UnknownSize, ETagBehaviour::second_generation));
+
+    ASSERT_FALSE(outcome.error_code.has_value());
+    ASSERT_EQ(outcome.copied.size(), static_cast<size_t>(100));
+    assertCountsUpFromZero(outcome.copied);
 }
 
 /// The source is overwritten after the copy has completed and before the delete: the delete is
@@ -1499,7 +1625,9 @@ TEST(AzureMove, UnchangedSource)
 TEST(AzureMove, SourceOverwrittenBetweenCopyAndDelete)
 {
     MoveOutcome outcome;
-    ASSERT_NO_THROW(outcome = moveBlob(/* overwrite_between_copy_and_delete */ true));
+    ASSERT_NO_THROW(outcome = moveBlob(ETagBehaviour::first_generation, ETagBehaviour::first_generation, /* overwrite_between_copy_and_delete */ true));
+
+    ASSERT_FALSE(outcome.copy_error_code.has_value());
 
     ASSERT_EQ(outcome.delete_error_code, std::optional<int>(DB::ErrorCodes::FILE_CHANGED_DURING_READ));
     ASSERT_EQ(outcome.copied_generations, (std::vector<std::string>{ETagBehaviour::first_generation}));
