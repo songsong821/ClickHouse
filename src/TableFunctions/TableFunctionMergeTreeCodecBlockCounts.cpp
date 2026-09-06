@@ -1,14 +1,11 @@
 #include <Storages/StorageMergeTreeCodecBlockCounts.h>
 
-#include <Access/Common/AccessFlags.h>
 #include <DataTypes/DataTypeMap.h>
 #include <DataTypes/DataTypeNullable.h>
 #include <DataTypes/DataTypeString.h>
 #include <DataTypes/DataTypesNumber.h>
 #include <Interpreters/Context.h>
-#include <Interpreters/DatabaseCatalog.h>
 #include <Interpreters/evaluateConstantExpression.h>
-#include <Storages/MergeTree/MergeTreeData.h>
 #include <Storages/checkAndGetLiteralArgument.h>
 #include <TableFunctions/ITableFunction.h>
 #include <TableFunctions/TableFunctionFactory.h>
@@ -20,7 +17,6 @@ namespace DB
 namespace ErrorCodes
 {
 extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
-extern const int BAD_ARGUMENTS;
 extern const int LOGICAL_ERROR;
 }
 
@@ -34,16 +30,9 @@ public:
     ColumnsDescription getActualTableStructure(ContextPtr context, bool is_insert_query) const override;
 
 private:
-    /// Checked from the name alone, before the catalog is consulted, so that a user who is not allowed to see
-    /// the source table cannot tell an existing one from a missing one by `ACCESS_DENIED` against `UNKNOWN_TABLE`.
-    /// `SHOW TABLES` is the privilege that governs whether the table's existence may be learned, and it is implied
-    /// by a grant on any single column of it, so this only adds a tier below the `SELECT` check on every column
-    /// that follows the resolution. `SHOW COLUMNS`, which `DESCRIBE` of the source table requires, is not implied
-    /// by column-level grants, so it would reject a user who holds `SELECT` on every column separately.
-    void checkSourceTableNameAccess(const ContextPtr & context) const
-    {
-        context->checkAccess(AccessType::SHOW_TABLES, source_table_id);
-    }
+    /// The fixed structure. It is not derived from the source table, but the table function does not declare it as
+    /// static: resolving it is a read of the source table and has to check access to it, see `getActualTableStructure`.
+    static ColumnsDescription getColumns();
 
     StoragePtr executeImpl(
         const ASTPtr & ast_function,
@@ -82,20 +71,15 @@ void TableFunctionMergeTreeCodecBlockCounts::parseArguments(const ASTPtr & ast_f
 
 ColumnsDescription TableFunctionMergeTreeCodecBlockCounts::getActualTableStructure(ContextPtr context, bool /*is_insert_query*/) const
 {
-    checkSourceTableNameAccess(context);
+    /// The structure is fixed, so nothing in it depends on the source table. The table is still resolved here, because
+    /// resolving the structure is a read of it and needs the same access as reading it: this is what `DESCRIBE`
+    /// and `CREATE TABLE ... AS` go through, under the context of the user who asks.
+    StorageMergeTreeCodecBlockCounts::resolveSourceTable(source_table_id, context);
+    return getColumns();
+}
 
-    auto source_table = DatabaseCatalog::instance().getTable(source_table_id, context);
-
-    /// Resolving the structure is a read of the source table, so it needs the same access as reading it.
-    /// Checked before anything is derived from the table, so that a user without `SELECT` on it cannot learn
-    /// its engine from the error below. `StorageMergeTreeCodecBlockCounts::read` checks again for the read itself.
-    StorageMergeTreeCodecBlockCounts::checkSourceTableAccess(source_table, context);
-
-    const auto * merge_tree = dynamic_cast<const MergeTreeData *>(source_table.get());
-    if (!merge_tree)
-        throw Exception(
-            ErrorCodes::BAD_ARGUMENTS, "Table function {} expected MergeTree table, got: {}", getName(), source_table->getName());
-
+ColumnsDescription TableFunctionMergeTreeCodecBlockCounts::getColumns()
+{
     auto codec_map = std::make_shared<DataTypeMap>(std::make_shared<DataTypeString>(), std::make_shared<DataTypeUInt64>());
 
     ColumnsDescription columns;
@@ -119,18 +103,17 @@ ColumnsDescription TableFunctionMergeTreeCodecBlockCounts::getActualTableStructu
 
 StoragePtr TableFunctionMergeTreeCodecBlockCounts::executeImpl(
     const ASTPtr & /*ast_function*/,
-    ContextPtr context,
+    ContextPtr /*context*/,
     const std::string & table_name,
     ColumnsDescription /*cached_columns*/,
-    bool is_insert_query) const
+    bool /*is_insert_query*/) const
 {
-    checkSourceTableNameAccess(context);
-
-    auto source_table = DatabaseCatalog::instance().getTable(source_table_id, context);
-    auto columns = getActualTableStructure(context, is_insert_query);
-
+    /// Deliberately does not resolve the source table. `CREATE TABLE ... AS mergeTreeCodecBlockCounts(...)` runs this
+    /// under the global context, lazily, on the first read of the created table, so a check here would either pass
+    /// for everyone or, for a missing or non-`MergeTree` source, fail with an error that names the reason. The source is
+    /// resolved and checked by `StorageMergeTreeCodecBlockCounts::read`, under the context of the user who reads.
     StorageID storage_id(getDatabaseName(), table_name);
-    auto res = std::make_shared<StorageMergeTreeCodecBlockCounts>(std::move(storage_id), std::move(source_table), std::move(columns));
+    auto res = std::make_shared<StorageMergeTreeCodecBlockCounts>(std::move(storage_id), source_table_id, getColumns());
 
     res->startup();
     return res;
