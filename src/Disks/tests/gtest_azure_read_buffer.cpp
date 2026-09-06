@@ -1759,4 +1759,40 @@ TEST(AzureBackupWriter, CopyOfBlobOfAnotherSizeIsRefused)
     ASSERT_TRUE(transport->uploadedData().empty());
 }
 
+/// The whole-object copy of a file from an Azure disk into the backup takes the size and the generation
+/// of the source blob from one `HEAD`: a blob of the size the disk reported yields the generation the
+/// copy is pinned to.
+TEST(AzureBackupWriter, WholeCopySourceMeasuredByTheHeadThatPinsIt)
+{
+    auto transport = std::make_shared<MisbehavingRangeTransport>(
+        100, 100, /* blob_size */ 100, /* send_etag */ true, /* reported_length */ std::nullopt, /* ignore_range */ false,
+        ETagBehaviour{.etag = ETagBehaviour::first_generation, .etag_after_first = "", .honour_if_match = true});
+    auto object_storage = objectStorageOver(transport);
+
+    ASSERT_EQ(DB::headSourceBlobOfWholeCopy(*object_storage, "blob", /* expected_size */ 100), ETagBehaviour::first_generation);
+}
+
+/// The source blob was replaced by one of another size after the disk reported the size of the file.
+/// The `HEAD` sees the new generation with its new size, so the copy is refused instead of being pinned
+/// to a generation that is not `length` bytes long.
+TEST(AzureBackupWriter, WholeCopyOfSourceReplacedByAnotherSizeIsRefused)
+{
+    auto transport = std::make_shared<MisbehavingRangeTransport>(
+        150, 150, /* blob_size */ 150, /* send_etag */ true, /* reported_length */ std::nullopt, /* ignore_range */ false,
+        ETagBehaviour{.etag = ETagBehaviour::second_generation, .etag_after_first = "", .honour_if_match = true});
+    auto object_storage = objectStorageOver(transport);
+
+    try
+    {
+        DB::headSourceBlobOfWholeCopy(*object_storage, "blob", /* expected_size */ 100);
+        FAIL() << "Expected an exception on a source blob whose size differs from the one the disk reported";
+    }
+    catch (const DB::Exception & e)
+    {
+        ASSERT_EQ(e.code(), DB::ErrorCodes::FILE_CHANGED_DURING_READ);
+    }
+    ASSERT_TRUE(transport->nativelyCopiedGenerations().empty());
+    ASSERT_TRUE(transport->uploadedData().empty());
+}
+
 #endif

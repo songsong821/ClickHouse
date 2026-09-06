@@ -10,6 +10,14 @@
 namespace DB
 {
 
+/// The generation (`ETag`) of the blob `blob_path` of `src_object_storage`, which is about to be copied
+/// whole into a backup as a file of `expected_size` bytes. The size and the generation are taken with one
+/// `HEAD`, so they describe the same generation of the blob: the size the disk reported was measured
+/// earlier, and a blob replaced in between could be of another size, which a copy pinned to the new
+/// generation would then copy in full under the old size. A blob of another size is refused with
+/// `FILE_CHANGED_DURING_READ`.
+String headSourceBlobOfWholeCopy(const IObjectStorage & src_object_storage, const String & blob_path, size_t expected_size);
+
 /// Represents a backup stored to Azure
 class BackupReaderAzureBlobStorage : public BackupReaderDefault
 {

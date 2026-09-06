@@ -28,6 +28,18 @@ namespace ErrorCodes
 {
     extern const int LOGICAL_ERROR;
     extern const int BACKUP_DAMAGED;
+    extern const int FILE_CHANGED_DURING_READ;
+}
+
+String headSourceBlobOfWholeCopy(const IObjectStorage & src_object_storage, const String & blob_path, size_t expected_size)
+{
+    const ObjectMetadata metadata = src_object_storage.getObjectMetadata(blob_path, /*with_tags=*/ false);
+    if (metadata.size_bytes != expected_size)
+        throw Exception(ErrorCodes::FILE_CHANGED_DURING_READ,
+            "Blob {} is {} bytes long, while the file being backed up is {} bytes long: "
+            "the blob was replaced after the size of the file was taken",
+            blob_path, metadata.size_bytes, expected_size);
+    return metadata.etag;
 }
 
 namespace
@@ -254,9 +266,11 @@ void BackupWriterAzureBlobStorage::copyFileFromDisk(
             {
                 LOG_TRACE(log, "Copying file {} from disk {} to AzureBlobStorage", src_path, src_disk->getName());
                 /// The generation of the source blob, so that the copy is refused rather than taking
-                /// another generation if the blob is replaced between this `HEAD` and the copy.
+                /// another generation if the blob is replaced between this `HEAD` and the copy. The same
+                /// `HEAD` measures the blob: a blob of another size than the disk reported is already
+                /// another generation, whose copy would not be `length` bytes long.
                 const auto src_object_storage = src_disk->getObjectStorage();
-                const String src_etag = src_object_storage->getObjectMetadata(src_blob_path[0], /*with_tags=*/ false).etag;
+                const String src_etag = headSourceBlobOfWholeCopy(*src_object_storage, src_blob_path[0], length);
                 copyAzureBlobStorageFile(
                     src_object_storage->getAzureBlobStorageClient(),
                     client,
