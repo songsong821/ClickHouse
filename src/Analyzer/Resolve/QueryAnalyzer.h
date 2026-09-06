@@ -294,7 +294,7 @@ private:
 
     void resolveQueryJoinTreeNode(QueryTreeNodePtr & join_tree_node, IdentifierResolveScope & scope, QueryExpressionsAliasVisitor & expressions_visitor);
 
-    void inlineViewSubqueryIfNeeded(QueryTreeNodePtr & join_tree_node, IdentifierResolveScope & scope) const;
+    void inlineViewSubqueryIfNeeded(QueryTreeNodePtr & join_tree_node, IdentifierResolveScope & scope);
 
     void resolveQuery(const QueryTreeNodePtr & query_node, IdentifierResolveScope & scope);
 
@@ -316,6 +316,11 @@ private:
     std::unordered_set<IQueryTreeNode *> windows_in_resolve_process;
 
     std::unordered_map<IQueryTreeNode *, QueryTreeNodePtr> cte_copy_to_original_map;
+
+    /// Table expressions whose alias is the name of the view they were inlined from, see
+    /// `inlineViewSubqueryIfNeeded`. That alias stands in for a table name, which a `FROM` section may
+    /// carry more than once, so a duplicate of it is resolved the way a duplicate table name is.
+    std::unordered_set<const IQueryTreeNode *> table_expressions_aliased_by_inlined_view_name;
 
     /// Function name to user defined lambda map
     std::unordered_map<std::string, QueryTreeNodePtr> function_name_to_user_defined_lambda;

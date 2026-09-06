@@ -1,0 +1,20 @@
+a join with the view written without an alias
+50
+50
+columns qualified by the view name
+50	49
+50	49
+the same view on both sides, neither aliased
+100
+100
+an alias of its own still wins
+50
+50
+a view over a view, and a view over a union
+50
+50
+100
+100
+a comma join, which the restriction covers as well
+50
+50
