@@ -149,12 +149,14 @@ ProcessList::EntryPtr ProcessList::insert(
     if (client_info.current_query_id.empty())
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Query id cannot be empty");
 
-    /// With use_ddl_workload disabled (default), DDL is exempt from query-slot and memory-reservation
-    /// admission, so administrative statements never queue behind regular queries. With it enabled,
-    /// DDL is admitted like any query but under `ddl_workload` (applied in executeQuery), so it is
-    /// not treated as unlimited here.
-    bool is_unlimited_query = isUnlimitedQuery(ast) || is_internal || client_info.is_from_introspection_port
-        || (isDDLQuery(ast) && !query_context->getUseDdlWorkload());
+    bool is_unlimited_query = isUnlimitedQuery(ast) || is_internal || client_info.is_from_introspection_port;
+
+    /// With use_ddl_workload disabled (default), DDL and administrative queries are exempt from
+    /// WORKLOAD admission (the query slot + memory reservation below) so they never queue behind
+    /// regular queries in a workload. This is intentionally narrower than `is_unlimited_query`: such
+    /// queries still count against the server-wide `max_concurrent_queries*` hard limits. With the
+    /// setting enabled, DDL is admitted under `ddl_workload` (applied in executeQuery) and is not skipped.
+    bool skip_workload_admission = isDDLQuery(ast) && !query_context->getUseDdlWorkload();
     std::shared_ptr<QueryStatus> query;
 
     // Acquire a query slot and a memory reservation from the resource scheduler if necessary.
@@ -168,7 +170,7 @@ ProcessList::EntryPtr ProcessList::insert(
     // `ProcessList` mutex would prevent that unification and is a worse design overall.
     QuerySlotPtr query_slot;
     MemoryReservationPtr memory_reservation;
-    if (!is_unlimited_query)
+    if (!is_unlimited_query && !skip_workload_admission)
     {
         /// Hold a shared_ptr to keep the storage alive for the duration of this call, in case of concurrent shutdown.
         auto workload_entity_storage = query_context->getWorkloadEntityStoragePtr();
