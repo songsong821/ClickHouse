@@ -70,6 +70,12 @@ ${CLICKHOUSE_LOCAL} --path "${WORKING_DIR}" --query "SELECT a FROM corrupted ORD
 # its elements away.
 COMPACT_PART_DIR=$(${CLICKHOUSE_LOCAL} --path "${WORKING_DIR}" --query "SELECT path FROM system.parts WHERE database = currentDatabase() AND table = 'corrupted_compact' AND active")
 ELEMENTS_OFFSET=$(${CLICKHOUSE_LOCAL} --path "${WORKING_DIR}" --query "SELECT tupleElement(\`a.mark\`, 1) FROM mergeTreeIndex(currentDatabase(), corrupted_compact, with_marks = 1) WHERE mark_number = 0")
+if [ -z "${ELEMENTS_OFFSET}" ]
+then
+    echo "no elements-substream mark for a in the active part of table corrupted_compact, marks:" >&2
+    ${CLICKHOUSE_LOCAL} --path "${WORKING_DIR}" --query "SELECT * FROM mergeTreeIndex(currentDatabase(), corrupted_compact, with_marks = 1) FORMAT Vertical" >&2
+    exit 1
+fi
 truncate -s "${ELEMENTS_OFFSET}" "${COMPACT_PART_DIR}data.bin"
 rm -f "${COMPACT_PART_DIR}checksums.txt"
 
