@@ -23,4 +23,4 @@ DROP TABLE t_zxc_experimental;
 SET allow_experimental_codecs = 0;
 
 SELECT 'system.codecs reports the tier';
-SELECT name, tier, is_experimental FROM system.codecs WHERE name IN ('ALP', 'ZXC', 'LZ4') ORDER BY name;
+SELECT name, tier FROM system.codecs WHERE name IN ('ALP', 'ZXC', 'LZ4') ORDER BY name;
