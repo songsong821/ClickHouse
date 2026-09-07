@@ -3,6 +3,7 @@
 
 SET max_threads = 1;
 SET use_columns_cache = 1;
+SET log_queries = 1;
 SYSTEM DROP COLUMNS CACHE;
 
 -- ============================================================================
@@ -130,10 +131,15 @@ DROP TABLE t_cache_renamed;
 -- ============================================================================
 
 DROP TABLE IF EXISTS t_cache_multipart;
+DROP TABLE IF EXISTS t_cache_multipart_uuid;
 
 CREATE TABLE t_cache_multipart (id UInt64, value UInt64)
 ENGINE = MergeTree ORDER BY id
 SETTINGS min_bytes_for_wide_part = 0, index_granularity = 1000;
+
+-- The part names are asserted below, so no background merge may rename them
+-- before `OPTIMIZE` does it explicitly.
+SYSTEM STOP MERGES t_cache_multipart;
 
 -- Insert multiple parts
 INSERT INTO t_cache_multipart SELECT number, number * 2 FROM numbers(2000);
@@ -141,24 +147,58 @@ INSERT INTO t_cache_multipart SELECT number + 2000, (number + 2000) * 2 FROM num
 INSERT INTO t_cache_multipart SELECT number + 4000, (number + 4000) * 2 FROM numbers(2000);
 INSERT INTO t_cache_multipart SELECT number + 6000, (number + 6000) * 2 FROM numbers(2000);
 
+-- Cache entries are keyed by the table UUID, and nothing can resolve it back to a
+-- name once the table is gone, so remember it while the table still exists.
+CREATE TABLE t_cache_multipart_uuid (uuid UUID) ENGINE = Memory;
+INSERT INTO t_cache_multipart_uuid
+SELECT uuid FROM system.tables WHERE database = currentDatabase() AND name = 't_cache_multipart';
+
 SYSTEM DROP COLUMNS CACHE;
 
 -- Read all parts (populate cache)
-SELECT sum(id), sum(value), count() FROM t_cache_multipart SETTINGS use_columns_cache = 1;
+SELECT sum(id), sum(value), count() FROM t_cache_multipart
+SETTINGS use_columns_cache = 1, log_comment = '04074_multipart_before_merge_1';
 
 -- Read again (should hit cache)
-SELECT sum(id), sum(value), count() FROM t_cache_multipart SETTINGS use_columns_cache = 1;
+SELECT sum(id), sum(value), count() FROM t_cache_multipart
+SETTINGS use_columns_cache = 1, log_comment = '04074_multipart_before_merge_2';
+
+-- Every source part is cached under its own name.
+SELECT arraySort(groupUniqArray(part))
+FROM system.columns_cache
+WHERE database = currentDatabase() AND table = 't_cache_multipart';
+
+SYSTEM START MERGES t_cache_multipart;
 
 -- Optimize table (merge parts)
 OPTIMIZE TABLE t_cache_multipart FINAL;
 
 -- Read after merge (cache should miss for new merged part)
-SELECT sum(id), sum(value), count() FROM t_cache_multipart SETTINGS use_columns_cache = 1;
+SELECT sum(id), sum(value), count() FROM t_cache_multipart
+SETTINGS use_columns_cache = 1, log_comment = '04074_multipart_after_merge_1';
 
 -- Read again after merge (should hit cache for new merged part)
-SELECT sum(id), sum(value), count() FROM t_cache_multipart SETTINGS use_columns_cache = 1;
+SELECT sum(id), sum(value), count() FROM t_cache_multipart
+SETTINGS use_columns_cache = 1, log_comment = '04074_multipart_after_merge_2';
 
-DROP TABLE t_cache_multipart;
+-- The merged part is cached under its own name. Its miss-then-hit pattern is
+-- asserted at the end of the test through the profile events, so that a merge
+-- serving the new part from the entries of the source parts would be caught.
+SELECT count() > 0
+FROM system.columns_cache
+WHERE database = currentDatabase() AND table = 't_cache_multipart' AND part = 'all_1_4_1';
+
+-- Dropping the table purges its entries at once, so no entry can outlive the
+-- table it describes. (The source parts of the merge above are removed by a
+-- background task instead; the sibling test `05136_columns_cache_part_removal_invalidation`
+-- waits for that.)
+DROP TABLE t_cache_multipart SYNC;
+
+SELECT count()
+FROM system.columns_cache
+WHERE table_uuid IN (SELECT uuid FROM t_cache_multipart_uuid);
+
+DROP TABLE t_cache_multipart_uuid;
 
 -- ============================================================================
 -- Test 4: Partial mark range reads
@@ -581,6 +621,24 @@ SELECT sum(id), count() FROM t_cache_concurrent SETTINGS use_columns_cache = 1;
 SELECT sum(id), count() FROM t_cache_concurrent SETTINGS use_columns_cache = 1;
 
 DROP TABLE t_cache_concurrent;
+
+-- ============================================================================
+-- The cache path of Test 3: the first read after dropping the cache only misses,
+-- the repeated read is served from the cache, and the merged part starts over -
+-- it must miss once before it hits, because it is a part of its own.
+-- ============================================================================
+
+SYSTEM FLUSH LOGS query_log;
+
+SELECT
+    log_comment,
+    ProfileEvents['ColumnsCacheHits'] > 0 AS has_hits,
+    ProfileEvents['ColumnsCacheMisses'] > 0 AS has_misses
+FROM system.query_log
+WHERE current_database = currentDatabase()
+    AND type = 'QueryFinish'
+    AND log_comment LIKE '04074_multipart_%'
+ORDER BY event_time_microseconds, log_comment;
 
 -- Final message
 SELECT 'All correctness tests passed' as result;
