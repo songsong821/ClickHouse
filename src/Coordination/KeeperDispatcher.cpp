@@ -226,6 +226,12 @@ void KeeperDispatcher::initialize(const Poco::Util::AbstractConfiguration & conf
 
 void KeeperDispatcher::shutdown(bool closed_all_connections)
 {
+    shutdownBeforeConnectionsFinish();
+    shutdownAfterConnectionsFinish(closed_all_connections);
+}
+
+void KeeperDispatcher::shutdownBeforeConnectionsFinish()
+{
     /// Armed once the shutdown is committed to. setShutdownCalled is one-shot, so no later
     /// shutdown reaches the waiters and they must be completed even if a step below throws.
     scope_guard fail_session_id_waiters;
@@ -273,19 +279,33 @@ void KeeperDispatcher::shutdown(bool closed_all_connections)
         if (server)
             server->shutdown();
 
-        /// Only now is nuraft's commit thread joined, so no thread can produce responses anymore
-        /// and the queues can be drained and checked.
-        if (dispatcher)
-            dispatcher->drainAndCheckQueues(closed_all_connections);
+        /// Only now is nuraft's commit thread joined, so no thread can produce responses anymore.
+        /// TCP handlers can still own responses until they finish.
+        ready_to_finish_shutdown.store(true, std::memory_order_release);
 
         /// On the normal path, run here rather than leaving it to the guard: until the commit
         /// thread is joined a late commit can still complete a waiter itself.
         fail_session_id_waiters.reset();
+    }
+    catch (...)
+    {
+        tryLogCurrentException(__PRETTY_FUNCTION__);
+    }
+}
+
+void KeeperDispatcher::shutdownAfterConnectionsFinish(bool closed_all_connections)
+{
+    if (shutdown_finished.exchange(true))
+        return;
+
+    try
+    {
+        if (ready_to_finish_shutdown.load(std::memory_order_acquire) && dispatcher)
+            dispatcher->drainAndCheckQueues(closed_all_connections);
 
         snapshot_s3.shutdown();
 
         CurrentMetrics::set(CurrentMetrics::KeeperAliveConnections, 0);
-
     }
     catch (...)
     {

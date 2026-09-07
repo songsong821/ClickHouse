@@ -88,6 +88,11 @@ private:
     /// stop all activity and join threads.
     std::atomic<bool> shutting_down{false};
 
+    /// Set after all request and response producers have stopped. Queue accounting can be
+    /// finalized after the TCP handlers have released their pending responses.
+    std::atomic<bool> ready_to_finish_shutdown{false};
+    std::atomic<bool> shutdown_finished{false};
+
     /// Notified when shutting_down (not to be confused with keeper_context->isShutdownCalled())
     /// becomes true. Wakes up interruptibleSleep().
     std::mutex early_shutdown_wait_mutex;
@@ -162,6 +167,14 @@ public:
     /// Shutdown internal keeper parts (server, state machine, log storage, etc)
     /// `closed_all_connections` should be false if there may be any remaining KeeperTCPHandler instances.
     void shutdown(bool closed_all_connections);
+
+    /// Stop all request and response producers and complete pending session-ID requests.
+    /// TCP handlers can then finish without waiting for the Keeper session timeout.
+    void shutdownBeforeConnectionsFinish();
+
+    /// Drain the queues after TCP handlers finish and check their byte accounting when all
+    /// connections closed. Must be called after `shutdownBeforeConnectionsFinish`.
+    void shutdownAfterConnectionsFinish(bool closed_all_connections);
 
     void forceRecovery();
 

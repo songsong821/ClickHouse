@@ -1886,11 +1886,11 @@ try
         }
 
         /// Wake Keeper handlers after storages no longer need Keeper, but before waiting for
-        /// the handlers. Shutting down the dispatcher here also completes session-ID waiters
-        /// after the Raft commit thread is stopped.
+        /// the handlers. Stopping the dispatcher here also completes session-ID waiters after
+        /// the Raft commit thread is stopped. Queue accounting is finalized after handlers exit.
         global_context->signalKeeperDispatcherShutdown();
         close_keeper_connections();
-        global_context->shutdownKeeperDispatcher(current_connections == 0);
+        global_context->shutdownKeeperDispatcherBeforeConnectionsFinish();
 
         if (!servers_to_start_before_tables.empty())
         {
@@ -1907,6 +1907,8 @@ try
             else
                 LOG_INFO(log, "Closed connections to servers for tables.");
         }
+
+        global_context->shutdownKeeperDispatcherAfterConnectionsFinish(current_connections == 0);
 
         /// Wait server pool to avoid use-after-free of destroyed context in the handlers
         server_pool.joinAll();
