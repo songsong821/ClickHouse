@@ -76,6 +76,8 @@ real:
 ReadFromMergeTree (p_b)
 Granules: 100
 reason: Query has no filter predicate
+reason: Query has no filter predicate
+reason: Query has no filter predicate
 --- the INDEX form, which the optimizer serves the read from ---
 hypothetical:
 marks: 100

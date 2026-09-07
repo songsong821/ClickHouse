@@ -69,11 +69,13 @@ compare p_g "(SELECT a, b, v ORDER BY b) WITH SETTINGS (index_granularity = 50)"
 
 echo "--- no filter, the projection serves the ORDER BY ---"
 compare p_b "(SELECT a, b, v ORDER BY b)" "SELECT a, b, v FROM TABLE ORDER BY b"
-# with read-in-order off there is nothing the projection could help with, as in the optimizer
-$CLICKHOUSE_CLIENT -q "
-    CREATE HYPOTHETICAL PROJECTION p_b ON t_est (SELECT a, b, v ORDER BY b);
-    EXPLAIN WHATIF SELECT a, b, v FROM t_est ORDER BY b SETTINGS ${PIN}, optimize_read_in_order = 0;
-" | grep -E '^\s+reason:' | awk '{$1=$1; print}'
+# every setting the planner's read-in-order gate is built from must switch the tie-break off
+for off in "optimize_read_in_order = 0" "query_plan_read_in_order = 0" "query_plan_enable_optimizations = 0"; do
+    $CLICKHOUSE_CLIENT -q "
+        CREATE HYPOTHETICAL PROJECTION p_b ON t_est (SELECT a, b, v ORDER BY b);
+        EXPLAIN WHATIF SELECT a, b, v FROM t_est ORDER BY b SETTINGS ${PIN}, ${off};
+    " | grep -E '^\s+reason:' | awk '{$1=$1; print}'
+done
 
 echo "--- the INDEX form, which the optimizer serves the read from ---"
 compare p_idx "INDEX b TYPE basic" "SELECT count() FROM TABLE WHERE b = 42"

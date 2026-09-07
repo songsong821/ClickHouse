@@ -39,7 +39,6 @@ namespace Setting
     extern const SettingsUInt64 max_bytes_to_read;
     extern const SettingsOverflowMode read_overflow_mode;
     extern const SettingsBool optimize_use_projections;
-    extern const SettingsBool optimize_read_in_order;
 }
 
 namespace MergeTreeSetting
@@ -450,7 +449,7 @@ WhatIfCandidateResult evaluateProjection(
         context->checkAccess(AccessType::SELECT, data.getStorageID(), projection->required_columns);
 
     /// the other way a normal projection wins, it hands the outer ORDER BY rows already in order
-    const bool sort_order_helps = outer_sorting && subtree_above_reading && context->getSettingsRef()[Setting::optimize_read_in_order]
+    const bool sort_order_helps = outer_sorting && subtree_above_reading
         && QueryPlanOptimizations::wouldReadInOrderBeUseful(*outer_sorting, proj_key, *subtree_above_reading);
 
     /// PK-range condition over the projection key, from the query predicate

@@ -384,7 +384,8 @@ WhatIfResult estimateHypotheticalIndexes(
         interpreter.buildQueryPlan(plan);
     }
 
-    plan.optimize(QueryPlanOptimizationSettings(plan_context));
+    QueryPlanOptimizationSettings optimization_settings(plan_context);
+    plan.optimize(optimization_settings);
 
     std::vector<ReadFromMergeTree *> read_steps;
     collectReadSteps(plan.getRootNode(), read_steps);
@@ -590,7 +591,10 @@ WhatIfResult estimateHypotheticalIndexes(
         result.candidates.push_back(std::move(combined));
     }
 
-    const auto [outer_sorting, subtree_above_reading] = findOuterSorting(plan.getRootNode(), read_step);
+    /// the ORDER BY tie-break exists only when the planner would really read in order
+    const auto [outer_sorting, subtree_above_reading] = optimization_settings.read_in_order
+        ? findOuterSorting(plan.getRootNode(), read_step)
+        : std::pair<const SortingStep *, const QueryPlan::Node *>{};
     for (const auto & projection : store.getProjectionsForTable(data.getStorageID()))
         result.candidates.push_back(evaluateProjection(
             projection, read_step, analysis, baseline_parts, settings, outer_sorting, subtree_above_reading, plan_context));
