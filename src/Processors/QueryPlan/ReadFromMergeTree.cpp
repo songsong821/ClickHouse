@@ -2713,9 +2713,14 @@ std::optional<size_t> ReadFromMergeTree::estimateCompressedBytesToRead() const
 
     /// Reads that are priced per part below, but whose column set is only known once a read task is
     /// built for a concrete part: `getReadTaskColumns` gives every index read task and on-fly mutation
-    /// step its own input columns. Rather than under-count them, decline to answer - the caller reads
-    /// that as "could be any size".
-    if (!index_read_tasks.empty() || (mutations_snapshot && mutations_snapshot->hasDataMutations()))
+    /// step its own input columns. Patch parts are the same case twice over - `MergeTreeReadPoolBase`
+    /// picks them per part and `addPatchPartsColumns` then adds the patch key columns to the main
+    /// read, and the patch parts themselves are read in full but are not among `parts_with_ranges`.
+    /// They are counted separately from data mutations, so a lightweight update leaves
+    /// `hasDataMutations` false. Rather than under-count any of this, decline to answer - the caller
+    /// reads that as "could be any size".
+    if (!index_read_tasks.empty()
+        || (mutations_snapshot && (mutations_snapshot->hasDataMutations() || mutations_snapshot->hasPatchParts())))
         return {};
 
     Names column_names = analysis->column_names_to_read.empty() ? all_column_names : analysis->column_names_to_read;
