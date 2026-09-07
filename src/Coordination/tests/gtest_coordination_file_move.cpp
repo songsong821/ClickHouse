@@ -269,7 +269,26 @@ TEST(KeeperMoveMarker, ClassifiesEveryInvalidShape)
     malformed = marker;
     malformed[8] = 2;
     EXPECT_EQ(DB::parseKeeperMoveMarker(malformed).error(), DB::KeeperMoveMarkerParseError::UnknownVersion);
+    malformed += "future-version-fields";
+    EXPECT_EQ(DB::parseKeeperMoveMarker(malformed).error(), DB::KeeperMoveMarkerParseError::UnknownVersion);
     EXPECT_EQ(DB::parseKeeperMoveMarker(marker + "x").error(), DB::KeeperMoveMarkerParseError::Malformed);
+}
+
+TEST(KeeperMoveMarker, ReadsFutureVersionHeaderFromLongerMarker)
+{
+    fs::create_directories("./tmp");
+    ChangelogDirTest root("./tmp/gtest_keeper_move_marker_future_version");
+    auto disk = std::make_shared<DB::DiskLocal>("marker", root.path);
+
+    const DB::KeeperFileDigest digest{.size = 1, .hash = CityHash_v1_0_2::uint128(2, 3)};
+    auto marker = DB::serializeKeeperMoveMarker(digest);
+    marker[8] = 2;
+    marker += std::string(128, 'x');
+    writeFile(disk, "marker", marker);
+
+    const auto parsed = DB::readKeeperMoveMarker(disk, "marker");
+    ASSERT_FALSE(parsed);
+    EXPECT_EQ(parsed.error(), DB::KeeperMoveMarkerParseError::UnknownVersion);
 }
 
 TEST(KeeperMoveMarker, DigestUsesVersionOneBlockConstructionAcrossInputChunks)

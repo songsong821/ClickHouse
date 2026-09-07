@@ -129,15 +129,17 @@ KeeperMoveMarkerParseResult parseKeeperMoveMarker(std::string_view marker)
     if (marker.empty())
         return std::unexpected(KeeperMoveMarkerParseError::LegacyEmpty);
 
-    if (marker.size() != keeper_move_marker_size || !marker.starts_with(keeper_move_marker_magic))
+    if (marker.size() <= keeper_move_marker_magic.size() || !marker.starts_with(keeper_move_marker_magic))
         return std::unexpected(KeeperMoveMarkerParseError::Malformed);
 
-    ReadBufferFromString input(marker.substr(keeper_move_marker_magic.size()));
-    uint8_t version = 0;
-    readBinaryLittleEndian(version, input);
+    const auto version = static_cast<uint8_t>(marker[keeper_move_marker_magic.size()]);
     if (version != keeper_move_marker_version)
         return std::unexpected(KeeperMoveMarkerParseError::UnknownVersion);
 
+    if (marker.size() != keeper_move_marker_size)
+        return std::unexpected(KeeperMoveMarkerParseError::Malformed);
+
+    ReadBufferFromString input(marker.substr(keeper_move_marker_magic.size() + sizeof(version)));
     KeeperFileDigest digest;
     readBinaryLittleEndian(digest.size, input);
     readBinaryLittleEndian(digest.hash.low64, input);
