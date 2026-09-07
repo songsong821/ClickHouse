@@ -278,10 +278,6 @@ std::optional<Interval> refineInterval(std::optional<Interval> interval, Int64 f
     return Interval{first, past_last};
 }
 
-/// The interval as a range that ends on the last value inside it, in the `Field` shape of the
-/// column's type. Key analysis looks at the two ends of a range and applies the filter's functions
-/// to them, so the last value inside bounds the file tighter than the excluded upper end: for a
-/// January partition it maps to January, while the excluded end maps to February.
 std::optional<Range> closedRange(std::optional<Interval> interval, std::optional<UInt32> decimal_scale)
 {
     Int64 last = 0;
@@ -299,7 +295,6 @@ std::optional<Interval> dayIntervalOfPartitionValue(PartitionTransformKind kind,
     if (kind == PartitionTransformKind::Day)
         return unitInterval(value);
 
-    /// The value's own unit, months or years, mapped through the calendar.
     auto own_unit = unitInterval(value);
     if (!own_unit)
         return {};
@@ -307,9 +302,6 @@ std::optional<Interval> dayIntervalOfPartitionValue(PartitionTransformKind kind,
     const auto & utc = DateLUT::instance("UTC");
     const auto epoch = ExtendedDayNum(0);
 
-    /// Both ends are checked by the round trip, because the calendar saturates at the top of the
-    /// representable range: one month past the last one is 9999-12-31, not the first excluded day,
-    /// and taking it for the excluded end would leave 9999-12-31 out of the interval.
     if (kind == PartitionTransformKind::Month)
     {
         const auto first = utc.addMonths(epoch, own_unit->first);
@@ -365,8 +357,6 @@ std::optional<Range> rangeOfPartitionValue(const String & transform_name, const 
     const PartitionTransformKind kind = parsePartitionTransformKind(transform_name);
     const WhichDataType which(source_type);
 
-    /// The interval has to end up in the unit the column stores its values in: a `Date` counts days,
-    /// a `DateTime` counts seconds, and a `DateTime64` counts ticks of its scale.
     if (which.isDateOrDate32())
         return closedRange(dayIntervalOfPartitionValue(kind, *value), std::nullopt);
 
