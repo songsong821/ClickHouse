@@ -1,11 +1,7 @@
-approx_top_k not checked
-approx_top_sum not checked
-approx_top_count not checked
 min_by not checked
 array_agg not checked
 array_concat_agg not checked
 medianTDigest not checked
 anova not checked
-exact aggregates checked
 safe aliases checked
 medianDeterministic checked

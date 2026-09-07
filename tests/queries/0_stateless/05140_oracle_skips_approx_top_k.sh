@@ -13,6 +13,12 @@
 # check it. `QueryFuzzer`'s swap list offers `approx_top_k` for any single-argument aggregate,
 # which is how a false `TLP Aggregate oracle mismatch!` reached master CI:
 # https://s3.amazonaws.com/clickhouse-test-reports/praktika.html?REF=master&sha=6c335833c268d3c52d83b47abf4c2f807251e716&name_0=MasterCI&name_1=Stateless%20tests%20%28amd_debug%2C%20sequential%29
+#
+# The alias spellings that only a lookup through `AggregateFunctionFactory` can reject live in
+# 05141_oracle_skips_aggregate_aliases, as two files each comfortably under the 180s per-test
+# limit: every assertion here costs a separate `clickhouse-client` invocation, and in the
+# private `s3 storage, meta in keeper` configuration one such invocation costs seconds rather
+# than milliseconds, so the run time of these tests is set by how many of them there are.
 
 CUR_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=../shell_config.sh
@@ -37,13 +43,24 @@ get_counter()
 # mutations that produce valid-but-nonsense queries (see 04256_04250). No `FORMAT Null` on the
 # fuzzed query: the oracle skips queries carrying an explicit FORMAT clause, which would make
 # every assertion below vacuous - discard the output via redirection instead.
-run_fuzzed()
+#
+# All rounds of one probe are sent as a single multi-statement invocation. Each statement is
+# still fuzzed and oracle-checked on its own - a batch of three copies of a checkable query
+# moves the counter by three - so this only removes client start-up cost, which is what
+# dominates the run time (see the header). A mutation that errors out aborts the rest of its
+# batch, which is harmless: rounds are only insurance against a vacuous pass, and the first
+# round always runs.
+run_fuzzed_rounds()
 {
+    local query="$1"
+
     $CLICKHOUSE_CLIENT --query "
         SET send_logs_level = 'fatal';
         SET ast_fuzzer_runs = 1;
         SET ast_fuzzer_oracle = 1;
-        $1
+        $query
+        $query
+        $query
     " >/dev/null 2>/dev/null
 }
 
@@ -61,10 +78,7 @@ run_fuzzed()
 # Three rounds, not more. Rounds buy only insurance against a round in which the mutation
 # happens to make the query ineligible for an unrelated reason and the probe passes
 # vacuously; that risk falls off geometrically, so three is already plenty. They do not add
-# detection power - a missing denylist entry moves the counter on the very first round - and
-# each extra round costs real time and one more chance of the false failure above. Keep this
-# number small: at eight rounds the whole test took ~204s under `amd_asan_ubsan` and tripped
-# the 180s per-test limit.
+# detection power - a missing denylist entry moves the counter on the very first round.
 probe()
 {
     local label="$1"
@@ -74,23 +88,23 @@ probe()
 
     # A zero delta on its own does not prove the oracle gate rejected the spelling: it holds
     # just as well when the query never reached `QueryOracleChecker` at all. If, say,
-    # `approx_top_count` or `anova` stopped resolving as an aggregate, the query would fail
-    # before the gate and the probe would still print `not checked`. So first run the very
-    # same query with no fuzzer and no oracle and require it to succeed - that separates
-    # "unsafe spelling was skipped" from "this spelling is broken". A `FORMAT Null` is fine
-    # here precisely because the oracle is off in this run, so it cannot make the check below
-    # vacuous, and the counter cannot move.
-    if ! $CLICKHOUSE_CLIENT --query "SELECT $aggregates FROM oracle_approx_top WHERE v > 5 FORMAT Null"
+    # `approx_top_count` stopped resolving as an aggregate, the query would fail before the
+    # gate and the probe would still print `not checked`. So first run the very same query
+    # with no fuzzer and no oracle and require it to succeed - that separates "unsafe
+    # spelling was skipped" from "this spelling is broken". A `FORMAT Null` is fine here
+    # precisely because the oracle is off in this run, so it cannot make the check below
+    # vacuous, and the counter cannot move - which is also why the `before` snapshot can be
+    # taken in the same invocation.
+    if ! before=$($CLICKHOUSE_CLIENT --query "
+        SELECT $aggregates FROM oracle_approx_top WHERE v > 5 FORMAT Null;
+        SELECT toInt64(sum(value)) FROM system.events WHERE event = 'ASTFuzzerOracleChecks';
+    ")
     then
         echo "$label is not a valid query"
         return
     fi
 
-    before=$(get_counter)
-    for _ in $(seq 1 3)
-    do
-        run_fuzzed "SELECT $aggregates FROM oracle_approx_top WHERE v > 5;"
-    done
+    run_fuzzed_rounds "SELECT $aggregates FROM oracle_approx_top WHERE v > 5;"
     after=$(get_counter)
 
     if [[ "$after" -eq "$before" ]]
@@ -104,21 +118,12 @@ probe()
 probe "approx_top_k" "approx_top_k(v), approx_top_k(v + 1), approx_top_k(v * 2)"
 probe "approx_top_sum" "approx_top_sum(v, 1), approx_top_sum(v + 1, 1), approx_top_sum(v * 2, 1)"
 
-# Alias spellings resolve to the same unsafe aggregates and must be rejected as well:
-# `approx_top_count` is an alias of `approx_top_k`, `min_by` of `argMin`, `array_agg` of
-# `groupArray`, `medianTDigest` of the approximate `quantileTDigest`, `anova` of
-# `analysisOfVariance`, and `array_concat_agg` of `groupArrayArray` - which is itself
-# `groupArray` plus an `Array` combinator, so the expansion has to be stripped in turn.
-# The backstop set names none of these under its alias, so this only holds once the name is
-# resolved through the aggregate function factory.
+# `approx_top_count` is an alias of `approx_top_k` and must be rejected as well. The backstop
+# set does not name it, so this only holds once the name is resolved through the aggregate
+# function factory. The other alias spellings are covered by 05141.
 probe "approx_top_count" "approx_top_count(v), approx_top_count(v + 1), approx_top_count(v * 2)"
-probe "min_by" "min_by(v, v), min_by(v + 1, v), min_by(v * 2, v)"
-probe "array_agg" "array_agg(v), array_agg(v + 1), array_agg(v * 2)"
-probe "array_concat_agg" "array_concat_agg([v]), array_concat_agg([v + 1]), array_concat_agg([v * 2])"
-probe "medianTDigest" "medianTDigest(v), medianTDigest(v + 1), medianTDigest(v * 2)"
-probe "anova" "anova(v, (v % 3)::UInt8), anova(v + 1, (v % 3)::UInt8), anova(v * 2, (v % 3)::UInt8)"
 
-# Positive controls: the same query shape over exact, merge-order-independent aggregates IS
+# Positive control: the same query shape over exact, merge-order-independent aggregates IS
 # checked. This proves the counter is live under these settings, so every probe above is
 # the gate rejecting one unsafe spelling and not the oracle ignoring this query shape
 # altogether. Retried until the counter moves, because a single mutation can occasionally
@@ -135,9 +140,9 @@ positive_control()
 
     before=$(get_counter)
     after=$before
-    for _ in $(seq 1 40)
+    for _ in $(seq 1 10)
     do
-        run_fuzzed "SELECT $aggregates FROM oracle_approx_top WHERE v > 5;"
+        run_fuzzed_rounds "SELECT $aggregates FROM oracle_approx_top WHERE v > 5;"
         after=$(get_counter)
         if [[ "$after" -gt "$before" ]]
         then
@@ -154,25 +159,5 @@ positive_control()
 }
 
 positive_control "exact aggregates" "count(), min(v), max(v)"
-
-# The second control is about the alias path specifically: resolving through the factory must
-# reject only the aliases whose canonical name is unsafe, not every alias. `BIT_AND` / `BIT_OR`
-# / `BIT_XOR` are aliases of `groupBitAnd` / `groupBitOr` / `groupBitXor`, which are
-# associative and commutative over integers, are therefore absent from the backstop set, and
-# must stay checkable through their alias spelling too. Without this control every alias probe
-# above would be satisfied just as well by a checker that rejected all aliases outright.
-positive_control "safe aliases" "BIT_AND(v), BIT_OR(v), BIT_XOR(v)"
-
-# And one alias whose canonical name is a `quantile*`: `medianDeterministic` resolves to
-# `quantileDeterministic`, which is NOT on the backstop list because
-# `ReservoirSamplerDeterministic` retains a sample purely by hash and re-thins on merge, so a
-# merged state equals the directly accumulated one. This is the probe that catches alias
-# resolution reaching a neighbouring `quantile*` entry (`median` and the approximate
-# `quantile*` families ARE listed) and skipping a checkable query.
-# The determinator is the constant `1` rather than `v`: with `v` in that position the oracle
-# skips the query for an unrelated reason (the `State`/`Merge` rewrite of a determinator
-# that is itself the aggregated column does not survive), which would make the probe
-# vacuous. A constant determinator still exercises the alias path, which is what is asserted.
-positive_control "medianDeterministic" "medianDeterministic(v, 1)"
 
 $CLICKHOUSE_CLIENT --query "DROP TABLE oracle_approx_top"
