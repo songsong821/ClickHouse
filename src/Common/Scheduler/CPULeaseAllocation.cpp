@@ -545,9 +545,7 @@ void CPULeaseAllocation::unparkLease(Lease & lease)
             if (!schedule(lock))
                 grantImpl(lock);
         }
-        catch (...) // NOLINT(bugprone-empty-catch): unpark must stay non-throwing (destructor path)
-        {
-        }
+        catch (...) {} // NOLINT(bugprone-empty-catch) Ok: unpark must stay non-throwing (CPULeaseParkGuard destructor path)
     }
 }
 
