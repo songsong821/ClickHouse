@@ -1861,17 +1861,6 @@ try
 
         async_metrics->stop();
 
-        /// Stop accepting Keeper connections and close the active handlers before shutting down the global context.
-        /// An idle handler may be blocked in a socket poll and otherwise delay this shutdown.
-        {
-            std::lock_guard lock(servers_lock);
-            for (auto & server : servers_to_start_before_tables)
-                if (server.getPortName().starts_with("keeper_server."))
-                    server.stop();
-        }
-        global_context->signalKeeperDispatcherShutdown();
-        close_keeper_connections();
-
         /** Ask to cancel background jobs all table engines,
           *  and also query_log.
           * It is important to do early, not in destructor of Context, because
@@ -1890,11 +1879,21 @@ try
                 std::lock_guard lock(servers_lock);
                 for (auto & server : servers_to_start_before_tables)
                 {
-                    if (!server.isStopping())
-                        server.stop();
+                    server.stop();
                     current_connections += server.currentConnections();
                 }
             }
+        }
+
+        /// Wake Keeper handlers after storages no longer need Keeper, but before waiting for
+        /// the handlers. Shutting down the dispatcher here also completes session-ID waiters
+        /// after the Raft commit thread is stopped.
+        global_context->signalKeeperDispatcherShutdown();
+        close_keeper_connections();
+        global_context->shutdownKeeperDispatcher(current_connections == 0);
+
+        if (!servers_to_start_before_tables.empty())
+        {
             if (current_connections)
                 LOG_INFO(log, "Closed all listening sockets. Waiting for {} outstanding connections.", current_connections);
             else
@@ -1908,8 +1907,6 @@ try
             else
                 LOG_INFO(log, "Closed connections to servers for tables.");
         }
-
-        global_context->shutdownKeeperDispatcher(current_connections == 0);
 
         /// Wait server pool to avoid use-after-free of destroyed context in the handlers
         server_pool.joinAll();

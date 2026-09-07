@@ -1747,35 +1747,6 @@ TEST(KeeperDispatcher, PendingSessionIDRequestsFailOnShutdown)
     EXPECT_EQ(DispatcherAccessor::sessionIDWaiterCount(keeper_dispatcher, internal_id), 0u) << "the waiter entry leaked";
 }
 
-TEST(KeeperDispatcher, PendingSessionIDRequestsFailOnShutdownSignal)
-{
-    DispatcherFixture fixture;
-    fixture.dispatcher.reset();
-
-    DB::KeeperDispatcher keeper_dispatcher;
-    DispatcherAccessor::setKeeperContext(keeper_dispatcher, fixture.keeper_context);
-
-    constexpr int64_t internal_id = 32;
-    auto waiter = DispatcherAccessor::registerSessionIDWaiter(keeper_dispatcher, internal_id);
-    ASSERT_TRUE(waiter.has_value());
-    auto & future = *waiter;
-
-    keeper_dispatcher.signalShutdown();
-
-    ASSERT_EQ(future.wait_for(std::chrono::seconds(0)), std::future_status::ready)
-        << "the shutdown signal left the waiter to time out";
-    try
-    {
-        FAIL() << "getSessionID returned session id " << future.get() << " instead of the error";
-    }
-    catch (const Coordination::Exception & e)
-    {
-        EXPECT_EQ(e.code, Coordination::Error::ZSESSIONEXPIRED);
-    }
-
-    EXPECT_EQ(DispatcherAccessor::sessionIDWaiterCount(keeper_dispatcher, internal_id), 0u) << "the waiter entry leaked";
-}
-
 /// setShutdownCalled is one-shot, so a shutdown step that throws before the normal cleanup point
 /// is the waiters' only chance to be completed.
 TEST(KeeperDispatcher, PendingSessionIDRequestsFailOnThrowingShutdown)

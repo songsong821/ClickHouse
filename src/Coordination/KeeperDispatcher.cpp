@@ -435,8 +435,6 @@ void KeeperDispatcher::signalShutdown()
     if (shutting_down.exchange(true))
         return; // already called
 
-    failPendingSessionIDRequests();
-
     {
         std::lock_guard lock(early_shutdown_wait_mutex);
     }

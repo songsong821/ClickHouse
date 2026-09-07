@@ -50,8 +50,15 @@ def open_keeper_session(session_timeout):
         raise
 
 
-def test_idle_connection_is_closed_immediately_on_shutdown(started_cluster):
-    client = open_keeper_session(session_timeout=10000)
+def test_idle_connection_does_not_delay_shutdown(started_cluster):
+    node.query(
+        "CREATE TABLE replicated_table (value UInt64) "
+        "ENGINE=ReplicatedMergeTree('/clickhouse/tables/replicated_table', 'node') "
+        "ORDER BY tuple()"
+    )
+    node.query("INSERT INTO replicated_table VALUES (1)")
+
+    client = open_keeper_session(session_timeout=60000)
     shutdown_errors = []
 
     def stop_node():
@@ -64,8 +71,14 @@ def test_idle_connection_is_closed_immediately_on_shutdown(started_cluster):
     shutdown_thread.start()
 
     try:
+        shutdown_thread.join(timeout=30)
+        assert not shutdown_thread.is_alive()
+
         client.settimeout(3)
         assert client.recv(1) == b""
+        assert node.contains_in_log(
+            "Will not wait for unique parts to be fetched because we don't have any unique parts"
+        )
     finally:
         client.close()
         shutdown_thread.join(timeout=30)

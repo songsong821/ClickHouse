@@ -692,6 +692,10 @@ try
 
         KeeperTCPHandler::closeAllConnections();
 
+        /// Complete session-ID waiters after the Raft commit thread is stopped, before waiting
+        /// for the corresponding TCP handlers to exit.
+        global_context->shutdownKeeperDispatcher(current_connections == 0);
+
         if (current_connections)
             LOG_INFO(log, "Closed all listening sockets. Waiting for {} outstanding connections.", current_connections);
         else
@@ -704,8 +708,6 @@ try
             LOG_INFO(log, "Closed connections to Keeper. But {} remain. Probably some users cannot finish their connections after context shutdown.", current_connections);
         else
             LOG_INFO(log, "Closed connections to Keeper.");
-
-        global_context->shutdownKeeperDispatcher(current_connections == 0);
 
         /// Wait server pool to avoid use-after-free of destroyed context in the handlers
         server_pool.joinAll();
