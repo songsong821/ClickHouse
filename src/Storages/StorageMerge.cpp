@@ -2551,7 +2551,10 @@ bool StorageMerge::supportsTrivialCountOptimization(const StorageSnapshotPtr &, 
         /// (`RowPolicyData` in `createChildrenPlans`), which happens after the trivial count
         /// decision, and it is not reflected in the table's `totalRows`. Counting the rows from
         /// metadata would return the count of the rows the policy hides as well.
-        /// The row policy of the `Merge` table itself is checked by the caller.
+        /// The row policy of the `Merge` table itself is checked by the caller. A matched `Alias`
+        /// table, which `createChildrenPlans` reads through to its target and whose target's row
+        /// policy therefore applies too, does not need a check of its own: `StorageAlias` declines
+        /// the trivial count for the snapshot-less check above.
         const auto source_table_id = table->getStorageID();
         if (!source_table_id.hasDatabase())
             return false;
