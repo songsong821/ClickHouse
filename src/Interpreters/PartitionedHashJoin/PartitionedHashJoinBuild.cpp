@@ -730,16 +730,14 @@ void PartitionedHashJoin::computeFlagBaseAndReinitUsedFlags()
 
     /// `reinit` only grows, and does nothing for shapes without right-side flags. It has to run
     /// after the leaf join's barrier, which sized the flags to its own empty map.
-    const bool prefer_use_maps_all = leaf_join->preferUseMapsAll();
     joinDispatch(
         leaf_join->getKind(),
         leaf_join->getStrictness(),
         leaf_join->data->maps.front(),
-        prefer_use_maps_all,
+        leaf_join->getMapsKind(),
         [&](auto kind_, auto strictness_, auto & map_)
         {
-            leaf_join->used_flags->reinit<kind_, strictness_, std::is_same_v<std::decay_t<decltype(map_)>, HashJoin::MapsAll>>(
-                flag_base.back());
+            leaf_join->used_flags->reinit<kind_, strictness_, mapsKindOf<decltype(map_)>()>(flag_base.back());
         });
 
     /// Left empty for the shapes that never consult right-side flags, which the tests assert on.

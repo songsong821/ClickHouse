@@ -74,6 +74,9 @@ private:
     std::any position; /// iterator into the current leaf's map, resumable across calls
     std::optional<HashJoin::NullmapList::const_iterator> nulls_position;
 
+    /// `columns_keys_and_right` is built from `getEmptyBlock`, so it is positional with the saved sample.
+    const DataTypePtr & rightColumnType(size_t j) const { return parent.leaf_join->savedBlockSample().getByPosition(j).type; }
+
     template <typename Mapped>
     static void collectMapped(
         const Mapped & mapped,
@@ -143,7 +146,7 @@ private:
         }
 
         for (size_t j = 0; j < columns_keys_and_right.size(); ++j)
-            columns_keys_and_right[j]->fillFromBlocksAndRowNumbers(j, columns_with_row_numbers);
+            columns_keys_and_right[j]->fillFromBlocksAndRowNumbers(rightColumnType(j), j, columns_with_row_numbers);
 
         return row_nums.size();
     }
@@ -185,7 +188,7 @@ private:
         }
 
         for (size_t j = 0; j < columns_keys_and_right.size(); ++j)
-            columns_keys_and_right[j]->fillFromBlocksAndRowNumbers(j, columns_with_row_numbers);
+            columns_keys_and_right[j]->fillFromBlocksAndRowNumbers(rightColumnType(j), j, columns_with_row_numbers);
         rows_added += row_nums.size();
     }
 };

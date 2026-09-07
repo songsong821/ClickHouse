@@ -247,12 +247,15 @@ struct PartitionedJoinMaps
     using Variant = std::variant<PartitionedMapsOne, PartitionedMapsAll, PartitionedMapsAsof>;
 
     /// Index-compatible with `HashJoin::MapsVariant` - the active alternative is selected by that
-    /// variant's index.
+    /// variant's index. `HashJoin::MapsSet` (index 3) is the one alternative without a leaf
+    /// counterpart: its key-only tables are hash sets, not the hash maps the leaf types rebind.
+    /// The leaf `HashJoin` is therefore built with `allow_set_maps_ = false`, so it never selects one.
     static_assert(
         std::is_same_v<std::variant_alternative_t<0, HashJoin::MapsVariant>, HashJoin::MapsOne>
         && std::is_same_v<std::variant_alternative_t<1, HashJoin::MapsVariant>, HashJoin::MapsAll>
         && std::is_same_v<std::variant_alternative_t<2, HashJoin::MapsVariant>, HashJoin::MapsAsof>
-        && std::variant_size_v<HashJoin::MapsVariant> == 3);
+        && std::is_same_v<std::variant_alternative_t<3, HashJoin::MapsVariant>, HashJoin::MapsSet>
+        && std::variant_size_v<HashJoin::MapsVariant> == 4);
 
     Variant maps;
 

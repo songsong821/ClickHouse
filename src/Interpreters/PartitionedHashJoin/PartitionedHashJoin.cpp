@@ -91,7 +91,15 @@ PartitionedHashJoin::PartitionedHashJoin(
     , any_take_last_row(any_take_last_row_)
     , num_threads(std::max<size_t>(1, num_threads_))
     , max_bytes_before_external_join(max_bytes_before_external_join_)
-    , leaf_join(std::make_unique<HashJoin>(table_join, right_sample_block, any_take_last_row))
+    , leaf_join(std::make_unique<HashJoin>(
+          table_join,
+          right_sample_block,
+          any_take_last_row,
+          /*reserve_num_=*/0,
+          /*instance_id_=*/"",
+          /*is_concurrent_hash_join_=*/false,
+          /*stats_collecting_params_=*/HashJoinStatsCollectingParams{},
+          /*allow_set_maps_=*/false))
     , delegate_mode(!table_join->oneDisjunct())
     , maps_variant_index(leaf_join->data->maps.empty() ? 1 : leaf_join->data->maps.front().index())
     , max_fanout_per_pass(ColumnsScatter::MAX_FANOUT_PER_PASS)
