@@ -464,8 +464,11 @@ ASTPtr DatabaseBackup::getCreateDatabaseQueryImpl() const
 {
     const auto & settings = getContext()->getSettingsRef();
 
+    /// The locator is emitted as the function it is, not as a string literal holding its text: this
+    /// definition is what `ALTER DATABASE ... MODIFY COMMENT` writes back into the metadata file, and
+    /// the load path parses the second argument with `BackupInfo::fromAST`, which takes a function.
     const String query = fmt::format("CREATE DATABASE {} ENGINE = Backup({}, {})",
-        backQuoteIfNeed(database_name), quoteString(config.database_name), quoteString(config.backup_info.toString()));
+        backQuoteIfNeed(database_name), quoteString(config.database_name), config.backup_info.toString());
 
     ParserCreateQuery parser;
     ASTPtr ast = parseQuery(parser,
@@ -502,7 +505,14 @@ DatabaseBackup::Configuration parseArguments(ASTs engine_args, ContextPtr)
     DatabaseBackup::Configuration result;
 
     result.database_name = checkAndGetLiteralArgument<String>(engine_args[0], "database_name");
-    result.backup_info = BackupInfo::fromAST(*engine_args[1]);
+
+    /// A locator held in a string literal (`Backup('db', 'File(\'backup.zip\')')`) is the form that
+    /// metadata rewritten by an older server carries, so it has to keep loading - a server that cannot
+    /// parse its own metadata does not start at all.
+    if (const auto * locator = engine_args[1]->as<ASTLiteral>(); locator && locator->value.getType() == Field::Types::String)
+        result.backup_info = BackupInfo::fromString(locator->value.safeGet<String>());
+    else
+        result.backup_info = BackupInfo::fromAST(*engine_args[1]);
 
     return result;
 }
@@ -512,7 +522,8 @@ DatabaseBackup::Configuration parseArguments(ASTs engine_args, ContextPtr)
 void DatabaseBackup::parseAndAuthorizeLocator(const ASTs & engine_args, ContextPtr query_context)
 {
     /// A locator we cannot parse opens nothing: creation rejects it, so there is nothing to authorize.
-    if (engine_args.size() == 2 && !engine_args[1]->as<ASTFunction>())
+    /// A string literal is parseable (see `parseArguments`), so it must be authorized like a function.
+    if (engine_args.size() == 2 && !engine_args[1]->as<ASTFunction>() && !engine_args[1]->as<ASTLiteral>())
         return;
 
     auto config = parseArguments(engine_args, query_context);
