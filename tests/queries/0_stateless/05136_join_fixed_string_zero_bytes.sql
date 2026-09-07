@@ -57,6 +57,11 @@ SELECT count() FROM fs JOIN fs5 ON fs.x < fs5.z AND fs.i > fs5.k SETTINGS join_a
 SELECT '-- USING';
 SELECT count() FROM fs JOIN (SELECT y AS x FROM s) AS s2 USING (x) SETTINGS join_algorithm = 'hash';
 
+SELECT '-- FULL JOIN USING: the USING column, then the raw key of each side';
+SELECT hex(x), hex(fs.x), hex(s2.x) FROM fs FULL JOIN (SELECT y AS x, j FROM s) AS s2 USING (x) ORDER BY ALL SETTINGS join_algorithm = 'hash';
+SELECT hex(x), hex(fs.x), hex(s2.x) FROM fs FULL JOIN (SELECT y AS x, j FROM s) AS s2 USING (x) ORDER BY ALL SETTINGS join_algorithm = 'hash', join_use_nulls = 1;
+SELECT hex(x), hex(s2.x), hex(fs.x) FROM (SELECT y AS x, j FROM s) AS s2 FULL JOIN fs USING (x) ORDER BY ALL SETTINGS join_algorithm = 'hash';
+
 DROP TABLE fs;
 DROP TABLE s;
 DROP TABLE fs5;
