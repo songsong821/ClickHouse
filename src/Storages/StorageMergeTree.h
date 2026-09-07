@@ -391,8 +391,21 @@ private:
         using MutationsByVersion = std::map<UInt64, std::shared_ptr<const MutationCommands>>;
         MutationsByVersion mutations_by_version;
 
+        /** The partitions a command is scoped to, for every command of the snapshot that names one
+          * (`ALTER TABLE ... CLEAR COLUMN c IN PARTITION p`, `... DELETE IN PARTITION p WHERE ...`),
+          * keyed by the command's text.
+          *
+          * Resolved when the snapshot is taken, which is where the storage and a context to evaluate a
+          * partition expression are at hand: `getOnFlyMutationCommandsForPart` selects the pending
+          * commands for a part by mutation version alone and cannot evaluate one. Unlike the replicated
+          * queue, whose pending mutations are keyed by partition, this snapshot is flat.
+          */
+        using PartitionIdsByCommand = std::unordered_map<String, NameSet>;
+        PartitionIdsByCommand partition_ids_by_command;
+
         MutationsSnapshot() = default;
-        MutationsSnapshot(Params params_, MutationCounters counters_, MutationsByVersion mutations_snapshot, DataPartsVector patches_);
+        MutationsSnapshot(Params params_, MutationCounters counters_, MutationsByVersion mutations_snapshot, DataPartsVector patches_,
+            PartitionIdsByCommand partition_ids_by_command_);
 
         MutationCommands getOnFlyMutationCommandsForPart(const MergeTreeData::DataPartPtr & part) const override;
         std::shared_ptr<MergeTreeData::IMutationsSnapshot> cloneEmpty() const override { return std::make_shared<MutationsSnapshot>(); }

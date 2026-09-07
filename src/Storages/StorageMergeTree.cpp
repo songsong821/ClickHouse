@@ -3810,9 +3810,15 @@ void StorageMergeTree::attachRestoredParts(MutableDataPartsVector && parts, cons
     }
 }
 
-StorageMergeTree::MutationsSnapshot::MutationsSnapshot(Params params_, MutationCounters counters_, MutationsByVersion mutations_snapshot, DataPartsVector patches_)
+StorageMergeTree::MutationsSnapshot::MutationsSnapshot(
+    Params params_,
+    MutationCounters counters_,
+    MutationsByVersion mutations_snapshot,
+    DataPartsVector patches_,
+    PartitionIdsByCommand partition_ids_by_command_)
     : MutationsSnapshotBase(std::move(params_), std::move(counters_), std::move(patches_))
     , mutations_by_version(std::move(mutations_snapshot))
+    , partition_ids_by_command(std::move(partition_ids_by_command_))
 {
 }
 
@@ -3827,6 +3833,22 @@ MutationCommands StorageMergeTree::MutationsSnapshot::getOnFlyMutationCommandsFo
             break;
 
         addSupportedCommands(*commands, mutation_version, result);
+    }
+
+    /// A command that names a partition applies to that partition alone. Selecting the pending commands
+    /// by mutation version alone applied it to every part whose data version predates the mutation, so
+    /// while a `CLEAR COLUMN c IN PARTITION p` was pending, reads of *all* partitions answered the
+    /// column's default, and went back to the stored values once the mutation materialized.
+    if (!partition_ids_by_command.empty())
+    {
+        const auto & partition_id = part->info.getOriginalPartitionId();
+        std::erase_if(result, [&](const MutationCommand & command)
+        {
+            if (!command.has_partition)
+                return false;
+            auto it = partition_ids_by_command.find(command.ast_text);
+            return it != partition_ids_by_command.end() && !it->second.contains(partition_id);
+        });
     }
 
     std::reverse(result.begin(), result.end());
@@ -3852,30 +3874,70 @@ MergeTreeData::MutationsSnapshotPtr StorageMergeTree::getMutationsSnapshot(const
     DataPartsVector patch_parts;
     MutationCounters mutations_snapshot_counters;
     MutationsSnapshot::MutationsByVersion mutations_snapshot;
+    MutationsSnapshot::PartitionIdsByCommand partition_ids_by_command;
 
     if (params.need_patch_parts)
         patch_parts = getPatchPartsVectorForInternalUsage();
 
-    std::lock_guard lock(currently_processing_in_background_mutex);
-    if (!params.need_data_mutations && !params.need_alter_mutations && mutation_counters.num_metadata <= 0)
-        return std::make_shared<MutationsSnapshot>(params, std::move(mutations_snapshot_counters), std::move(mutations_snapshot), std::move(patch_parts));
-
-    UInt64 max_mutation_version = std::numeric_limits<UInt64>::max();
-    if (params.max_mutation_versions && !params.max_mutation_versions->empty())
-        max_mutation_version = params.max_mutation_versions->begin()->second;
-
-    for (const auto & [version, entry] : current_mutations_by_version)
     {
-        /// Copy a pointer to all commands to avoid extracting and copying them.
-        /// Required commands will be copied later only for specific parts.
-        if (version <= max_mutation_version && MergeTreeData::IMutationsSnapshot::needIncludeMutationToSnapshot(params, *entry.commands))
+        std::lock_guard lock(currently_processing_in_background_mutex);
+        if (params.need_data_mutations || params.need_alter_mutations || mutation_counters.num_metadata > 0)
         {
-            mutations_snapshot.emplace(version, entry.commands);
-            incrementMutationsCounters(mutations_snapshot_counters, *entry.commands);
+            UInt64 max_mutation_version = std::numeric_limits<UInt64>::max();
+            if (params.max_mutation_versions && !params.max_mutation_versions->empty())
+                max_mutation_version = params.max_mutation_versions->begin()->second;
+
+            for (const auto & [version, entry] : current_mutations_by_version)
+            {
+                /// Copy a pointer to all commands to avoid extracting and copying them.
+                /// Required commands will be copied later only for specific parts.
+                if (version <= max_mutation_version && MergeTreeData::IMutationsSnapshot::needIncludeMutationToSnapshot(params, *entry.commands))
+                {
+                    mutations_snapshot.emplace(version, entry.commands);
+                    incrementMutationsCounters(mutations_snapshot_counters, *entry.commands);
+                }
+            }
         }
     }
 
-    return std::make_shared<MutationsSnapshot>(params, std::move(mutations_snapshot_counters), std::move(mutations_snapshot), std::move(patch_parts));
+    /** Resolve the partitions of the commands that name one, so that the per-part selection can keep such
+      * a command out of the partitions it does not target. Only those commands are parsed -
+      * `has_partition` is recorded when the command itself is parsed - so a table with many pending
+      * mutations of the ordinary kind pays nothing here.
+      *
+      * Outside the mutations mutex: resolving a partition expression takes the data parts lock, which is
+      * acquired before the mutations mutex elsewhere. The commands are kept alive by the snapshot.
+      */
+    for (const auto & [version, commands] : mutations_snapshot)
+    {
+        for (const auto & command : *commands)
+        {
+            if (!command.has_partition || partition_ids_by_command.contains(command.ast_text))
+                continue;
+
+            auto command_ast = command.ast();
+            if (!command_ast)
+                continue;
+
+            NameSet partition_ids;
+            if (const auto * partitions = command_ast->partitions)
+            {
+                for (const auto & partition : partitions->children)
+                    partition_ids.insert(getPartitionIDFromQuery(partition, getContext(), nullptr));
+            }
+            else if (const auto * partition = command_ast->partition)
+            {
+                partition_ids.insert(getPartitionIDFromQuery(partition->clone(), getContext(), nullptr));
+            }
+
+            if (!partition_ids.empty())
+                partition_ids_by_command.emplace(command.ast_text, std::move(partition_ids));
+        }
+    }
+
+    return std::make_shared<MutationsSnapshot>(
+        params, std::move(mutations_snapshot_counters), std::move(mutations_snapshot), std::move(patch_parts),
+        std::move(partition_ids_by_command));
 }
 
 MutationCounters StorageMergeTree::getMutationCounters() const

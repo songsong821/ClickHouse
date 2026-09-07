@@ -118,6 +118,12 @@ struct MutationCommand
     /// Required to distinguish read command used for MODIFY COLUMN.
     bool read_for_patch = false;
 
+    /// Whether the command names a partition (`... IN PARTITION p`), which scopes it to that partition
+    /// alone. Recorded at parse time so that a caller which has to respect the scope can find the few
+    /// commands that have one without re-parsing `ast_text` for every command; the partition expression
+    /// itself is read from the parsed AST.
+    bool has_partition = false;
+
     /// If `parse_alter_commands` is true, more alter commands are accepted as
     /// mutation commands. `max_parser_depth` / `max_parser_backtracks` are
     /// captured into the returned command so subsequent on-demand re-parsing

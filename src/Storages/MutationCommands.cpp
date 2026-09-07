@@ -137,6 +137,7 @@ std::optional<MutationCommand> MutationCommand::parse(
     res.ast_text = command.formatWithSecretsOneLine();
     res.max_parser_depth = max_parser_depth;
     res.max_parser_backtracks = max_parser_backtracks;
+    res.has_partition = command.partition != nullptr || command.partitions != nullptr;
     if (with_pure_metadata_commands)
     {
         res.type = ALTER_WITHOUT_MUTATION;
