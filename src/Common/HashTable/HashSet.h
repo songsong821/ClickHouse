@@ -145,25 +145,12 @@ template <
     typename Grower = TwoLevelHashTableGrower<>,
     typename Allocator = HashTableAllocator,
     Int32 bits_for_bucket = DEFAULT_BITS_FOR_BUCKET>
-class TwoLevelHashSetTable : public TwoLevelHashTable<
-                                 Key,
-                                 TCell,
-                                 Hash,
-                                 Grower,
-                                 Allocator,
-                                 HashSetTable<Key, TCell, Hash, Grower, Allocator>,
-                                 bits_for_bucket>
+class TwoLevelHashSetTable
+    : public TwoLevelHashTable<Key, TCell, Hash, Grower, Allocator, HashSetTable<Key, TCell, Hash, Grower, Allocator>, bits_for_bucket>
 {
 public:
     using Self = TwoLevelHashSetTable;
-    using Base = TwoLevelHashTable<
-        Key,
-        TCell,
-        Hash,
-        Grower,
-        Allocator,
-        HashSetTable<Key, TCell, Hash, Grower, Allocator>,
-        bits_for_bucket>;
+    using Base = TwoLevelHashTable<Key, TCell, Hash, Grower, Allocator, HashSetTable<Key, TCell, Hash, Grower, Allocator>, bits_for_bucket>;
 
     using Base::Base;
 

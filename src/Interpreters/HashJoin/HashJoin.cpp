@@ -1339,10 +1339,7 @@ bool HashJoin::addBlockToJoin(const Block & block, ScatteredBlock::Selector sele
                     else
                     {
                         using Map = std::decay_t<decltype(map)>;
-                        /// The fixed-range maps route in cache-line-sized blocks, so the slot a row
-                        /// lands in depends on the cell size and therefore on the mapped type. A set
-                        /// cell is narrower than any of the others, so it needs its own kind rather
-                        /// than falling through to one of them.
+                        /// A set cell is narrower than the others, so it needs its own kind here.
                         constexpr MapsKind scatter_maps_kind = std::is_same_v<Map, HashJoin::MapsOne> ? MapsKind::One
                             : std::is_same_v<Map, HashJoin::MapsAll>                                  ? MapsKind::All
                             : std::is_same_v<Map, HashJoin::MapsSet>                                  ? MapsKind::Set
