@@ -110,11 +110,11 @@ INSERT INTO t_compact_stripes SELECT number, number * 10, repeat('x', number % 7
 SELECT 'multiple buffers';
 SYSTEM CLEAR MARK CACHE;
 SELECT sum(a), sum(b), sum(length(s)), sum(json.k::UInt64), countDistinct(json.n.m), max(toString(json)) FROM t_compact_stripes
-SETTINGS max_threads = 1, log_comment = '05087 multiple buffers, four columns';
+SETTINGS max_threads = 1, log_comment = '05113 multiple buffers, four columns';
 
 SYSTEM CLEAR MARK CACHE;
 SELECT sum(a), sum(length(s)) FROM t_compact_stripes
-SETTINGS max_threads = 1, log_comment = '05087 multiple buffers, two columns';
+SETTINGS max_threads = 1, log_comment = '05113 multiple buffers, two columns';
 
 DROP TABLE t_compact_stripes;
 
@@ -129,12 +129,12 @@ INSERT INTO t_compact_stripes SELECT number, number * 10, repeat('x', number % 7
 SELECT 'single buffer';
 SYSTEM CLEAR MARK CACHE;
 SELECT sum(a), sum(b), sum(length(s)), sum(json.k::UInt64) FROM t_compact_stripes
-SETTINGS max_threads = 1, log_comment = '05087 single buffer, four columns';
+SETTINGS max_threads = 1, log_comment = '05113 single buffer, four columns';
 
 SYSTEM FLUSH LOGS query_log;
 
 SELECT log_comment, ProfileEvents['CreatedReadBufferOrdinary'] FROM system.query_log
-WHERE current_database = currentDatabase() AND type = 'QueryFinish' AND log_comment LIKE '05087%'
+WHERE current_database = currentDatabase() AND type = 'QueryFinish' AND log_comment LIKE '05113%'
 ORDER BY event_time_microseconds;
 
 DROP TABLE t_compact_stripes;
