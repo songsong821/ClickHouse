@@ -1482,6 +1482,10 @@ inline bool tryReadTime64Text(Time64 & time64, UInt32 scale, ReadBuffer & buf, c
 /// `toDateTime64` and the `Values` format. Parsing stops at the first character that is not part of the
 /// number (e.g. the `,` or `}` following the value in JSON). The `AsRawValue` variants implement the legacy
 /// behavior, where the number is the raw underlying value.
+/// Whether `ticks` is inside the DateTime64 calendar range for `scale`, and the nearest tick when it is not
+bool isDateTime64TicksInRange(Int64 ticks, UInt32 scale);
+Int64 clampDateTime64Ticks(Int64 ticks, UInt32 scale);
+
 void readDateTimeAsNumber(time_t & x, ReadBuffer & buf, bool saturate_on_overflow = true);
 bool tryReadDateTimeAsNumber(time_t & x, ReadBuffer & buf, bool saturate_on_overflow = true);
 void readDateTimeAsRawValue(time_t & x, ReadBuffer & buf, bool saturate_on_overflow = true);

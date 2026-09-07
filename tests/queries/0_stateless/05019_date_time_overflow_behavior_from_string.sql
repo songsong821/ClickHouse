@@ -100,3 +100,15 @@ SELECT j.d FROM format(JSONEachRow, 'j JSON(d DateTime64(3))', '{"j":{"d":"2299-
 
 SELECT 'throw, JSONExtract keeps returning a default or NULL';
 SELECT JSONExtract('{"d":"2150-12-31"}', 'd', 'Date'), JSONExtract('{"d":"2150-12-31"}', 'd', 'Nullable(Date)'), JSONExtract('{"d":"2149-06-06"}', 'd', 'Date');
+
+SELECT 'saturate, an out-of-calendar numeric token clamps instead of being stored raw';
+SELECT v, toUnixTimestamp64Milli(v) FROM format(JSONEachRow, 'v DateTime64(3)', '{"v":99999999999999}') SETTINGS date_time_overflow_behavior = 'saturate';
+SELECT v FROM format(JSONEachRow, 'v DateTime64(3)', '{"v":-99999999999999}') SETTINGS date_time_overflow_behavior = 'saturate';
+SELECT a.v = b.v FROM (SELECT v FROM format(JSONEachRow, 'v DateTime64(3)', '{"v":99999999999999}')) a, (SELECT v FROM format(JSONEachRow, 'v DateTime64(3)', '{"v":88888888888888}')) b SETTINGS date_time_overflow_behavior = 'saturate';
+
+SELECT 'throw, every typed JSON DateTime64 carrier is checked';
+SELECT j.d FROM format(JSONEachRow, 'j JSON(d DateTime64(3))', '{"j":{"d":253402300800}}'); -- { serverError INCORRECT_DATA }
+SELECT j.d FROM format(JSONEachRow, 'j JSON(d DateTime64(3))', '{"j":{"d":-99999999999999}}'); -- { serverError INCORRECT_DATA }
+SELECT j.d FROM format(JSONEachRow, 'j JSON(d DateTime64(3))', '{"j":{"d":99999999999999.5}}'); -- { serverError INCORRECT_DATA }
+SELECT j.d FROM format(JSONEachRow, 'j JSON(d DateTime64(3))', '{"j":{"d":1700000000}}');
+SELECT JSONExtract('{"d":253402300800}', 'd', 'DateTime64(3)'), JSONExtract('{"d":253402300800}', 'd', 'Nullable(DateTime64(3))');
