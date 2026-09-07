@@ -149,4 +149,16 @@ positive_control "exact aggregates" "count(), min(v), max(v)"
 # above would be satisfied just as well by a checker that rejected all aliases outright.
 positive_control "safe aliases" "BIT_AND(v), BIT_OR(v), BIT_XOR(v)"
 
+# And one alias whose canonical name is a `quantile*`: `medianDeterministic` resolves to
+# `quantileDeterministic`, which is NOT on the backstop list because
+# `ReservoirSamplerDeterministic` retains a sample purely by hash and re-thins on merge, so a
+# merged state equals the directly accumulated one. This is the probe that catches alias
+# resolution reaching a neighbouring `quantile*` entry (`median` and the approximate
+# `quantile*` families ARE listed) and skipping a checkable query.
+# The determinator is the constant `1` rather than `v`: with `v` in that position the oracle
+# skips the query for an unrelated reason (the `State`/`Merge` rewrite of a determinator
+# that is itself the aggregated column does not survive), which would make the probe
+# vacuous. A constant determinator still exercises the alias path, which is what is asserted.
+positive_control "medianDeterministic" "medianDeterministic(v, 1)"
+
 $CLICKHOUSE_CLIENT --query "DROP TABLE oracle_approx_top"

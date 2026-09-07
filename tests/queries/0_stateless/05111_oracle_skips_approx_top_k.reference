@@ -8,3 +8,4 @@ medianTDigest not checked
 anova not checked
 exact aggregates checked
 safe aliases checked
+medianDeterministic checked
