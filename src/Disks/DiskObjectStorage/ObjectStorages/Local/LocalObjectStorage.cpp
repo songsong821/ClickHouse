@@ -146,7 +146,7 @@ LocalObjectStorage::LocalObjectStorage(LocalObjectStorageSettings settings_)
 fs::path resolvePathRelativelyToBase(const String & path, const String & base_path)
 {
     const auto configured_base = pathFromString(base_path).lexically_normal();
-    const auto candidate = pathFromString(path);
+    auto candidate = pathFromString(path); /// Not `const`: it is returned below, and constness would block the move.
 
     auto is_inside = [&](const fs::path & to_check)
     {
