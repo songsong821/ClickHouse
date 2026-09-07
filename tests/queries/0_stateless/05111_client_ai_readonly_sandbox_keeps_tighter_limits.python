@@ -13,11 +13,15 @@ import os
 import pty
 import select
 import shlex
+import signal
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 TIMEOUT_SECONDS = 120
+
+# How long a client may take to end after its terminal was closed, before it is killed.
+TEARDOWN_SECONDS = 30
 
 # `clickhouse-test` prints this file when the test fails, and it names it after the test case -
 # the `.sh` wrapper - not after this script. Writing anywhere else means the trace of a failure in
@@ -36,14 +40,20 @@ FINAL_ANSWER = "MOCK-DONE"
 
 QUERY = "SELECT getSetting('max_execution_time')"
 
-# The `max_execution_time` of the session, and the value the sandbox must leave the autonomous
-# query with. Everything at or below the 30-second cap is the user's own limit and is kept; only
-# an absent or looser limit is replaced by the cap.
+# The `max_execution_time` of the session, the value the sandbox must leave the autonomous query
+# with, and - where the limit is tight enough for the query to run into it - the failure that
+# proves the same thing. Everything at or below the 30-second cap is the user's own limit and is
+# kept; only an absent or looser limit is replaced by the cap.
+#
+# The autonomous query runs under the limit the sandbox installed, so with a sub-second one it may
+# legitimately not finish: the server then reports the maximum it exceeded, which names the same
+# sub-second value. Either outcome proves the point and neither is possible had the sandbox
+# widened the limit to the 30-second cap, so both are accepted and reported alike.
 CASES = [
-    ("subsecond", "0.5", "0.5"),
-    ("under_the_cap", "10", "10"),
-    ("unlimited", "0", "30"),
-    ("over_the_cap", "120", "30"),
+    ("subsecond", "0.5", "0.5", "maximum: 500.000 ms"),
+    ("under_the_cap", "10", "10", None),
+    ("unlimited", "0", "30", None),
+    ("over_the_cap", "120", "30", None),
 ]
 
 
@@ -168,6 +178,26 @@ def read_until(master, debug_log_fd, predicate, timeout):
     return output
 
 
+def wait_for_client(child_pid):
+    """Wait for the client to end after its terminal was closed, and make sure it is gone. A
+    client that ignores the end of its terminal must not outlive its case, so the wait is bounded
+    and ends in a kill rather than in hanging the test."""
+    deadline = time.time() + TEARDOWN_SECONDS
+    while time.time() < deadline:
+        try:
+            reaped, _ = os.waitpid(child_pid, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if reaped == child_pid:
+            return
+        time.sleep(0.05)
+    try:
+        os.kill(child_pid, signal.SIGKILL)
+        os.waitpid(child_pid, 0)
+    except (ChildProcessError, ProcessLookupError):
+        pass
+
+
 def report_client_if_gone(child_pid):
     """Print how the client ended if it is gone. The expected output has no such line, so it
     shows up in the diff of the failure instead of leaving only unmet expectations behind."""
@@ -225,10 +255,15 @@ def run_case(server, config, name, session_limit):
                 return str(message.get("content"))
         return None
     finally:
-        os.write(master, b"exit\n")
+        # There is no way to type an exit: after answering, the client is still in AI-chat mode,
+        # where `exit` is a question for the agent and not a command. Closing the terminal is
+        # what ends the client, and it is waited for: a request it still has in flight would
+        # otherwise land on the mock provider after the next case has reset `last_request`, and
+        # be read as that case's answer.
         drain(master, debug_log_fd, 1.0)
         os.close(master)
         debug_log_fd.close()
+        wait_for_client(child_pid)
 
 
 def main():
@@ -238,19 +273,26 @@ def main():
     config = make_config(server.server_port)
 
     try:
-        for name, session_limit, expected in CASES:
+        for name, session_limit, expected, timeout_proof in CASES:
             answer = run_case(server, config, name, session_limit)
             if answer is None:
                 print(f"{name}: NO RESULT")
                 continue
-            # The tool answers with a JSON object whose `result` holds the rendered output of the
-            # query: a header line and then the single value on a line of its own.
+            # The tool answers with a JSON object: `result` holds the rendered output of the query
+            # - a header line and then the single value on a line of its own - and a query that
+            # failed comes back as `error` with the message of the server instead.
             try:
-                rendered = json.loads(answer).get("result", "")
+                parsed = json.loads(answer)
             except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict):
+                rendered = str(parsed.get("result", ""))
+                error = str(parsed.get("error", ""))
+            else:
                 rendered = answer
+                error = answer
             values = [line.strip() for line in rendered.splitlines() if line.strip()]
-            if expected in values:
+            if expected in values or (timeout_proof is not None and timeout_proof in error):
                 print(f"{name}: {expected}")
             else:
                 print(f"{name}: UNEXPECTED {answer[:200]}")
