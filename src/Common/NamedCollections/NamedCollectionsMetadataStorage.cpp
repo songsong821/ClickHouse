@@ -20,6 +20,7 @@
 #include <Common/ZooKeeper/KeeperException.h>
 #include <Common/ZooKeeper/ZooKeeper.h>
 #include <Common/ZooKeeper/ZooKeeperCommon.h>
+#include <Common/ZooKeeper/ZooKeeperPathUtils.h>
 #include <Common/escapeForFileName.h>
 #include <Common/logger_useful.h>
 #if CLICKHOUSE_CLOUD
@@ -363,11 +364,13 @@ private:
 
     std::string getPath(const std::string & file_name) const
     {
-        const auto file_name_as_path = fs::path(file_name);
-        if (file_name_as_path.is_absolute())
+        /// A znode path, not a filesystem path, so it is joined in Keeper string space. `absolute`
+        /// here means a leading `/`, which is also what `std::filesystem` would not have called
+        /// absolute on Windows, where it wants a drive.
+        if (file_name.starts_with('/'))
             throw Exception(ErrorCodes::LOGICAL_ERROR, "Filename {} cannot be an absolute path", file_name);
 
-        return pathToGenericString(fs::path(root_path) / file_name_as_path);
+        return zkutil::joinZooKeeperPath(root_path, file_name);
     }
 };
 
