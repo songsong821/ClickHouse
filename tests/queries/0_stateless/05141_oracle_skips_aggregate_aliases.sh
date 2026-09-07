@@ -45,14 +45,19 @@ get_counter()
 # All rounds of one probe are sent as a single multi-statement invocation. Each statement is
 # still fuzzed and oracle-checked on its own - a batch of three copies of a checkable query
 # moves the counter by three - so this only removes client start-up cost, which is what
-# dominates the run time (see the header). A mutation that errors out aborts the rest of its
-# batch, which is harmless: rounds are only insurance against a vacuous pass, and the first
-# round always runs.
+# dominates the run time (see the header).
+#
+# `--ignore-error` is what keeps the rounds independent of each other. Without it the client
+# abandons the rest of a multi-statement batch as soon as one statement raises
+# (`have_error && !ignore_error` in `ClientBase::executeMultiQuery`), so a first round whose
+# mutation happened to produce an invalid query would silently cancel the two rounds that
+# exist precisely to cover that case, and the probe could pass vacuously off a single unlucky
+# attempt - the very thing the rounds are insurance against.
 run_fuzzed_rounds()
 {
     local query="$1"
 
-    $CLICKHOUSE_CLIENT --query "
+    $CLICKHOUSE_CLIENT --ignore-error --query "
         SET send_logs_level = 'fatal';
         SET ast_fuzzer_runs = 1;
         SET ast_fuzzer_oracle = 1;
