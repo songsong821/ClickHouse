@@ -78,7 +78,11 @@ run_fuzzed_rounds()
 # Three rounds, not more. Rounds buy only insurance against a round in which the mutation
 # happens to make the query ineligible for an unrelated reason and the probe passes
 # vacuously; that risk falls off geometrically, so three is already plenty. They do not add
-# detection power - a missing denylist entry moves the counter on the very first round.
+# detection power - a missing denylist entry moves the counter on the very first round - and
+# each extra round costs real time and one more chance of the false failure above. Keep this
+# number small: at eight rounds the whole test took ~204s under `amd_asan_ubsan` and tripped
+# the 180s per-test limit. The rounds are now batched into one client invocation, so raising
+# them is cheaper than it was - that is not a reason to raise them.
 probe()
 {
     local label="$1"
@@ -94,7 +98,10 @@ probe()
     # spelling was skipped" from "this spelling is broken". A `FORMAT Null` is fine here
     # precisely because the oracle is off in this run, so it cannot make the check below
     # vacuous, and the counter cannot move - which is also why the `before` snapshot can be
-    # taken in the same invocation.
+    # taken in the same invocation. Reading it per probe rather than carrying each probe's
+    # reading over as the next one's baseline costs nothing - either way it is three
+    # invocations per probe - and keeps every probe self-contained, which is worth more now
+    # that the probes are spread over two files with positive controls in between.
     if ! before=$($CLICKHOUSE_CLIENT --query "
         SELECT $aggregates FROM oracle_approx_top WHERE v > 5 FORMAT Null;
         SELECT toInt64(sum(value)) FROM system.events WHERE event = 'ASTFuzzerOracleChecks';
