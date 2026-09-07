@@ -130,24 +130,20 @@ void RuntimeFilterEvaluationState::updateStats(UInt64 rows_checked, UInt64 rows_
         skip_budget.replenish(rows_checked, config.blocks_to_skip_before_reenabling);
 }
 
+void RuntimeFilterEvaluationState::recordSkippedBlock(size_t rows_skipped) const
+{
+    stats.rows_skipped += rows_skipped;
+    stats.blocks_skipped++;
+    ProfileEvents::increment(ProfileEvents::RuntimeFilterRowsSkipped, rows_skipped);
+    ProfileEvents::increment(ProfileEvents::RuntimeFilterBlocksSkipped);
+}
+
 bool RuntimeFilterEvaluationState::shouldSkip(size_t next_block_rows) const
 {
-    if (is_fully_disabled)
-    {
-        stats.rows_skipped += next_block_rows;
-        stats.blocks_skipped++;
-        ProfileEvents::increment(ProfileEvents::RuntimeFilterRowsSkipped, next_block_rows);
-        ProfileEvents::increment(ProfileEvents::RuntimeFilterBlocksSkipped);
-        return true;
-    }
-
-    if (!skip_budget.consume(next_block_rows))
+    if (!is_fully_disabled.load() && !skip_budget.consume(next_block_rows))
         return false;
 
-    stats.rows_skipped += next_block_rows;
-    stats.blocks_skipped++;
-    ProfileEvents::increment(ProfileEvents::RuntimeFilterRowsSkipped, next_block_rows);
-    ProfileEvents::increment(ProfileEvents::RuntimeFilterBlocksSkipped);
+    recordSkippedBlock(next_block_rows);
     return true;
 }
 

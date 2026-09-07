@@ -98,6 +98,8 @@ public:
     bool shouldSkip(size_t next_block_rows) const;
 
 private:
+    void recordSkippedBlock(size_t rows_skipped) const;
+
     const RuntimeFilterConfig config;
 
     mutable RuntimeFilterStats stats;
