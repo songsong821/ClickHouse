@@ -71,7 +71,7 @@ Float32 MergeTreeCleanupThread::iterate()
             cleaned_part_like += (*storage_settings)[MergeTreeSetting::leader_election]
                 ? storage.clearOldTemporaryDirectories(
                     (*storage.getSettings())[MergeTreeSetting::temporary_directories_lifetime].totalSeconds(),
-                    {"tmp_", "delete_tmp_", "tmp-fetch_"})
+                    MergeTreeData::ROOT_TEMPORARY_DIRECTORY_PREFIXES_FOR_RECOVERY)
                 : storage.clearOldTemporaryDirectories(
                     (*storage.getSettings())[MergeTreeSetting::temporary_directories_lifetime].totalSeconds());
         }

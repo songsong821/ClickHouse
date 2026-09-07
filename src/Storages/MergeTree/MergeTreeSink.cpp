@@ -82,7 +82,7 @@ MergeTreeSink::MergeTreeSink(
     , deduplicate((*storage.getSettings())[MergeTreeSetting::non_replicated_deduplication_window] > 0 && storage.getDeduplicationLog() != nullptr)
     , commit_epoch(commit_epoch_)
 {
-    LOG_DEBUG(storage.log, "Create MergeTreeSink, deduplicate={}", deduplicate);
+    LOG_TEST(storage.log, "Create MergeTreeSink, deduplicate={}", deduplicate);
 
     /// It's only allowed to throw "too many parts" before write,
     /// because interrupting long-running INSERT query in the middle is not convenient for users.
