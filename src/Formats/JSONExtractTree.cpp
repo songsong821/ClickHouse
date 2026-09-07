@@ -1006,7 +1006,7 @@ public:
                     /// `CAST` and `toDateTime64` do). Parity holds only up to the `Float64` the DOM parser rounded to.
                     String str_value = jsonElementToString<JSONParser>(element, format_settings);
                     ReadBufferFromMemory buf(str_value);
-                    if (!tryReadDateTime64AsNumber(value, scale, buf, format_settings.date_time_overflow_behavior != FormatSettings::DateTimeOverflowBehavior::Throw) || !buf.eof())
+                    if (!tryReadDateTime64AsNumber(value, scale, buf) || !buf.eof())
                     {
                         error = fmt::format("cannot read DateTime64 value from JSON element: {}", str_value);
                         return false;
@@ -1047,18 +1047,6 @@ public:
                     error = fmt::format("cannot read DateTime64 value from JSON element: {}", jsonElementToString<JSONParser>(element, format_settings));
                     return false;
             }
-        }
-
-        /// Every carrier above lands here, and none of them checks the calendar range: the text readers only
-        /// reject a tick overflow and `tryConvertToDecimal` only checks the Int64 tick range.
-        if (!isDateTime64TicksInRange(value.value, scale))
-        {
-            if (format_settings.date_time_overflow_behavior == FormatSettings::DateTimeOverflowBehavior::Throw)
-            {
-                error = fmt::format("value {} is out of bounds of type DateTime64", value.value);
-                return false;
-            }
-            value.value = clampDateTime64Ticks(value.value, scale);
         }
 
         assert_cast<ColumnDateTime64 &>(column).insert(value);

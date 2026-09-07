@@ -2622,33 +2622,6 @@ time_t datetimeSecondsFromNumber(Int128 value, UInt32 unread_scale)
     return static_cast<time_t>(value * multiplier);
 }
 
-/// The DateTime64 range in whole seconds, derived from the extended Date LUT day range (the numeric token is UTC)
-constexpr Int128 datetime64_max_seconds = Int128(DATE_LUT_MAX_EXTEND_DAY_NUM) * 86400 + 86399;
-constexpr Int128 datetime64_min_seconds = Int128(DATE_LUT_MIN_EXTEND_DAY_NUM) * 86400;
-
-/// Whether `ticks` is inside the DateTime64 range for `scale`. The bound is computed in 128 bits: past scale 8 it
-/// exceeds Int64, and then every representable tick count is in range anyway.
-bool datetime64TicksInRangeImpl(DateTime64::NativeType ticks, UInt32 scale)
-{
-    const Int128 multiplier = DecimalUtils::scaleMultiplier<Int128>(scale);
-    /// The last second is representable up to its last tick, while the first one starts exactly on the second
-    return Int128(ticks) <= datetime64_max_seconds * multiplier + multiplier - 1
-        && Int128(ticks) >= datetime64_min_seconds * multiplier;
-}
-
-/// The nearest representable tick for `scale`, for saturating an out-of-calendar value
-DateTime64::NativeType clampDateTime64TicksImpl(DateTime64::NativeType ticks, UInt32 scale)
-{
-    const Int128 multiplier = DecimalUtils::scaleMultiplier<Int128>(scale);
-    const Int128 max_ticks = datetime64_max_seconds * multiplier + multiplier - 1;
-    const Int128 min_ticks = datetime64_min_seconds * multiplier;
-    if (Int128(ticks) > max_ticks)
-        return static_cast<DateTime64::NativeType>(max_ticks);
-    if (Int128(ticks) < min_ticks)
-        return static_cast<DateTime64::NativeType>(min_ticks);
-    return ticks;
-}
-
 /// Scale `value` by the pending decimal places to `DateTime64` ticks and store it; false on overflow. Bound
 /// is checked with truncating division rather than `common::mulOverflow`, a no-op stub for big-int types.
 bool datetime64TicksFromNumber(DateTime64 & x, Int128 value, UInt32 unread_scale)
@@ -2719,7 +2692,7 @@ ReturnType readDateTimeAsRawValueImpl(time_t & x, ReadBuffer & buf, bool saturat
 }
 
 template <typename ReturnType>
-ReturnType readDateTime64AsNumberImpl(DateTime64 & x, UInt32 scale, ReadBuffer & buf, bool saturate_on_overflow)
+ReturnType readDateTime64AsNumberImpl(DateTime64 & x, UInt32 scale, ReadBuffer & buf)
 {
     static constexpr bool throw_exception = std::is_same_v<ReturnType, void>;
     Decimal128 tmp;
@@ -2745,21 +2718,11 @@ ReturnType readDateTime64AsNumberImpl(DateTime64 & x, UInt32 scale, ReadBuffer &
             return ReturnType(false);
     }
 
-    if (!datetime64TicksInRangeImpl(x.value, scale))
-    {
-        if (saturate_on_overflow)
-            x.value = clampDateTime64TicksImpl(x.value, scale);
-        else if constexpr (throw_exception)
-            throw Exception(ErrorCodes::VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE, "Value is out of bounds of type DateTime64");
-        else
-            return ReturnType(false);
-    }
-
     return ReturnType(true);
 }
 
 template <typename ReturnType>
-ReturnType readDateTime64AsRawValueImpl(DateTime64 & x, UInt32 scale, ReadBuffer & buf, bool saturate_on_overflow)
+ReturnType readDateTime64AsRawValueImpl(DateTime64 & x, ReadBuffer & buf)
 {
     static constexpr bool throw_exception = std::is_same_v<ReturnType, void>;
     Int128 tmp = 0;
@@ -2776,32 +2739,19 @@ ReturnType readDateTime64AsRawValueImpl(DateTime64 & x, UInt32 scale, ReadBuffer
             return ReturnType(false);
     }
 
-    if (!datetime64TicksInRangeImpl(x.value, scale))
-    {
-        if (saturate_on_overflow)
-            x.value = clampDateTime64TicksImpl(x.value, scale);
-        else if constexpr (throw_exception)
-            throw Exception(ErrorCodes::VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE, "Value is out of bounds of type DateTime64");
-        else
-            return ReturnType(false);
-    }
-
     return ReturnType(true);
 }
 
 }
-
-bool isDateTime64TicksInRange(Int64 ticks, UInt32 scale) { return datetime64TicksInRangeImpl(ticks, scale); }
-Int64 clampDateTime64Ticks(Int64 ticks, UInt32 scale) { return clampDateTime64TicksImpl(ticks, scale); }
 
 void readDateTimeAsNumber(time_t & x, ReadBuffer & buf, bool saturate_on_overflow) { readDateTimeAsNumberImpl<void>(x, buf, saturate_on_overflow); }
 bool tryReadDateTimeAsNumber(time_t & x, ReadBuffer & buf, bool saturate_on_overflow) { return readDateTimeAsNumberImpl<bool>(x, buf, saturate_on_overflow); }
 void readDateTimeAsRawValue(time_t & x, ReadBuffer & buf, bool saturate_on_overflow) { readDateTimeAsRawValueImpl<void>(x, buf, saturate_on_overflow); }
 bool tryReadDateTimeAsRawValue(time_t & x, ReadBuffer & buf, bool saturate_on_overflow) { return readDateTimeAsRawValueImpl<bool>(x, buf, saturate_on_overflow); }
 
-void readDateTime64AsNumber(DateTime64 & x, UInt32 scale, ReadBuffer & buf, bool saturate_on_overflow) { readDateTime64AsNumberImpl<void>(x, scale, buf, saturate_on_overflow); }
-bool tryReadDateTime64AsNumber(DateTime64 & x, UInt32 scale, ReadBuffer & buf, bool saturate_on_overflow) { return readDateTime64AsNumberImpl<bool>(x, scale, buf, saturate_on_overflow); }
-void readDateTime64AsRawValue(DateTime64 & x, UInt32 scale, ReadBuffer & buf, bool saturate_on_overflow) { readDateTime64AsRawValueImpl<void>(x, scale, buf, saturate_on_overflow); }
-bool tryReadDateTime64AsRawValue(DateTime64 & x, UInt32 scale, ReadBuffer & buf, bool saturate_on_overflow) { return readDateTime64AsRawValueImpl<bool>(x, scale, buf, saturate_on_overflow); }
+void readDateTime64AsNumber(DateTime64 & x, UInt32 scale, ReadBuffer & buf) { readDateTime64AsNumberImpl<void>(x, scale, buf); }
+bool tryReadDateTime64AsNumber(DateTime64 & x, UInt32 scale, ReadBuffer & buf) { return readDateTime64AsNumberImpl<bool>(x, scale, buf); }
+void readDateTime64AsRawValue(DateTime64 & x, ReadBuffer & buf) { readDateTime64AsRawValueImpl<void>(x, buf); }
+bool tryReadDateTime64AsRawValue(DateTime64 & x, ReadBuffer & buf) { return readDateTime64AsRawValueImpl<bool>(x, buf); }
 
 }
