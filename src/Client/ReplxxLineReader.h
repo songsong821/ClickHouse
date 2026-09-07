@@ -69,6 +69,8 @@ private:
     /// editable line shows the question without it. Before the action, the prefix is restored on
     /// the current line so replxx saves the entry in its stored form; after it, the recalled
     /// entry sets the mode (AI vs SQL) and the prefix is stripped from the editable line again.
+    /// The hint suppression is armed around the action as well (see `suppress_hints_once`): the
+    /// entry it recalls is a line displayed programmatically and must not pop hints by itself.
     replxx::Replxx::ACTION_RESULT historyNavigate(replxx::Replxx::ACTION action, char32_t code);
     void restoreHistoryPrefix();
     void syncModeFromHistory();
@@ -84,6 +86,11 @@ private:
 
     int executeEditor(const std::string & path);
     void openEditor(bool format_query);
+
+    /// Run a history-search action: a selected entry needs exactly the treatment a recalled one
+    /// gets, so this goes through `historyNavigate`. C-R, C-S, Meta-R and the ClickHouse regular
+    /// history-search binding all use this wrapper.
+    replxx::Replxx::ACTION_RESULT historySearch(replxx::Replxx::ACTION action, char32_t code);
 
     /// Whether the text cursor is at the very end of the input (where as-you-type hints render).
     bool isCursorAtEndOfInput();
