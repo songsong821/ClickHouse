@@ -137,11 +137,7 @@ public:
     size_t getMaxBuildThreads() const override { return max_threads; }
     bool supportParallelNonJoinedBlocksProcessing() const override { return supports_parallel_non_joined_blocks_processing; }
 
-    void onBuildPhaseFinish() override
-    {
-        std::shared_lock lock(switch_mutex);
-        join->onBuildPhaseFinish();
-    }
+    void onBuildPhaseFinish() override;
 
     void onProbePhaseFinish(size_t matched_right_rows) override
     {

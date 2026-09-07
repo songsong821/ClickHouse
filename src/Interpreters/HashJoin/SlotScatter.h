@@ -14,6 +14,7 @@ enum class MapsKind : uint8_t
     One,
     All,
     Asof,
+    Set,
 };
 
 struct SlotScatter

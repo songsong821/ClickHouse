@@ -154,6 +154,12 @@ SlotScatter scatterBlockBySlot(
                         return scatterImpl<HashJoin::Type::NAME, MapAsof>( \
                             key_columns, key_sizes, selector, num_slots, is_asof); \
                     } \
+                    case MapsKind::Set: \
+                    { \
+                        using MapSet = typename decltype(std::declval<HashJoin::MapsSet>().NAME)::element_type; \
+                        return scatterImpl<HashJoin::Type::NAME, MapSet>( \
+                            key_columns, key_sizes, selector, num_slots, is_asof); \
+                    } \
                 } \
             } \
             else \

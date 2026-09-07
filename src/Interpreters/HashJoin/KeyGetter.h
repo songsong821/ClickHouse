@@ -124,10 +124,15 @@ struct LowCardinalityKeyGetterForJoin
         bool inserted = false;
         data.emplace(key_holder, it, inserted, routingHashForRow(data, row_, pool));
 
-        auto & mapped = it->getMapped();
-        if (inserted)
-            new (&mapped) MappedNonConst();
-        return EmplaceResult(mapped, mapped, inserted);
+        if constexpr (has_mapped)
+        {
+            auto & mapped = it->getMapped();
+            if (inserted)
+                new (&mapped) MappedNonConst();
+            return EmplaceResult(mapped, mapped, inserted);
+        }
+        else
+            return EmplaceResult(inserted);
     }
 
     template <typename Data>
@@ -143,7 +148,10 @@ struct LowCardinalityKeyGetterForJoin
             size_t cached_offset = 0;
             if constexpr (use_offset)
                 cached_offset = offset_cache[row];
-            return FindResult(mapped_cache[row], visit_cache[row] == 1, cached_offset);
+            if constexpr (has_mapped)
+                return FindResult(mapped_cache[row], visit_cache[row] == 1, cached_offset);
+            else
+                return FindResult(visit_cache[row] == 1, cached_offset);
         }
 
         auto key_holder = base.getKeyHolder(row, pool);
@@ -152,8 +160,6 @@ struct LowCardinalityKeyGetterForJoin
         auto it = row < saved_hash.size() ? data.find(key, saved_hash[row]) : data.find(key);
 
         const bool found = it;
-        Mapped * mapped = found ? &it->getMapped() : nullptr;
-
         /// Only the used-flag paths ask; `freezeMapsForProbing` computed the prefix sums
         /// before any probe.
         size_t offset = 0;
@@ -161,10 +167,17 @@ struct LowCardinalityKeyGetterForJoin
             offset = found ? data.offsetInternal(it) : 0;
 
         visit_cache[row] = found ? 1 : 2;
-        mapped_cache[row] = mapped;
         if constexpr (use_offset)
             offset_cache[row] = offset;
-        return FindResult(mapped, found, offset);
+
+        if constexpr (has_mapped)
+        {
+            Mapped * mapped = found ? &it->getMapped() : nullptr;
+            mapped_cache[row] = mapped;
+            return FindResult(mapped, found, offset);
+        }
+        else
+            return FindResult(found, offset);
     }
 };
 
@@ -262,13 +275,23 @@ KEYGETTER_TWO_LEVEL_IMPL(key8)
 KEYGETTER_TWO_LEVEL_IMPL(key16)
 #undef KEYGETTER_TWO_LEVEL_IMPL
 
+/// Set tables, which joins that never read a right-side row run on, have no mapped value in their
+/// cells: they report the `VoidMapped` placeholder, while the column hashing methods spell the absence
+/// of a mapped value as `void`.
+template <typename Data>
+struct JoinMappedType
+{
+    using Raw = typename std::remove_const_t<Data>::mapped_type;
+    using Type = std::conditional_t<std::is_same_v<Raw, VoidMapped>, void, Raw>;
+};
+
 template <HashJoin::Type type, typename Data, bool use_offset>
 struct KeyGetterForType
 {
-    using Value = Data::value_type;
-    using Mapped_t = Data::mapped_type;
-    using Mapped = std::conditional_t<std::is_const_v<Data>, const Mapped_t, Mapped_t>;
-    using Type = KeyGetterForTypeImpl<type, Value, Mapped, use_offset>::Type;
+    using Value = typename Data::value_type;
+    using Mapped_t = typename JoinMappedType<Data>::Type;
+    using Mapped = std::conditional_t<std::is_const_v<Data> && !std::is_void_v<Mapped_t>, const Mapped_t, Mapped_t>;
+    using Type = typename KeyGetterForTypeImpl<type, Value, Mapped, use_offset>::Type;
 };
 
 /// Builds one clause's key getter. For ASOF the last key column is the inequality one, which the

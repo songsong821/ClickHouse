@@ -60,6 +60,8 @@ SpillingHashJoin::SpillingHashJoin(
         stats_collecting_params_,
         max_threads,
         use_parallel_layout_);
+    /// Until the build phase ends this join may have to hand its right blocks to `GraceHashJoin`.
+    in_memory_hash_join->keepRightBlocksForAnotherAlgorithm();
     supports_parallel_non_joined_blocks_processing = in_memory_hash_join->supportParallelNonJoinedBlocksProcessing();
 }
 
@@ -200,6 +202,12 @@ void SpillingHashJoin::onBuildPhaseFinish()
     }
 
     chosen_join->onBuildPhaseFinish();
+
+    /// The switch to `GraceHashJoin` can only happen while collecting, and that is over: whatever
+    /// right blocks were kept in case it did are now dead weight for the whole probe phase, so a
+    /// join that stores only the keys can drop them.
+    if (state.load(std::memory_order_acquire) == State::IN_MEMORY_JOIN)
+        in_memory_hash_join->dropRightBlocksKeptForAnotherAlgorithm();
 }
 
 void SpillingHashJoin::onProbePhaseFinish(size_t matched_right_rows)

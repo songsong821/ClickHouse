@@ -25,8 +25,12 @@
 #include <Common/HashTable/BucketPartitionedTable.h>
 #include <Common/CacheLine.h>
 #include <Common/HashTable/FixedHashMap.h>
+#include <Common/HashTable/FixedHashSet.h>
 #include <Common/HashTable/HashMap.h>
+#include <Common/HashTable/HashSet.h>
+#include <Common/HashTable/HashTableTraits.h>
 #include <Common/HashTable/PartitionedFixedHashMap.h>
+#include <Common/HashTable/PartitionedFixedHashSet.h>
 #include <Common/HashTable/TwoLevelHashMap.h>
 
 namespace DB
@@ -45,7 +49,23 @@ namespace JoinStuff
 class JoinUsedFlags;
 }
 
-template <JoinKind KIND, JoinStrictness STRICTNESS, typename MapsTemplate> // NOLINT(readability-identifier-naming)
+/// Which flavour of the join maps a join runs on.
+///  - `Default` is the smallest map the strictness allows: `HashJoin::MapsOne`, which stores a single
+///    right row per key, wherever one row is enough (LEFT ANY/SEMI/ANTI), `HashJoin::MapsAll` otherwise.
+///  - `All` forces `HashJoin::MapsAll`, which stores every right row of a key. It is required when there
+///    is a mixed inequal condition in the join condition, for example `t1.a = t2.a AND t1.b > t2.b`: we
+///    select all matched rows from the map and filter them by `t1.b > t2.b`.
+///  - `Set` is `HashJoin::MapsSet`, which stores no right row at all. It is only valid for joins whose
+///    result never contains a value taken from a right row, so the map only has to answer whether a key
+///    is present. See `HashJoin::canUseSetMaps` for when it is picked.
+enum class JoinMapsKind : uint8_t
+{
+    Default,
+    All,
+    Set,
+};
+
+template <JoinKind KIND, JoinStrictness STRICTNESS, typename MapsTemplate>
 class HashJoinMethods;
 
 /// Zero bits is one bucket, where routing folds away and the map behaves as single-level.
@@ -73,41 +93,71 @@ struct BuildResult
     size_t new_keys = 0;
 };
 
+/// A join whose result never contains a value taken from a right row - see `MapGetter` - does not
+/// need the mapped part of a cell at all: the table only has to answer whether a key is present.
+/// Such a join instantiates the maps with `VoidMapped`, and every alias below then selects the set
+/// counterpart of the same partitioned table, so a cell holds the key alone.
+template <typename Mapped>
+constexpr bool is_join_set_mapped = std::is_same_v<Mapped, VoidMapped>;
+
 /// The two-level grower starts a one-bucket map too small: two extra rehashes on a full-size
 /// map, 35-44% slower `FillingRightJoinSide` at 500k keys. It is the right choice at 256.
 template <typename Key, typename Mapped, typename Hash = DefaultHash<Key>>
-using JoinHashMap
-    = TwoLevelHashMap<Key, Mapped, Hash, HashTableGrowerWithPrecalculation<>, HashTableAllocator, HashMapTable, BITS_FOR_BUCKET_SERIAL>;
+using JoinHashMap = std::conditional_t<
+    is_join_set_mapped<Mapped>,
+    TwoLevelHashSet<Key, Hash, HashTableGrowerWithPrecalculation<>, HashTableAllocator, BITS_FOR_BUCKET_SERIAL>,
+    TwoLevelHashMap<
+        Key,
+        Mapped,
+        Hash,
+        HashTableGrowerWithPrecalculation<>,
+        HashTableAllocator,
+        HashMapTable,
+        BITS_FOR_BUCKET_SERIAL>>;
 
 template <typename Key, typename Mapped, typename Hash = DefaultHash<Key>>
-using JoinHashMapWithSavedHash = TwoLevelHashMapWithSavedHash<
-    Key,
-    Mapped,
-    Hash,
-    HashTableGrowerWithPrecalculation<>,
-    HashTableAllocator,
-    HashMapTable,
-    BITS_FOR_BUCKET_SERIAL>;
+using JoinHashMapWithSavedHash = std::conditional_t<
+    is_join_set_mapped<Mapped>,
+    TwoLevelHashSetWithSavedHash<Key, Hash, HashTableGrowerWithPrecalculation<>, HashTableAllocator, BITS_FOR_BUCKET_SERIAL>,
+    TwoLevelHashMapWithSavedHash<
+        Key,
+        Mapped,
+        Hash,
+        HashTableGrowerWithPrecalculation<>,
+        HashTableAllocator,
+        HashMapTable,
+        BITS_FOR_BUCKET_SERIAL>>;
 
 template <typename Key, typename Mapped, typename Hash = DefaultHash<Key>>
-using TwoLevelJoinHashMap
-    = TwoLevelHashMap<Key, Mapped, Hash, TwoLevelHashTableGrower<>, HashTableAllocator, HashMapTable, BITS_FOR_BUCKET_TWO_LEVEL>;
+using TwoLevelJoinHashMap = std::conditional_t<
+    is_join_set_mapped<Mapped>,
+    TwoLevelHashSet<Key, Hash, TwoLevelHashTableGrower<>, HashTableAllocator, BITS_FOR_BUCKET_TWO_LEVEL>,
+    TwoLevelHashMap<Key, Mapped, Hash, TwoLevelHashTableGrower<>, HashTableAllocator, HashMapTable, BITS_FOR_BUCKET_TWO_LEVEL>>;
 
 template <typename Key, typename Mapped, typename Hash = DefaultHash<Key>>
-using TwoLevelJoinHashMapWithSavedHash = TwoLevelHashMapWithSavedHash<
-    Key,
-    Mapped,
-    Hash,
-    TwoLevelHashTableGrower<>,
-    HashTableAllocator,
-    HashMapTable,
-    BITS_FOR_BUCKET_TWO_LEVEL>;
+using TwoLevelJoinHashMapWithSavedHash = std::conditional_t<
+    is_join_set_mapped<Mapped>,
+    TwoLevelHashSetWithSavedHash<Key, Hash, TwoLevelHashTableGrower<>, HashTableAllocator, BITS_FOR_BUCKET_TWO_LEVEL>,
+    TwoLevelHashMapWithSavedHash<
+        Key,
+        Mapped,
+        Hash,
+        TwoLevelHashTableGrower<>,
+        HashTableAllocator,
+        HashMapTable,
+        BITS_FOR_BUCKET_TWO_LEVEL>>;
 
 template <typename Key, typename Mapped, size_t size_bits = sizeof(Key) * 8>
-using JoinFixedHashMap = PartitionedFixedHashMap<Key, Mapped, size_bits, BITS_FOR_BUCKET_SERIAL>;
+using JoinFixedHashMap = std::conditional_t<
+    is_join_set_mapped<Mapped>,
+    PartitionedFixedHashSet<Key, size_bits, BITS_FOR_BUCKET_SERIAL>,
+    PartitionedFixedHashMap<Key, Mapped, size_bits, BITS_FOR_BUCKET_SERIAL>>;
 
 template <typename Key, typename Mapped, size_t size_bits = sizeof(Key) * 8>
-using TwoLevelJoinFixedHashMap = PartitionedFixedHashMap<Key, Mapped, size_bits, BITS_FOR_BUCKET_TWO_LEVEL>;
+using TwoLevelJoinFixedHashMap = std::conditional_t<
+    is_join_set_mapped<Mapped>,
+    PartitionedFixedHashSet<Key, size_bits, BITS_FOR_BUCKET_TWO_LEVEL>,
+    PartitionedFixedHashMap<Key, Mapped, size_bits, BITS_FOR_BUCKET_TWO_LEVEL>>;
 
 static_assert(BucketPartitionedMap<JoinHashMap<UInt64, RowRefList>>);
 static_assert(BucketPartitionedMap<JoinHashMapWithSavedHash<std::string_view, RowRefList>>);
@@ -117,6 +167,13 @@ static_assert(BucketPartitionedMap<JoinFixedHashMap<UInt8, RowRefList>>);
 static_assert(BucketPartitionedMap<JoinFixedHashMap<UInt64, RowRefList, 18>>);
 static_assert(BucketPartitionedMap<TwoLevelJoinFixedHashMap<UInt8, RowRefList>>);
 static_assert(BucketPartitionedMap<TwoLevelJoinFixedHashMap<UInt64, RowRefList, 18>>);
+
+/// The set flavour has to stay bucket-partitioned as well, or a semi/anti join would silently fall
+/// back to a single-level table.
+static_assert(BucketPartitionedMap<JoinHashMap<UInt64, VoidMapped>>);
+static_assert(BucketPartitionedMap<TwoLevelJoinHashMap<UInt64, VoidMapped>>);
+static_assert(BucketPartitionedMap<JoinFixedHashMap<UInt8, VoidMapped>>);
+static_assert(BucketPartitionedMap<TwoLevelJoinFixedHashMap<UInt8, VoidMapped>>);
 
 static_assert(JoinHashMap<UInt64, RowRefList>::NUM_BUCKETS == 1);
 static_assert(TwoLevelJoinHashMap<UInt64, RowRefList>::NUM_BUCKETS == NUM_HASH_TABLE_BUCKETS);
@@ -212,6 +269,9 @@ public:
     {
         return getTotals().empty() && getTotalRowCount() == 0;
     }
+
+    /// The left side is streamed through once, each row emitted in input order.
+    bool preservesLeftBlockOrder() const override { return true; }
 
     std::shared_ptr<IJoin> clone(const std::shared_ptr<TableJoin> & table_join_,
         SharedHeader,
@@ -448,6 +508,7 @@ public:
     {
         /// NOLINTBEGIN(bugprone-macro-parentheses)
         using MappedType = Mapped;
+        static constexpr bool has_mapped = !is_join_set_mapped<Mapped>;
         std::shared_ptr<JoinFixedHashMap<UInt8, Mapped>> key8;
         std::shared_ptr<JoinFixedHashMap<UInt16, Mapped>> key16;
         std::shared_ptr<TwoLevelJoinFixedHashMap<UInt8, Mapped>> two_level_key8;
@@ -638,8 +699,9 @@ public:
     using MapsOne = MapsTemplate<RowRef>;
     using MapsAll = MapsTemplate<RowRefList>;
     using MapsAsof = MapsTemplate<AsofRowRefs>;
+    using MapsSet = MapsTemplate<VoidMapped>;
 
-    using MapsVariant = std::variant<MapsOne, MapsAll, MapsAsof>;
+    using MapsVariant = std::variant<MapsOne, MapsAll, MapsAsof, MapsSet>;
 
     struct NullMapHolder
     {
@@ -1000,6 +1062,9 @@ private:
     /// Rows emitted from hash-table matches across all probe threads (excludes default/miss rows).
     size_t hash_table_matches = 0;
 
+    /// Whether the maps store keys alone, see `JoinMapsKind::Set`. Decided once, before they are created.
+    bool use_set_maps = false;
+
     /// Identifier to distinguish different HashJoin instances in logs
     /// Several instances can be created, for example, in GraceHashJoin to handle different buckets
     String instance_log_id;
@@ -1025,7 +1090,31 @@ private:
 
     bool preferUseMapsAll() const;
 
+    bool canUseSetMaps() const;
+
+public:
+    bool mustKeepRightBlocks() const;
+
+    /// Called by the algorithm that wraps this join, before it feeds it anything, when it may take
+    /// the right blocks back out with `releaseJoinedBlocks`. Off by default: a join nobody wraps
+    /// keeps no block a set map does not need, and whether some algorithm merely appears in
+    /// `join_algorithm` says nothing about what was instantiated.
+    void keepRightBlocksForAnotherAlgorithm() { right_blocks_may_be_taken = true; }
+
+    /// Called once that algorithm can no longer take them - it has settled on this join. A join that
+    /// stores only the keys reads nothing from them, so they can go.
+    void dropRightBlocksKeptForAnotherAlgorithm();
+
+private:
+
+    /// The maps flavour this join runs on. All the dispatch entry points take it.
+    JoinMapsKind getMapsKind() const;
+
     bool isUsedByAnotherAlgorithm() const;
+
+    /// Whether a wrapping algorithm said it may take the right blocks. See
+    /// `keepRightBlocksForAnotherAlgorithm`.
+    bool right_blocks_may_be_taken = false;
     bool canRemoveColumnsFromLeftBlock() const;
 
     void shrinkWorkerStoredBlocks(WorkerStoredData & worker);

@@ -287,7 +287,8 @@ void HashJoinMethods<KIND, STRICTNESS, MapsTemplate>::insertFromBlockImplTypeCas
     Arena & pool,
     BuildResult & result)
 {
-    [[maybe_unused]] constexpr bool mapped_one = std::is_same_v<typename HashMap::mapped_type, RowRef>;
+    [[maybe_unused]] constexpr bool mapped_one = std::is_same_v<typename MapsTemplate::MappedType, RowRef>;
+    constexpr bool is_set = SetJoinMaps<MapsTemplate>;
     constexpr bool is_asof_join = STRICTNESS == JoinStrictness::Asof;
 
     const IColumn * asof_column [[maybe_unused]] = nullptr;
@@ -327,8 +328,12 @@ void HashJoinMethods<KIND, STRICTNESS, MapsTemplate>::insertFromBlockImplTypeCas
     }
     auto & key_getter = *key_getter_ptr;
 
-    /// For ALL and ASOF join always insert values
-    result.is_inserted = !mapped_one || is_asof_join;
+    /// For ALL and ASOF join always insert values. A set map keeps no reference into the block, so
+    /// unless the block has to be kept for another algorithm the caller drops it.
+    if constexpr (is_set)
+        result.is_inserted = join.mustKeepRightBlocks();
+    else
+        result.is_inserted = !mapped_one || is_asof_join;
 
     constexpr bool can_prefetch = join_prefetch_supported<KeyGetter, HashMap>;
 
@@ -357,8 +362,9 @@ void HashJoinMethods<KIND, STRICTNESS, MapsTemplate>::insertFromBlockImplTypeCas
         if (null_map && (*null_map)[ind])
         {
             /// nulls are not inserted into hash table,
-            /// keep them for RIGHT and FULL joins
-            result.is_inserted = true;
+            /// keep them for RIGHT and FULL joins - a set map is never used by one of those
+            if constexpr (!is_set)
+                result.is_inserted = true;
             continue;
         }
 
@@ -369,6 +375,8 @@ void HashJoinMethods<KIND, STRICTNESS, MapsTemplate>::insertFromBlockImplTypeCas
         if constexpr (is_asof_join)
             Inserter<HashMap, KeyGetter>::insertAsof(
                 asof_type, asof_inequality, map, key_getter, stored_block_no, key_row, ind, pool, result.new_keys, *asof_column);
+        else if constexpr (is_set)
+            Inserter<HashMap, KeyGetter>::insertKeyOnly(map, key_getter, key_row, pool);
         else if constexpr (mapped_one)
             result.is_inserted |= Inserter<HashMap, KeyGetter>::insertOne(
                 any_take_last_row, map, key_getter, stored_block_no, key_row, ind, pool, result.new_keys);
@@ -526,6 +534,8 @@ void setUsed(IColumn::Filter & filter [[maybe_unused]], size_t pos [[maybe_unuse
     }
 }
 
+/// A set map records that a key is present and nothing else: LEFT ANTI emits a row only when the key
+/// is missing, and LEFT SEMI has no right-side value to emit, so a match only marks the left row.
 template <
     JoinKind KIND,
     JoinStrictness STRICTNESS,
@@ -535,6 +545,36 @@ template <
     typename Map,
     typename KeyGetter,
     typename AddedColumns>
+requires SetJoinMaps<MapsTemplate>
+void processMatch(
+    const typename KeyGetter::FindResult &,
+    [[maybe_unused]] AddedColumns & added_columns,
+    JoinStuff::JoinUsedFlags &,
+    [[maybe_unused]] size_t i,
+    size_t,
+    IColumn::Offset &,
+    KnownRowsHolder<flag_per_row> &,
+    bool)
+{
+    constexpr JoinFeatures<KIND, STRICTNESS, MapsTemplate> join_features;
+    static_assert(
+        join_features.left && (join_features.is_semi_join || join_features.is_anti_join),
+        "A set map is only chosen for LEFT SEMI and LEFT ANTI");
+
+    if constexpr (join_features.is_semi_join)
+        setUsed<need_filter>(added_columns.filter, i, added_columns.matched_rows);
+}
+
+template <
+    JoinKind KIND,
+    JoinStrictness STRICTNESS,
+    bool need_filter,
+    bool flag_per_row,
+    typename MapsTemplate,
+    typename Map,
+    typename KeyGetter,
+    typename AddedColumns>
+requires MappedJoinMaps<MapsTemplate>
 void processMatch(
     const typename KeyGetter::FindResult & find_result,
     AddedColumns & added_columns,

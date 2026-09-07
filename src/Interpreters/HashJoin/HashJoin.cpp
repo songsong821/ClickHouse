@@ -384,13 +384,10 @@ static HashJoin::Type mergeJoinMethods(HashJoin::Type lhs, HashJoin::Type rhs)
 }
 
 /// The right columns a join with several disjuncts adds to the result. Every right key is read to build
-/// the maps, but only the keys the query asks for belong in the result; the analyzer is what says which
-/// those are, so without it every key is kept, as before.
+/// the maps, but only the keys the query asks for belong in the result; `requiredRightKeys` says which
+/// those are - the planner fills it in `setUsedColumns`, `TreeRewriter` in `addJoinedColumn`.
 static Block rightColumnsToAddWithSeveralDisjuncts(const TableJoin & table_join, const Block & right_columns)
 {
-    if (!table_join.enableAnalyzer())
-        return right_columns;
-
     NameSet key_names;
     for (const auto & clause : table_join.getClauses())
         key_names.insert(clause.key_names_right.begin(), clause.key_names_right.end());
@@ -572,6 +569,10 @@ HashJoin::HashJoin(
         kind,
         strictness,
         right_sample_block.dumpStructure());
+
+    use_set_maps = canUseSetMaps();
+    if (use_set_maps)
+        LOG_TRACE(log, "Using key-only hash tables: the join never reads a right row");
 
     for (auto & maps : data->maps)
         dataMapInit(maps);
@@ -755,9 +756,9 @@ void HashJoin::dataMapInit(MapsVariant & map)
         throw Exception(ErrorCodes::LOGICAL_ERROR, "HashJoin::dataMapInit called with empty data");
 
     /// No reserve here: see `slot_space_reserved`.
-    const bool prefer_use_maps_all = preferUseMapsAll();
-    joinDispatchInit(kind, strictness, map, prefer_use_maps_all);
-    joinDispatch(kind, strictness, map, prefer_use_maps_all, [&](auto, auto, auto & map_) { map_.create(data->type); });
+    const auto maps_kind = getMapsKind();
+    joinDispatchInit(kind, strictness, map, maps_kind);
+    joinDispatch(kind, strictness, map, maps_kind, [&](auto, auto, auto & map_) { map_.create(data->type); });
 }
 
 
@@ -766,6 +767,85 @@ bool HashJoin::preferUseMapsAll() const
     return all_join_was_promoted_to_right_any // It means that we built hash tables for ALL strictness, but upon finishing found out that we can switch to RIGHT ANY.
                                               // In this case we still have to use ALL maps.
         || table_join->getMixedJoinExpression() != nullptr;
+}
+
+/// A set map answers whether a key is present and nothing else, so it fits exactly those joins whose
+/// result can never contain a value taken from a right row.
+bool HashJoin::canUseSetMaps() const
+{
+    if (!table_join->enableJoinKeyOnlyHashTables())
+        return false;
+
+    /// A mixed join expression is evaluated against the right rows themselves.
+    if (preferUseMapsAll() || table_join->getMixedJoinExpression())
+        return false;
+
+    /// `StorageJoin` reads its rows back out of the maps, both to `SELECT` from the table and for
+    /// `joinGet`.
+    if (table_join->isSpecialStorage())
+        return false;
+
+    if (kind != JoinKind::Left)
+        return false;
+
+    /// LEFT ANTI emits a left row only when its key is missing, and fills the right columns with
+    /// defaults, so no right row is ever read whatever is selected from the right side.
+    if (strictness == JoinStrictness::Anti)
+        return true;
+
+    /// LEFT SEMI emits the matched left row alone, so it qualifies when nothing of the right side
+    /// besides the join keys - which are taken from the left row - is selected.
+    return strictness == JoinStrictness::Semi && sample_block_with_columns_to_add.columns() == 0;
+}
+
+/// A set map holds no reference into a right block, so the blocks it was built from are not needed - but
+/// the algorithm wrapping this join may still take them back out with `releaseJoinedBlocks`, and then
+/// they have to be there. Only the wrapper knows, and it says so; `join_algorithm` does not, because it
+/// lists what may be chosen rather than what was.
+bool HashJoin::mustKeepRightBlocks() const
+{
+    return right_blocks_may_be_taken;
+}
+
+/// The blocks a set map keeps only for another algorithm are needed while that algorithm can still
+/// take them - which is until the build phase ends: `JoinSwitcher` and `SpillingHashJoin` both take
+/// them out of `addBlockToJoin`, and `GraceHashJoin` while it rebuckets one. Once the wrapper has
+/// settled on this join, they are dead weight for the whole probe phase, so it says so and they go.
+void HashJoin::dropRightBlocksKeptForAnotherAlgorithm()
+{
+    if (!data || getMapsKind() != JoinMapsKind::Set)
+        return;
+
+    /// A nullmap holds a raw pointer into a stored block, and the non-joined stream reads the block
+    /// through it. Both nullmaps are only stored for a RIGHT or FULL join, which never gets a set
+    /// map, so this holds today - it is here so that the drop stays honest if that ever changes.
+    for (const auto & worker : data->workers)
+        if (!worker.nullmaps.empty())
+            return;
+
+    doDebugAsserts();
+    for (auto & worker : data->workers)
+    {
+        for (auto & stored_columns : worker.columns)
+        {
+            data->allocated_size -= stored_columns.allocatedBytes();
+            /// No cell refers to the block, but null the index entry anyway, so that a stale
+            /// reference trips the chassert in `StoredColumnsIndex::at` rather than reading freed
+            /// memory.
+            data->stored_columns_index->clearEntry(stored_columns.block_no);
+        }
+        worker.columns.clear();
+    }
+    doDebugAsserts();
+}
+
+JoinMapsKind HashJoin::getMapsKind() const
+{
+    if (preferUseMapsAll())
+        return JoinMapsKind::All;
+    if (use_set_maps)
+        return JoinMapsKind::Set;
+    return JoinMapsKind::Default;
 }
 
 bool HashJoin::alwaysReturnsEmptySet() const
@@ -789,11 +869,11 @@ void HashJoin::recomputeBucketBytes()
 
     size_t res = data->poolsAllocatedBytes();
 
-    const bool prefer_use_maps_all = preferUseMapsAll();
+    const auto maps_kind = getMapsKind();
     for (const auto & map : data->maps)
     {
         joinDispatch(
-            kind, strictness, map, prefer_use_maps_all, [&](auto, auto, auto & map_) { res += map_.getTotalByteCountImpl(data->type); });
+            kind, strictness, map, maps_kind, [&](auto, auto, auto & map_) { res += map_.getTotalByteCountImpl(data->type); });
     }
 
     data->setBytes(data->bucket_bytes, res);
@@ -1125,7 +1205,7 @@ bool HashJoin::addBlockToJoin(const Block & block, ScatteredBlock::Selector sele
     if (shrink_blocks.load(std::memory_order_relaxed))
         block_to_save = block_to_save.shrinkToFit();
 
-    const bool prefer_use_maps_all = preferUseMapsAll();
+    const auto maps_kind = getMapsKind();
     if (worker_id >= data->workers.size())
         throw Exception(
             ErrorCodes::LOGICAL_ERROR, "Too many HashJoin build workers: claimed {}, capacity {}", worker_id + 1, data->workers.size());
@@ -1243,7 +1323,7 @@ bool HashJoin::addBlockToJoin(const Block & block, ScatteredBlock::Selector sele
                 kind,
                 strictness,
                 data->maps[onexpr_idx],
-                prefer_use_maps_all,
+                maps_kind,
                 [&](auto kind_, auto strictness_, auto & map)
                 {
                     using Methods = HashJoinMethods<kind_, strictness_, std::decay_t<decltype(map)>>;
@@ -1259,14 +1339,19 @@ bool HashJoin::addBlockToJoin(const Block & block, ScatteredBlock::Selector sele
                     else
                     {
                         using Map = std::decay_t<decltype(map)>;
-                        constexpr MapsKind maps_kind = std::is_same_v<Map, HashJoin::MapsOne> ? MapsKind::One
-                            : std::is_same_v<Map, HashJoin::MapsAll>                          ? MapsKind::All
-                                                                                              : MapsKind::Asof;
+                        /// The fixed-range maps route in cache-line-sized blocks, so the slot a row
+                        /// lands in depends on the cell size and therefore on the mapped type. A set
+                        /// cell is narrower than any of the others, so it needs its own kind rather
+                        /// than falling through to one of them.
+                        constexpr MapsKind scatter_maps_kind = std::is_same_v<Map, HashJoin::MapsOne> ? MapsKind::One
+                            : std::is_same_v<Map, HashJoin::MapsAll>                                  ? MapsKind::All
+                            : std::is_same_v<Map, HashJoin::MapsSet>                                  ? MapsKind::Set
+                                                                                                      : MapsKind::Asof;
                         {
                             ProfileEventTimeIncrement<Microseconds> scatter_watch(ProfileEvents::HashJoinBuildScatterMicroseconds);
                             scattered = scatterBlockBySlot(
                                 data->type,
-                                maps_kind,
+                                scatter_maps_kind,
                                 key_columns,
                                 key_sizes[onexpr_idx],
                                 stored_columns->selector,
@@ -1299,7 +1384,7 @@ bool HashJoin::addBlockToJoin(const Block & block, ScatteredBlock::Selector sele
 
                     if (flag_per_row && !per_row_flags_initialized)
                     {
-                        used_flags->reinit<kind_, strictness_, std::is_same_v<std::decay_t<decltype(map)>, MapsAll>>(
+                        used_flags->reinit<kind_, strictness_, mapsKindOf<decltype(map)>()>(
                             worker_id, stored_columns->block_no, stored_columns->blockRows(), stored_columns->selector);
                         per_row_flags_initialized = true;
                     }
@@ -1319,12 +1404,24 @@ bool HashJoin::addBlockToJoin(const Block & block, ScatteredBlock::Selector sele
                 nullmap_stored_for_block = true;
             }
 
-            if (!flag_per_row && !is_inserted && !nullmap_stored_for_block)
+            /// Whether anything that outlives the build phase still points into the block. Per-row used
+            /// flags are keyed by the stored block, so they keep it alive - except on a set map, which is
+            /// never `flagged` (see `MapGetter`), so there are no such flags to begin with.
+            const bool block_is_referenced
+                = is_inserted || nullmap_stored_for_block || (flag_per_row && maps_kind != JoinMapsKind::Set);
+            /// Every clause reads its keys out of the block before it goes. Only a set map gets here with
+            /// more than one clause: several clauses always mean `flag_per_row`.
+            const bool last_clause = onexpr_idx + 1 == onexprs.size();
+
+            if (!block_is_referenced && last_clause)
             {
                 doDebugAsserts();
                 LOG_TRACE(log, "Skipping inserting block with {} rows", rows);
                 data->subBytes(data->allocated_size, data_allocated_bytes);
-                data->rows_to_join.fetch_sub(rows, std::memory_order_relaxed);
+                /// A set map references no block at all, so every block is dropped here even though its
+                /// rows did take part in the join and must stay counted.
+                if (maps_kind != JoinMapsKind::Set)
+                    data->rows_to_join.fetch_sub(rows, std::memory_order_relaxed);
                 /// Nothing was inserted, so no refs to this block exist; null the index entry so
                 /// that a stale ref trips the chassert in `StoredColumnsIndex::at` in debug builds
                 /// (and dereferences nullptr deterministically in release builds) instead of
@@ -1546,7 +1643,7 @@ ColumnWithTypeAndName HashJoin::joinGet(const Block & block, const Block & block
     }
 
     static_assert(
-        !MapGetter<JoinKind::Left, JoinStrictness::Any, false>::flagged,
+        !MapGetter<JoinKind::Left, JoinStrictness::Any, JoinMapsKind::Default>::flagged,
         "joinGet are not protected from hash table changes between block processing");
 
     std::vector<const MapsOne *> maps_vector;
@@ -1610,13 +1707,13 @@ JoinResultPtr HashJoin::runJoinDispatch(ScatteredBlock block)
     for (size_t i = 0; i < table_join->getClauses().size(); ++i)
         maps_vector.push_back(&data->maps[i]);
 
-    const bool prefer_use_maps_all = preferUseMapsAll();
+    const auto maps_kind = getMapsKind();
     JoinResultPtr res;
     const bool joined = joinDispatch(
         kind,
         strictness,
         maps_vector,
-        prefer_use_maps_all,
+        maps_kind,
         [&](auto kind_, auto strictness_, auto & maps_vector_)
         {
             if constexpr (std::is_same_v<std::decay_t<decltype(maps_vector_)>, std::vector<const MapsAll *>>)
@@ -1632,6 +1729,11 @@ JoinResultPtr HashJoin::runJoinDispatch(ScatteredBlock block)
             else if constexpr (std::is_same_v<std::decay_t<decltype(maps_vector_)>, std::vector<const MapsAsof *>>)
             {
                 res = HashJoinMethods<kind_, strictness_, MapsAsof>::joinBlockImpl(
+                    *this, std::move(block), sample_block_with_columns_to_add, maps_vector_);
+            }
+            else if constexpr (std::is_same_v<std::decay_t<decltype(maps_vector_)>, std::vector<const MapsSet *>>)
+            {
+                res = HashJoinMethods<kind_, strictness_, MapsSet>::joinBlockImpl(
                     *this, std::move(block), sample_block_with_columns_to_add, maps_vector_);
             }
             else
@@ -1847,10 +1949,15 @@ public:
         {
             auto fill_callback = [&](auto, auto, auto & map)
             {
-                rows_added = fillColumnsFromMap<with_row_store, with_columns>(map, columns_right);
+                /// Only RIGHT and FULL joins have non-joined rows, and those never run on a set map.
+                if constexpr (SetJoinMaps<decltype(map)>)
+                    throw Exception(ErrorCodes::LOGICAL_ERROR, "Non-joined right rows cannot be produced from a set map");
+                else
+                    rows_added = fillColumnsFromMap<with_row_store, with_columns>(map, columns_right);
             };
-            const bool prefer_use_maps_all = parent.preferUseMapsAll();
-            if (!joinDispatch(parent.kind, parent.strictness, parent.data->maps.front(), prefer_use_maps_all, fill_callback))
+
+            const auto maps_kind = parent.getMapsKind();
+            if (!joinDispatch(parent.kind, parent.strictness, parent.data->maps.front(), maps_kind, fill_callback))
                 throw Exception(
                     ErrorCodes::LOGICAL_ERROR, "Unknown JOIN strictness '{}' (must be on of: ANY, ALL, ASOF)", parent.strictness);
         });
@@ -2243,17 +2350,17 @@ void HashJoin::reuseJoinedData(const HashJoin & join)
     if (flag_per_row)
         throw Exception(ErrorCodes::NOT_IMPLEMENTED, "StorageJoin with ORs is not supported");
 
-    const bool prefer_use_maps_all = preferUseMapsAll();
+    const auto maps_kind = getMapsKind();
     for (auto & map : data->maps)
     {
         joinDispatch(
             kind,
             strictness,
             map,
-            prefer_use_maps_all,
+            maps_kind,
             [this](auto kind_, auto strictness_, auto & map_)
             {
-                used_flags->reinit<kind_, strictness_, std::is_same_v<std::decay_t<decltype(map_)>, MapsAll>>(
+                used_flags->reinit<kind_, strictness_, mapsKindOf<decltype(map_)>()>(
                     map_.getBufferSizeInCells(data->type) + 1);
             });
     }
@@ -2267,6 +2374,14 @@ void HashJoin::reuseJoinedData(const HashJoin & join)
 
 BlocksList HashJoin::releaseJoinedBlocks(bool restructure)
 {
+    /// A set map stores the right blocks only for the algorithm that says it may take them. Asking
+    /// for them without having said so would hand back an empty list and silently lose the right
+    /// side, so say plainly that the join was built for a different contract.
+    if (getMapsKind() == JoinMapsKind::Set && !right_blocks_may_be_taken)
+        throw Exception(
+            ErrorCodes::LOGICAL_ERROR,
+            "Right blocks of a key-only join were asked for, but no algorithm said it would take them");
+
     LOG_TRACE(
         log,
         "{}Join data is being released, {} bytes and {} rows in hash table",
@@ -2613,7 +2728,7 @@ void HashJoin::tryRerangeRightTableData()
         kind,
         strictness,
         data->maps.front(),
-        preferUseMapsAll(),
+        getMapsKind(),
         [&](auto kind_, auto strictness_, auto & map_) { tryRerangeRightTableDataImpl<kind_, decltype(map_), strictness_>(map_); });
     chassert(result);
     data->sorted = true;
@@ -2668,7 +2783,7 @@ void HashJoin::tryConvertToFixedHashMapImpl(MapsTemplate & maps, SourcePtr & sou
 
     size_t range = static_cast<size_t>(max_key - min_key) + 1;
 
-    using Mapped = typename std::decay_t<decltype(source_map)>::mapped_type;
+    using Mapped = typename MapsTemplate::MappedType;
     auto convert_to_fixed_hash_map = [&]<size_t size_bits>(auto & dst_map, Type type)
     {
         using RangeMap = JoinFixedHashMap<Key, Mapped, size_bits>;
@@ -2678,8 +2793,11 @@ void HashJoin::tryConvertToFixedHashMapImpl(MapsTemplate & maps, SourcePtr & sou
             typename RangeMap::LookupResult res;
             bool inserted = false;
             range_map->emplace(source_map_it->getKey() - min_key, res, inserted);
-            if (inserted)
-                res->getMapped() = source_map_it->getMapped();
+            if constexpr (MapsTemplate::has_mapped)
+            {
+                if (inserted)
+                    res->getMapped() = source_map_it->getMapped();
+            }
         }
         dst_map = std::move(range_map);
         data->key_range = {min_key, range};
@@ -2756,14 +2874,14 @@ bool HashJoin::canConvertToFixedHashMap() const
 /// last insert.
 void HashJoin::freezeMapsForProbing()
 {
-    const bool prefer_use_maps_all = preferUseMapsAll();
+    const auto maps_kind = getMapsKind();
     for (auto & map : data->maps)
     {
         joinDispatch(
             kind,
             strictness,
             map,
-            prefer_use_maps_all,
+            maps_kind,
             [this](auto, auto, auto & map_)
             {
                 map_.computeBucketPrefix(data->type);
@@ -2777,17 +2895,17 @@ void HashJoin::reinitUsedFlags()
     if (needUsedFlagsForPerRightTableRow(table_join))
         return;
 
-    const bool prefer_use_maps_all = preferUseMapsAll();
+    const auto maps_kind = getMapsKind();
     for (auto & map : data->maps)
     {
         joinDispatch(
             kind,
             strictness,
             map,
-            prefer_use_maps_all,
+            maps_kind,
             [this](auto kind_, auto strictness_, auto & map_)
             {
-                used_flags->reinitAllowShrinking<kind_, strictness_, std::is_same_v<std::decay_t<decltype(map_)>, MapsAll>>(
+                used_flags->reinitAllowShrinking<kind_, strictness_, mapsKindOf<decltype(map_)>()>(
                     map_.getBufferSizeInCells(data->type) + 1);
             });
     }
@@ -2974,7 +3092,7 @@ void HashJoin::publishSharedRuntimeFilters()
             [&](auto & map)
             {
                 using MapType = std::decay_t<decltype(map)>;
-                if constexpr (std::is_same_v<MapType, MapsOne> || std::is_same_v<MapType, MapsAll>)
+                if constexpr (std::is_same_v<MapType, MapsOne> || std::is_same_v<MapType, MapsAll> || std::is_same_v<MapType, MapsSet>)
                 {
                     auto dispatch = [&]<typename BuildKey>(
                         auto & range_ptr,
@@ -3138,7 +3256,7 @@ void HashJoin::tryConvertToFixedHashMap()
         [&](auto & map)
         {
             using MapType = std::decay_t<decltype(map)>;
-            if constexpr (std::is_same_v<MapType, MapsOne> || std::is_same_v<MapType, MapsAll>)
+            if constexpr (std::is_same_v<MapType, MapsOne> || std::is_same_v<MapType, MapsAll> || std::is_same_v<MapType, MapsSet>)
             {
                 bool is_signed = !right_table_keys.getByPosition(0).type->isValueRepresentedByUnsignedInteger();
                 /// Either source layout converts to the same range map.

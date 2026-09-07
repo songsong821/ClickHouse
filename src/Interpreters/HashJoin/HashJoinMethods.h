@@ -49,6 +49,12 @@ struct Inserter
         return store_row;
     }
 
+    /// A set map holds no reference to a right row, so there is nothing to do beyond adding the key.
+    static ALWAYS_INLINE void insertKeyOnly(HashMap & map, KeyGetter & key_getter, size_t key_row, Arena & pool)
+    {
+        key_getter.emplaceKey(map, key_row, pool);
+    }
+
     static ALWAYS_INLINE bool insertAll(
         const HashJoin &,
         HashMap & map,
@@ -126,7 +132,7 @@ private:
 template <typename KeyGetter>
 constexpr bool share_key_getter_across_buckets = requires { requires KeyGetter::reads_whole_block_at_construction; };
 
-/// MapsTemplate is one of MapsOne, MapsAll and MapsAsof
+/// MapsTemplate is one of MapsOne, MapsAll, MapsAsof and MapsSet
 template <JoinKind KIND, JoinStrictness STRICTNESS, typename MapsTemplate>
 class HashJoinMethods
 {
@@ -260,6 +266,8 @@ extern template class HashJoinMethods<JoinKind::Left, JoinStrictness::Semi, Hash
 extern template class HashJoinMethods<JoinKind::Left, JoinStrictness::Anti, HashJoin::MapsOne>;
 extern template class HashJoinMethods<JoinKind::Left, JoinStrictness::Anti, HashJoin::MapsAll>;
 extern template class HashJoinMethods<JoinKind::Left, JoinStrictness::Asof, HashJoin::MapsAsof>;
+extern template class HashJoinMethods<JoinKind::Left, JoinStrictness::Semi, HashJoin::MapsSet>;
+extern template class HashJoinMethods<JoinKind::Left, JoinStrictness::Anti, HashJoin::MapsSet>;
 
 extern template class HashJoinMethods<JoinKind::Right, JoinStrictness::RightAny, HashJoin::MapsAll>;
 extern template class HashJoinMethods<JoinKind::Right, JoinStrictness::Any, HashJoin::MapsAll>;

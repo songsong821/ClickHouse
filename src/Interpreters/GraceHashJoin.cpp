@@ -848,7 +848,7 @@ GraceHashJoin::InMemoryJoinPtr GraceHashJoin::makeInMemoryJoin(const String & bu
     /// The parallel layout does not. 256 buckets of empty buffers count against
     /// `max_bytes_before_external_join` and do not shrink as Grace adds file buckets, so a small
     /// remainder could rehash past `grace_hash_join_max_buckets`.
-    return std::make_shared<HashJoin>(
+    auto join = std::make_shared<HashJoin>(
         table_join,
         right_sample_block,
         any_take_last_row,
@@ -857,6 +857,10 @@ GraceHashJoin::InMemoryJoinPtr GraceHashJoin::makeInMemoryJoin(const String & bu
         HashJoinStatsCollectingParams{},
         max_threads,
         /*use_parallel_layout=*/false);
+    /// A bucket that outgrows memory is rebucketed, which reads its right blocks back out - and that
+    /// can happen at any point, so these blocks are never dropped.
+    join->keepRightBlocksForAnotherAlgorithm();
+    return join;
 }
 
 Block GraceHashJoin::prepareRightBlock(const Block & block)

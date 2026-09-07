@@ -69,6 +69,8 @@ JoinSwitcher::JoinSwitcher(
         stats_collecting_params_,
         max_threads,
         use_parallel_layout);
+    /// Until the build phase ends this join may have to hand its right blocks to `MergeJoin`.
+    assert_cast<HashJoin *>(join.get())->keepRightBlocksForAnotherAlgorithm();
     supports_parallel_non_joined_blocks_processing = join->supportParallelNonJoinedBlocksProcessing();
 
     if (!limits.hasLimits())
@@ -118,6 +120,21 @@ JoinResultPtr JoinSwitcher::joinBlock(Block block)
 
     std::unique_lock lock(switch_mutex);
     return std::make_unique<ExclusiveJoinResult>(std::move(lock), join->joinBlock(std::move(block)));
+}
+
+void JoinSwitcher::onBuildPhaseFinish()
+{
+    {
+        std::shared_lock lock(switch_mutex);
+        join->onBuildPhaseFinish();
+    }
+
+    /// The switch to `MergeJoin` only happens while blocks are being added, and that is over: if it
+    /// did not happen, nothing will take the right blocks now, so a join that stores only the keys
+    /// can drop them.
+    std::lock_guard lock(switch_mutex);
+    if (!switched)
+        assert_cast<HashJoin *>(join.get())->dropRightBlocksKeptForAnotherAlgorithm();
 }
 
 bool JoinSwitcher::switchJoin()
