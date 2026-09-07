@@ -22,6 +22,10 @@ using ProtectedA = DB::MutexProtected<A>;
 using ReadOnlyAccessor = decltype(std::declval<const ProtectedA &>().getReadOnly());
 using WriteEnabledAccessor = decltype(std::declval<ProtectedA &>().getWriteEnabled());
 
+static_assert(std::is_same_v<
+    ProtectedA,
+    DB::MutexProtected<A, DB::SharedMutex, std::unique_lock, std::shared_lock>>);
+
 template <typename Protected>
 concept CanGetReadOnlyFromRvalue = requires(Protected && value)
 {

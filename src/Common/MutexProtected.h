@@ -10,6 +10,7 @@
 namespace DB
 {
 
+/// Provides scoped access to a mutex-protected object while holding a lock guard.
 template <typename T, typename LockGuard>
 class MutexProtectedAccessor
 {
@@ -57,6 +58,7 @@ private:
     T & object;
 };
 
+/// Protects an object with a mutex and provides scoped read-only or write-enabled access.
 template <
     typename T,
     class Mutex = SharedMutex,
