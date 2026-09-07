@@ -44,7 +44,13 @@ SET enable_parallel_replicas=0, automatic_parallel_replicas_mode=0;
 
 SYSTEM FLUSH LOGS query_log;
 
-SELECT log_comment, ProfileEvents['RuntimeDataflowStatisticsInputBytes'] > 0 AS stats_collected
+-- Both events are incremented by the single update that caches the collected statistics, which
+-- runs only when at least one of them is non-zero, so their sum is exactly "the gate let this query
+-- through and the optimization instrumented it". Input bytes alone would not do: the ordered read
+-- above stops at the `LIMIT`, and whether its one block is caught by the sampler varies per run - a
+-- CI run measured 0 to 9297 input bytes across 50 executions, hitting 0 once.
+SELECT log_comment,
+       ProfileEvents['RuntimeDataflowStatisticsInputBytes'] + ProfileEvents['RuntimeDataflowStatisticsOutputBytes'] > 0 AS stats_collected
 FROM system.query_log
 WHERE (event_date >= yesterday()) AND (event_time >= (NOW() - toIntervalMinute(15))) AND (current_database = currentDatabase()) AND (log_comment LIKE '05046_gate_%') AND (type = 'QueryFinish')
 ORDER BY log_comment
