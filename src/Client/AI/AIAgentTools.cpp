@@ -64,7 +64,9 @@ ai::ToolSet buildAIAgentToolSet(const AIAgentHooks & hooks_, bool enable_schema_
             });
 
         tools["list_tables"] = makeTool(
-            "List the tables of a database with their engines. Runs internally, nothing is displayed to the user.",
+            "List the tables of a database with their engines. Runs internally, nothing is displayed to the user. "
+            "Reads `system.tables` with the remote-database and data-lake-catalog visibility turned off, so a "
+            "database backed by an external system is listed as empty rather than enumerated from that system.",
             ai::JsonValue{{"database", stringParameter("Name of the database")}},
             {"database"},
             [hooks](const ai::JsonValue & args, const ai::ToolExecutionContext &)
@@ -80,7 +82,10 @@ ai::ToolSet buildAIAgentToolSet(const AIAgentHooks & hooks_, bool enable_schema_
 
         tools["show_create_table"] = makeTool(
             "Get the CREATE TABLE statement (columns, engine, sorting key) of a table. "
-            "Runs internally, nothing is displayed to the user.",
+            "Runs internally, nothing is displayed to the user. The table is resolved the way any query resolves "
+            "it, so for a database backed by an external system (MySQL, PostgreSQL, a data-lake catalog) the "
+            "definition is fetched from that system - this is the one unconfirmed step that leaves this server, "
+            "and it reads metadata only. Credentials are masked in the result.",
             ai::JsonValue{
                 {"database", stringParameter("Name of the database")},
                 {"table", stringParameter("Name of the table")}},
