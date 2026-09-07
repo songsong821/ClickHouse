@@ -14,6 +14,12 @@ create workload 03588_b1 in 03588_b settings weight = 1;
 -- Two independent trees; each root has an empty parent (is_root = 1).
 select name, empty(parent) as is_root from system.workloads where startsWith(name, '03588_') order by name;
 
+-- Changing whether a workload is a root via CREATE OR REPLACE is not allowed in either direction:
+-- promoting a child to a root (dropping its PARENT) ...
+create or replace workload 03588_a1 settings weight = 2; -- {serverError BAD_ARGUMENTS}
+-- ... or demoting a root to a child (adding a PARENT).
+create or replace workload 03588_a in 03588_b; -- {serverError BAD_ARGUMENTS}
+
 -- A third independent root is allowed too.
 create workload 03588_c;
 select count() from system.workloads where startsWith(name, '03588_') and empty(parent);
