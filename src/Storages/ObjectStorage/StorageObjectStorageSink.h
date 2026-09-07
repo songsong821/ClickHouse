@@ -54,12 +54,18 @@ private:
     const size_t split_on_write_by_size_bytes;
     const GetNextPathCallback get_next_path;
 
+    /// The buffer that writes into the object storage. It is also used to count the number of bytes
+    /// written to the object. It is declared before `write_buf` so that it outlives the compressing
+    /// wrapper referencing it.
+    std::unique_ptr<WriteBuffer> destination_buf;
+    /// The non-owning compressing wrapper around `destination_buf`; it is empty if the data is written uncompressed.
     std::unique_ptr<WriteBuffer> write_buf;
-    /// Non-owning pointer to the buffer that writes to the object storage (`write_buf` may be a compressing wrapper around it).
-    /// It is used to count the number of bytes written to the object.
-    WriteBuffer * destination_buf = nullptr;
     OutputFormatPtr writer;
     std::optional<size_t> result_file_size;
+
+    /// The buffer the data is formatted into: the compressing wrapper if the data is compressed,
+    /// the object storage buffer otherwise.
+    WriteBuffer & getWriteBuffer();
 
     void initialize();
     void finalizeBuffers();

@@ -827,10 +827,15 @@ SinkToStoragePtr StorageObjectStorage::write(
 
     /// A truncating insert overwrites the table: it starts from the base key, the split objects
     /// of the previous inserts are forgotten, and the numbering starts over, overwriting them one by one.
+    /// It does not matter whether the current insert is split by size: a rewrite with
+    /// `*_split_on_write_by_size_bytes` turned back to 0 has to drop the numbered tail of the previous
+    /// split insert as well, otherwise both this table and the readers of a wildcard path over the same
+    /// prefix keep seeing the stale rows.
     if (settings.truncate_on_insert)
     {
+        const bool has_numbered_tail = paths.size() > 1;
         paths.resize(1);
-        if (settings.split_on_write_by_size_bytes)
+        if (settings.split_on_write_by_size_bytes || has_numbered_tail)
             removeStaleSplitObjects(
                 *object_storage,
                 paths.front().path,

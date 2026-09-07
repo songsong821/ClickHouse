@@ -87,25 +87,30 @@ void StorageObjectStorageSink::initialize()
     const auto & settings = context->getSettingsRef();
     const auto chosen_compression_method = chooseCompressionMethod(path, compression_method);
 
-    auto buffer = object_storage->writeObject(
+    /// The sink keeps the ownership of the buffer that writes into the object storage, so that the amount
+    /// of the data written into the object can be checked for splitting. The compressing wrapper, if any,
+    /// is created as a non-owning one on top of it.
+    destination_buf = object_storage->writeObject(
         StoredObject(path), WriteMode::Rewrite, std::nullopt, DBMS_DEFAULT_BUFFER_SIZE, context->getWriteSettings());
 
-    /// The pointer is taken before the move, but it is assigned to the field only afterwards,
-    /// otherwise the lifetime analysis considers the field to be dangling.
-    auto * buffer_ptr = buffer.get();
-    write_buf = wrapWriteBufferWithCompressionMethod(
-        std::move(buffer),
-        chosen_compression_method,
-        static_cast<int>(settings[Setting::output_format_compression_level]),
-        static_cast<int>(settings[Setting::output_format_compression_zstd_window_log]),
-        settings[Setting::snappy_mode]);
-    destination_buf = buffer_ptr;
+    if (chosen_compression_method != CompressionMethod::None)
+        write_buf = wrapWriteBufferWithCompressionMethod(
+            destination_buf.get(),
+            chosen_compression_method,
+            static_cast<int>(settings[Setting::output_format_compression_level]),
+            static_cast<int>(settings[Setting::output_format_compression_zstd_window_log]),
+            settings[Setting::snappy_mode]);
 
     /// With the parallel formatting, the data is written into the buffer by a background thread,
     /// and the amount of the written data cannot be checked after every block without a data race.
     writer = split_on_write_by_size_bytes
-        ? FormatFactory::instance().getOutputFormat(format, *write_buf, *sample_block, context, format_settings)
-        : FormatFactory::instance().getOutputFormatParallelIfPossible(format, *write_buf, *sample_block, context, format_settings);
+        ? FormatFactory::instance().getOutputFormat(format, getWriteBuffer(), *sample_block, context, format_settings)
+        : FormatFactory::instance().getOutputFormatParallelIfPossible(format, getWriteBuffer(), *sample_block, context, format_settings);
+}
+
+WriteBuffer & StorageObjectStorageSink::getWriteBuffer()
+{
+    return write_buf ? *write_buf : *destination_buf;
 }
 
 void StorageObjectStorageSink::consume(Chunk & chunk)
@@ -158,15 +163,17 @@ void StorageObjectStorageSink::finalizeBuffers()
         throw;
     }
 
-    write_buf->finalize();
-    result_file_size = write_buf->count();
+    if (write_buf)
+        write_buf->finalize();
+    destination_buf->finalize();
+    result_file_size = getWriteBuffer().count();
 }
 
 void StorageObjectStorageSink::releaseBuffers()
 {
     writer.reset();
     write_buf.reset();
-    destination_buf = nullptr;
+    destination_buf.reset();
 }
 
 void StorageObjectStorageSink::cancelBuffers()
@@ -175,6 +182,8 @@ void StorageObjectStorageSink::cancelBuffers()
         writer->cancel();
     if (write_buf)
         write_buf->cancel();
+    if (destination_buf)
+        destination_buf->cancel();
 }
 
 size_t StorageObjectStorageSink::getFileSize() const

@@ -3218,20 +3218,25 @@ SinkToStoragePtr StorageFile::write(
     /// When the data is split by size, the files after the first one are named `data.1.Parquet`, `data.2.Parquet`, ...
     /// The new files are added to the list of paths of the table, so that they are visible for reading.
     const size_t split_on_write_by_size_bytes = context->getSettingsRef()[Setting::engine_file_split_on_write_by_size_bytes];
+
+    /// A truncating insert overwrites the table: the numbered files of the previous inserts are forgotten,
+    /// and the numbering starts over, overwriting them one by one. It does not matter whether the current
+    /// insert is split by size: a rewrite with `engine_file_split_on_write_by_size_bytes` turned back to 0
+    /// has to drop the numbered tail of the previous split insert as well, otherwise both this table and
+    /// the readers of the glob pattern over the directory keep seeing the stale rows.
+    if (!use_table_fd && !paths.empty() && context->getSettingsRef()[Setting::engine_file_truncate_on_insert]
+        && (split_on_write_by_size_bytes || paths.size() > 1))
+    {
+        paths.resize(1);
+        removeStaleSplitFiles(
+            path,
+            getStartSequenceNumber(path, 1),
+            context->getSettingsRef()[Setting::engine_file_allow_create_multiple_files]);
+    }
+
     StorageFileSink::GetNextPathCallback get_next_path;
     if (split_on_write_by_size_bytes && !use_table_fd && !paths.empty())
     {
-        /// A truncating insert overwrites the table: the split files of the previous inserts are forgotten,
-        /// and the numbering starts over, overwriting them one by one.
-        if (context->getSettingsRef()[Setting::engine_file_truncate_on_insert])
-        {
-            paths.resize(1);
-            removeStaleSplitFiles(
-                path,
-                getStartSequenceNumber(path, 1),
-                context->getSettingsRef()[Setting::engine_file_allow_create_multiple_files]);
-        }
-
         /// The numbering is derived per insert from the name of the file this insert starts with:
         /// the next files continue it (`data.tsv` -> `data.1.tsv`, ..., and `data.4.tsv` -> `data.5.tsv`, ...).
         get_next_path = [storage = std::static_pointer_cast<StorageFile>(shared_from_this()),
