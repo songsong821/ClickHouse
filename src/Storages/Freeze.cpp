@@ -3,6 +3,7 @@
 #include <Disks/DiskObjectStorage/MetadataStorages/IMetadataStorage.h>
 #include <Interpreters/DatabaseCatalog.h>
 #include <Storages/PartitionCommands.h>
+#include <Storages/StorageProxy.h>
 #include <Interpreters/Context.h>
 #include <Common/escapeForFileName.h>
 #include <Common/logger_useful.h>
@@ -202,22 +203,38 @@ BlockIO Unfreezer::systemUnfreeze(const String & backup_name)
                     if (storage)
                         merge_tree = std::dynamic_pointer_cast<MergeTreeData>(storage);
 
-                    /// An unresolved directory means the table is not loaded on this node: it was
-                    /// dropped locally, or never attached here. Removing the snapshot then still
-                    /// makes sense for an ordinary table — that is exactly what `SYSTEM UNFREEZE`
-                    /// is for — but a `leader_election` snapshot lives on storage shared with
-                    /// other nodes and there is no lease left to check here, so the command must
-                    /// fail closed instead of deleting data another node's leader owns. The
-                    /// snapshot carries the marker written at `FREEZE` time for exactly this.
+                    /// Only a snapshot carrying the marker written at `FREEZE` time needs any of
+                    /// the leader-election handling below, and the marker lookup costs an object
+                    /// storage request per directory, so keep it behind the failed cast.
                     if (!merge_tree
                         && disk->existsFile(table_directory / MergeTreeData::LEADER_ELECTION_SNAPSHOT_MARKER_FILE_NAME))
                     {
-                        throw Exception(ErrorCodes::SUPPORT_IS_DISABLED,
-                            "Snapshot {} on disk {} belongs to a `leader_election` table that is not attached on this "
-                            "node, so its lease cannot be checked here. Removing it could delete shared data owned by "
-                            "the current leader. Attach the table on this node and use `ALTER TABLE ... UNFREEZE WITH "
-                            "NAME` on the leader instead.",
-                            table_directory.generic_string(), disk->getName());
+                        /// A lazily loaded table (`lazy_load_tables = 1`) is attached, but the
+                        /// catalog hands out a `StorageTableProxy` until something touches it, so
+                        /// the cast above misses it and the table would be misread as unattached.
+                        /// Materialize the real storage and retry — the snapshot belongs to a
+                        /// `leader_election` table whose lease this node can, in fact, check.
+                        /// Restricting this to marker-bearing snapshots keeps an ordinary
+                        /// `SYSTEM UNFREEZE` from starting every lazy table in the server.
+                        if (const auto * proxy = dynamic_cast<const StorageProxy *>(storage.get()))
+                            merge_tree = std::dynamic_pointer_cast<MergeTreeData>(proxy->getNested());
+
+                        /// Still unresolved: the table is genuinely not loaded on this node — it
+                        /// was dropped locally, or never attached here. Removing the snapshot
+                        /// would still make sense for an ordinary table — that is exactly what
+                        /// `SYSTEM UNFREEZE` is for — but a `leader_election` snapshot lives on
+                        /// storage shared with other nodes and there is no lease left to check
+                        /// here, so the command must fail closed instead of deleting data another
+                        /// node's leader owns.
+                        if (!merge_tree)
+                        {
+                            throw Exception(ErrorCodes::SUPPORT_IS_DISABLED,
+                                "Snapshot {} on disk {} belongs to a `leader_election` table that is not attached on this "
+                                "node, so its lease cannot be checked here. Removing it could delete shared data owned by "
+                                "the current leader. Attach the table on this node and use `ALTER TABLE ... UNFREEZE WITH "
+                                "NAME` on the leader instead.",
+                                table_directory.generic_string(), disk->getName());
+                        }
                     }
 
                     table_directories.push_back({disk, std::move(table_directory), std::move(merge_tree)});
