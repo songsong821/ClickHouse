@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <shared_mutex>
 #include <type_traits>
 #include <utility>
 
@@ -17,8 +18,39 @@ struct A
     int i;
 };
 
-using ReadOnlyAccessor = decltype(std::declval<const DB::MutexProtected<A> &>().getReadOnly());
-using WriteEnabledAccessor = decltype(std::declval<DB::MutexProtected<A> &>().getWriteEnabled());
+using ProtectedA = DB::MutexProtected<A>;
+using ReadOnlyAccessor = decltype(std::declval<const ProtectedA &>().getReadOnly());
+using WriteEnabledAccessor = decltype(std::declval<ProtectedA &>().getWriteEnabled());
+
+template <typename Protected>
+concept CanGetReadOnlyFromRvalue = requires(Protected && value)
+{
+    std::move(value).getReadOnly();
+};
+
+template <typename Protected>
+concept CanGetWriteEnabledFromRvalue = requires(Protected && value)
+{
+    std::move(value).getWriteEnabled();
+};
+
+template <typename Accessor>
+concept CanDereferenceRvalue = requires(Accessor && accessor)
+{
+    *std::move(accessor);
+};
+
+template <typename Accessor>
+concept CanAccessThroughRvalue = requires(Accessor && accessor)
+{
+    std::move(accessor).operator->();
+};
+
+template <typename Protected>
+concept CanOverrideWriteLock = requires(Protected & value)
+{
+    value.template getWriteEnabled<std::shared_lock>();
+};
 
 static_assert(!std::is_copy_constructible_v<ReadOnlyAccessor>);
 static_assert(!std::is_copy_assignable_v<ReadOnlyAccessor>);
@@ -30,6 +62,14 @@ static_assert(!std::is_move_constructible_v<WriteEnabledAccessor>);
 static_assert(!std::is_move_assignable_v<WriteEnabledAccessor>);
 static_assert(std::is_same_v<decltype(*std::declval<ReadOnlyAccessor &>()), const A &>);
 static_assert(std::is_same_v<decltype(*std::declval<WriteEnabledAccessor &>()), A &>);
+static_assert(!CanGetReadOnlyFromRvalue<ProtectedA>);
+static_assert(!CanGetReadOnlyFromRvalue<const ProtectedA>);
+static_assert(!CanGetWriteEnabledFromRvalue<ProtectedA>);
+static_assert(!CanDereferenceRvalue<ReadOnlyAccessor>);
+static_assert(!CanDereferenceRvalue<WriteEnabledAccessor>);
+static_assert(!CanAccessThroughRvalue<ReadOnlyAccessor>);
+static_assert(!CanAccessThroughRvalue<WriteEnabledAccessor>);
+static_assert(!CanOverrideWriteLock<ProtectedA>);
 
 struct LockCounts
 {

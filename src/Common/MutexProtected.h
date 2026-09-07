@@ -26,25 +26,31 @@ public:
     MutexProtectedAccessor(MutexProtectedAccessor &&) = delete;
     MutexProtectedAccessor & operator=(MutexProtectedAccessor &&) = delete;
 
-    T * operator->()
+    T * operator->() &
     {
         return std::addressof(object);
     }
 
-    const T * operator->() const
+    const T * operator->() const &
     {
         return std::addressof(object);
     }
 
-    T & operator*()
+    T * operator->() && = delete;
+    const T * operator->() const && = delete;
+
+    T & operator*() &
     {
         return object;
     }
 
-    const T & operator*() const
+    const T & operator*() const &
     {
         return object;
     }
+
+    T & operator*() && = delete;
+    const T & operator*() const && = delete;
 
 private:
     LockGuard lock;
@@ -80,19 +86,23 @@ public:
     {
     }
 
-    template <template <class> class ReadLock = SharedLock>
-    [[nodiscard]] auto getReadOnly() const
-        -> MutexProtectedAccessor<const T, ReadLock<Mutex>>
+    [[nodiscard]] auto getReadOnly() const &
+        -> MutexProtectedAccessor<const T, SharedLock<Mutex>>
     {
         return {mutex, object};
     }
 
-    template <template <class> class WriteLock = UniqueLock>
-    [[nodiscard]] auto getWriteEnabled()
-        -> MutexProtectedAccessor<T, WriteLock<Mutex>>
+    auto getReadOnly() const &&
+        -> MutexProtectedAccessor<const T, SharedLock<Mutex>> = delete;
+
+    [[nodiscard]] auto getWriteEnabled() &
+        -> MutexProtectedAccessor<T, UniqueLock<Mutex>>
     {
         return {mutex, object};
     }
+
+    auto getWriteEnabled() &&
+        -> MutexProtectedAccessor<T, UniqueLock<Mutex>> = delete;
 
 private:
     mutable Mutex mutex;
