@@ -291,9 +291,12 @@ void ObjectStorageQueuePostProcessor::moveWithinBucket(const StoredObjects & obj
 
     try
     {
-        for (const auto & object_from : objects)
+        for (const auto & object_from_of_this_iteration : objects)
         {
-            task_tracker.add([&]{
+            /// The task runs asynchronously, so it owns the object it works on: everything it
+            /// needs - the source, and the destination derived from it - has to be a copy that
+            /// does not depend on where the loop over `objects` has got to by then.
+            task_tracker.add([&, object_from = object_from_of_this_iteration]{
                 try
                 {
                     doWithRetries([&]{

@@ -1728,16 +1728,20 @@ TEST(AzureReadUntilPosition, SameBoundSetTwice)
 }
 
 /// A `StoredObject` of `bytes_size` 0 is a blob that the `LIST` or `HEAD` producing it reported as
-/// empty. That size is as trustworthy as any other locally known size, so the read set up by
+/// empty. When the read is pinned to the generation that measurement describes, that size is as
+/// trustworthy as any other locally known size, so the read set up by
 /// `AzureObjectStorage::readObject` must end at once, no matter how many bytes a misbehaving
 /// endpoint hands out for the object, both sequentially and through `readBigAt`.
 TEST(AzureReadWithoutRightBound, KnownEmptyObject)
 {
     auto transport = std::make_shared<MisbehavingRangeTransport>(
-        /* max_response_size */ 100, /* served_size */ 100, /* blob_size */ 100, /* send_etag */ true);
+        /* max_response_size */ 100, /* served_size */ 100, /* blob_size */ 100, /* send_etag */ true,
+        /* reported_length */ std::nullopt, /* ignore_range */ false,
+        ETagBehaviour{.etag = ETagBehaviour::first_generation, .etag_after_first = "", .honour_if_match = true});
     auto object_storage = objectStorageOver(transport);
 
     DB::StoredObject empty_object("blob", /* local_path */ "", /* bytes_size */ 0);
+    empty_object.etag = ETagBehaviour::first_generation_bare;
     auto buffer = object_storage->readObject(empty_object, DB::ReadSettings{});
 
     std::string data;
@@ -1804,6 +1808,34 @@ TEST(AzureStaleSizeWithoutPinning, UnpinnedPositionedReadPastTheStaleSize)
     ASSERT_EQ(buffer->readBigAt(data.data(), data.size(), /* range_begin */ 150, /* progress_callback */ nullptr), static_cast<size_t>(50));
     for (size_t i = 0; i < data.size(); ++i)
         ASSERT_EQ(static_cast<unsigned char>(data[i]), static_cast<unsigned char>((150 + i) % 256)) << "at " << i;
+}
+
+/// A size of zero is not an exception to that rule. A blob listed as empty without an `ETag` and
+/// rewritten with data before the `GET` must be delivered, sequentially and through `readBigAt`:
+/// treating the stale zero as a hard end of the data would report the end of the file without ever
+/// making a request, and the query would silently skip the object.
+TEST(AzureStaleSizeWithoutPinning, UnpinnedReadOfAnObjectListedAsEmpty)
+{
+    auto transport = std::make_shared<MisbehavingRangeTransport>(
+        /* max_response_size */ 100, /* served_size */ 100, /* blob_size */ 100, /* send_etag */ true);
+    auto object_storage = objectStorageOver(transport);
+
+    DB::StoredObject object("blob", /* local_path */ "", /* bytes_size */ 0);
+    ASSERT_TRUE(object.etag.empty());
+
+    auto buffer = object_storage->readObject(object, DB::ReadSettings{});
+    std::string data;
+    ASSERT_NO_THROW(DB::readStringUntilEOF(data, *buffer));
+    ASSERT_EQ(data.size(), static_cast<size_t>(100));
+    assertCountsUpFromZero(data);
+
+    auto positioned_buffer = object_storage->readObject(object, DB::ReadSettings{});
+    std::string tail(10, '\0');
+    ASSERT_EQ(
+        positioned_buffer->readBigAt(tail.data(), tail.size(), /* range_begin */ 90, /* progress_callback */ nullptr),
+        static_cast<size_t>(10));
+    for (size_t i = 0; i < tail.size(); ++i)
+        ASSERT_EQ(static_cast<unsigned char>(tail[i]), static_cast<unsigned char>(90 + i)) << "at " << i;
 }
 
 /// A read that is pinned to the generation the size was measured on keeps the size as a hard end of

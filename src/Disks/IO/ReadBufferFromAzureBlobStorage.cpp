@@ -368,12 +368,12 @@ std::optional<size_t> ReadBufferFromAzureBlobStorage::boundingObjectSize() const
     /// grown from 100 to 200 bytes between the measurement and the `GET` must not be cut back to
     /// the stale 100 bytes. The size is then not used at all: `getEndOfData` falls back to the
     /// lower bound reported by the responses of this read.
-    if (expected_etag.empty() && *known_object_size != 0)
+    /// A size of zero is not an exception to this: an object that a listing showed as empty can
+    /// have been rewritten with data before the `GET`, and an unpinned read must hand that data
+    /// over instead of reporting the end of the file without ever making a request.
+    if (expected_etag.empty())
         return {};
 
-    /// An object measured as empty is the one exception: there is no request to make for it, and
-    /// its emptiness is how every object storage reports "no data" for a file that a listing
-    /// already showed.
     return known_object_size;
 }
 
