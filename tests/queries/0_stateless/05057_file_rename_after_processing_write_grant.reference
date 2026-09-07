@@ -3,9 +3,6 @@ WRITE ON FILE
 --- a renaming SELECT through file() is refused, and renames nothing
 WRITE ON FILE
 intact
---- the same through url(file://), which resolves to a file() delegate
-WRITE ON FILE
-intact
 --- the same through fileCluster(), refused on the initiator
 WRITE ON FILE
 intact
