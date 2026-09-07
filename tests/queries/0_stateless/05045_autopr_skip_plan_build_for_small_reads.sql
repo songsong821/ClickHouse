@@ -22,6 +22,10 @@ SET enable_analyzer=1;
 SET max_threads=4;
 SET max_bytes_before_external_group_by=0, max_bytes_ratio_before_external_group_by=0;
 SET automatic_parallel_replicas_min_bytes_per_replica=1048576;
+-- This test asserts that the gate rejects a read, and the gate declines to size any read while the
+-- range-split fault injection is armed - it can turn an ordinary read into an in-order one that also
+-- reads the sorting key. `clickhouse-test` randomizes that setting, so pin it off here.
+SET merge_tree_read_split_ranges_into_intersecting_and_non_intersecting_injection_probability=0;
 
 -- The whole table is far below the threshold, so the optimization gives up before building the
 -- parallel-replicas plan and no statistics are collected.

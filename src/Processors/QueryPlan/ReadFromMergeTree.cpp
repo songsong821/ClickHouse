@@ -2723,6 +2723,16 @@ std::optional<size_t> ReadFromMergeTree::estimateCompressedBytesToRead() const
         || (mutations_snapshot && (mutations_snapshot->hasDataMutations() || mutations_snapshot->hasPatchParts())))
         return {};
 
+    /// With the range-splitting fault injection enabled, `spreadMarkRangesAmongStreams` may turn an
+    /// ordinary read into an in-order one and append the whole sorting key to the columns it reads,
+    /// which the estimate below does not account for because `reader_settings.read_in_order` is not
+    /// set. The decision is a per-execution coin flip made when the pipeline is built, long after
+    /// this runs, so it cannot be predicted here - decline to answer whenever the injection is armed,
+    /// as `capStreamsByReadBytes` already does with the same estimate. The setting is only ever set
+    /// by tests, so this costs nothing in production.
+    if (context->getSettingsRef()[Setting::merge_tree_read_split_ranges_into_intersecting_and_non_intersecting_injection_probability] > 0)
+        return {};
+
     Names column_names = analysis->column_names_to_read.empty() ? all_column_names : analysis->column_names_to_read;
     {
         NameSet present(column_names.begin(), column_names.end());
