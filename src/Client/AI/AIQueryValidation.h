@@ -46,6 +46,8 @@ bool isReadOnlyStatementForAIAgent(const IAST & ast);
 
 /// A table named in a statement. `database` is empty when the name is written unqualified, and
 /// the server resolves it against the session: a temporary table first, then the current database.
+/// `table` is empty when the statement names a database rather than a table (`SHOW TABLES FROM
+/// db`), in which case only the engine of the database is there to check.
 struct AIQueryTableReference
 {
     String database;

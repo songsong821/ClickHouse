@@ -262,6 +262,41 @@ TEST(AIQueryValidation, CollectsNamedTablesOfStatementTargets)
     EXPECT_EQ(collect("SHOW CREATE DATABASE db"), std::vector<String>{});
 }
 
+TEST(AIQueryValidation, CollectsTheDatabaseOfShowTables)
+{
+    /// `SHOW TABLES FROM db` names a database and no table, and it cannot be left out even though
+    /// the sandbox turns the remote-visibility switches off: `InterpreterShowTablesQuery` turns
+    /// them back on for the database that was asked for, so enumerating it contacts it.
+    auto collect = [](const String & query)
+    {
+        std::vector<String> names;
+        for (const auto & reference : collectNamedTablesForAIAgent(*parse(query)))
+            names.push_back(reference.database + "/" + reference.table);
+        return names;
+    };
+
+    EXPECT_EQ(collect("SHOW TABLES FROM db"), std::vector<String>{"db/"});
+    EXPECT_EQ(collect("SHOW DICTIONARIES FROM db"), std::vector<String>{"db/"});
+    /// Without a FROM the database is the current one, which only the server can resolve.
+    EXPECT_EQ(collect("SHOW TABLES"), std::vector<String>{"/"});
+
+    /// The spellings that name no database at all.
+    EXPECT_EQ(collect("SHOW DATABASES"), std::vector<String>{});
+    EXPECT_EQ(collect("SHOW CLUSTERS"), std::vector<String>{});
+    EXPECT_EQ(collect("SHOW SETTINGS ILIKE '%max%'"), std::vector<String>{});
+    EXPECT_EQ(collect("SHOW TEMPORARY TABLES"), std::vector<String>{});
+}
+
+TEST(AIQueryValidation, RejectsRemoteVisibilityOverrides)
+{
+    /// Enumerating a remote database or a data-lake catalog in `system.tables` contacts it, so
+    /// the sandbox turns both switches off and a generated `SETTINGS` clause must not undo that.
+    EXPECT_FALSE(isAllowed("SELECT count() FROM system.tables SETTINGS show_remote_databases_in_system_tables = 1"));
+    EXPECT_FALSE(isAllowed("SELECT count() FROM system.tables SETTINGS show_data_lake_catalogs_in_system_tables = 1"));
+    EXPECT_FALSE(isAllowed("SET show_remote_databases_in_system_tables = 1"));
+    EXPECT_TRUE(isAllowed("SELECT count() FROM system.tables"));
+}
+
 TEST(AIQueryValidation, DisablingSchemaAccessBlocksInformationSchema)
 {
     /// `information_schema` is views over `system` by design, so it is the same schema surface

@@ -71,7 +71,12 @@ bool isProtectedSetting(const String & name)
         || name == "compatibility"
         /// Masking of the credentials in `SHOW CREATE TABLE` of external-engine tables: the
         /// sandbox turns it on, and a generated `SETTINGS` clause must not turn it back off.
-        || name == "format_display_secrets_in_show_and_select";
+        || name == "format_display_secrets_in_show_and_select"
+        /// Visiting a remote database or a data-lake catalog in `system.tables` /
+        /// `system.columns` contacts it, so the sandbox turns both off; a generated `SETTINGS`
+        /// clause must not turn them back on.
+        || name == "show_remote_databases_in_system_tables"
+        || name == "show_data_lake_catalogs_in_system_tables";
 }
 
 /// The format-schema settings have side effects beyond the validated AST: with
@@ -491,6 +496,17 @@ void collectNamedTables(const IAST & ast, std::vector<AIQueryTableReference> & r
     else if (const auto * show_indexes = ast.as<ASTShowIndexesQuery>())
     {
         add(show_indexes->database, show_indexes->table);
+    }
+    else if (const auto * show_tables = ast.as<ASTShowTablesQuery>())
+    {
+        /// `SHOW TABLES FROM db` and `SHOW DICTIONARIES FROM db` name a database and no table.
+        /// It has to be collected even though `system.tables` is told not to enumerate a remote
+        /// database or a data-lake catalog: `InterpreterShowTablesQuery` turns
+        /// `show_remote_databases_in_system_tables` and `show_data_lake_catalogs_in_system_tables`
+        /// back on for the database that was asked for, so enumerating it contacts it.
+        if (!show_tables->databases && !show_tables->clusters && !show_tables->cluster && !show_tables->m_settings
+            && !show_tables->merges && !show_tables->caches && !show_tables->temporary)
+            add(show_tables->getFrom(), "");
     }
 
     for (const auto & child : ast.children)

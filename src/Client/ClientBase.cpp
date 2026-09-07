@@ -4457,6 +4457,14 @@ String ClientBase::runQueryForAI(const String & query, bool readonly, bool allow
         if (client_context->getSettingsRef()[Setting::format_display_secrets_in_show_and_select])
             client_context->setSetting("format_display_secrets_in_show_and_select", false);
 
+        /// `system.tables` and `system.columns` enumerate a remote (`MySQL`, `PostgreSQL`)
+        /// database or a data-lake catalog when the session lets them, and enumerating one
+        /// contacts it. An unconfirmed query must not leave this server, so both switches are
+        /// turned off for it; they are protected settings, so the query cannot turn them back on.
+        /// Neither is `IMPORTANT`, so a server that predates them ignores them.
+        client_context->setSetting("show_remote_databases_in_system_tables", false);
+        client_context->setSetting("show_data_lake_catalogs_in_system_tables", false);
+
         static constexpr UInt64 max_execution_time_limit = 30;
         static constexpr UInt64 max_memory_usage_limit = 10'000'000'000;
 
@@ -4746,12 +4754,17 @@ void ClientBase::checkNamedTablesForAIReadOnlyTool(const std::vector<AIQueryTabl
 
     for (const auto & table : tables)
     {
-        const String name_literal = quoteString(table.table);
         const String database_expression = table.database.empty() ? "currentDatabase()" : quoteString(table.database);
 
-        add_lookup(database_expression, name_literal);
-        if (table.database.empty())
-            add_lookup("''", name_literal);
+        /// A reference with no table names the database itself (`SHOW TABLES FROM db`): only its
+        /// engine is there to look up.
+        if (!table.table.empty())
+        {
+            const String name_literal = quoteString(table.table);
+            add_lookup(database_expression, name_literal);
+            if (table.database.empty())
+                add_lookup("''", name_literal);
+        }
 
         if (seen_databases.emplace(table.database).second)
             database_expressions.push_back(database_expression);
@@ -4796,8 +4809,9 @@ void ClientBase::checkNamedTablesForAIReadOnlyTool(const std::vector<AIQueryTabl
         if (database.empty())
         {
             /// A temporary table shadows a table of the current database, and has no database
-            /// of its own to check.
-            if (auto it = table_engines.find({"", reference.table}); it != table_engines.end())
+            /// of its own to check. A reference naming only a database has no temporary form.
+            if (auto it = reference.table.empty() ? table_engines.end() : table_engines.find({"", reference.table});
+                it != table_engines.end())
             {
                 if (!isAllowedTableEngineForAIAgent(it->second))
                     throw Exception(
@@ -4815,7 +4829,7 @@ void ClientBase::checkNamedTablesForAIReadOnlyTool(const std::vector<AIQueryTabl
         /// by name, because their engines are one per table (`SystemTables`, `SystemNumbers`, ...).
         if (isServerOwnedDatabaseForAIAgent(database))
         {
-            if (!isAllowedServerOwnedTableForAIAgent(database, reference.table))
+            if (!reference.table.empty() && !isAllowedServerOwnedTableForAIAgent(database, reference.table))
                 throw Exception(
                     ErrorCodes::BAD_ARGUMENTS,
                     "The table `{}.{}` reads state outside of this server (Keeper or object storage), so it is "
@@ -4829,10 +4843,9 @@ void ClientBase::checkNamedTablesForAIReadOnlyTool(const std::vector<AIQueryTabl
         if (database_it == database_engines.end())
             throw Exception(
                 ErrorCodes::BAD_ARGUMENTS,
-                "The database `{}` of the table `{}` was not found in `system.databases`, so it could not be "
-                "checked. Use the run_query tool for this query",
-                database,
-                reference.table);
+                "The database `{}` was not found in `system.databases`, so it could not be checked. "
+                "Use the run_query tool for this query",
+                database);
 
         if (!isAllowedDatabaseEngineForAIAgent(database_it->second))
             throw Exception(
@@ -4842,6 +4855,10 @@ void ClientBase::checkNamedTablesForAIReadOnlyTool(const std::vector<AIQueryTabl
                 "query",
                 database,
                 database_it->second);
+
+        /// The reference names the database only; its engine is what was to be checked.
+        if (reference.table.empty())
+            continue;
 
         const auto table_it = table_engines.find({database, reference.table});
         if (table_it == table_engines.end())
@@ -4953,6 +4970,22 @@ Block ClientBase::fetchInternalQueryResult(
         if (!settings_to_send)
             settings_to_send.emplace();
         settings_to_send->set("format_display_secrets_in_show_and_select", false);
+    }
+
+    /// None of the internal queries of the agent has any business enumerating a remote database
+    /// or a data-lake catalog: `system.tables` and `system.columns` contact one when they do, and
+    /// those two tables are what the schema tools and the table resolution of the read-only tool
+    /// read. Neither setting is `IMPORTANT`, so a server that predates them ignores them, and
+    /// both are sent unconditionally rather than only when the session has them on: an unchanged
+    /// value costs nothing, and the value the session has is not the one to trust here.
+    ///
+    /// A session with `readonly = 1` sends no settings at all, so there the tools keep the
+    /// visibility of the session. The read-only tool does not reach this: it refuses to run at
+    /// all when it cannot install its sandbox.
+    if (from_ai_agent && settings_to_send)
+    {
+        settings_to_send->set("show_remote_databases_in_system_tables", false);
+        settings_to_send->set("show_data_lake_catalogs_in_system_tables", false);
     }
 #endif
 
