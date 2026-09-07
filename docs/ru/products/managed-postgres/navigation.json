@@ -1,14 +1,14 @@
 {
   "groups": [
     {
-      "group": "Get started",
+      "group": "Начало работы",
       "pages": [
         "ru/products/managed-postgres/overview",
         "ru/products/managed-postgres/quickstart"
       ]
     },
     {
-      "group": "Features",
+      "group": "Возможности",
       "pages": [
         "ru/products/managed-postgres/connection",
         "ru/products/managed-postgres/settings",
@@ -29,13 +29,21 @@
             "ru/products/managed-postgres/extensions/pg_clickhouse/tutorial"
           ]
         },
+        {
+          "group": "pg_chdb",
+          "pages": [
+            "ru/products/managed-postgres/extensions/chdb/introduction",
+            "ru/products/managed-postgres/extensions/chdb/chdb",
+            "ru/products/managed-postgres/extensions/chdb/chdb_hook"
+          ]
+        },
         "ru/products/managed-postgres/upgrades",
         "ru/products/managed-postgres/openapi",
         "ru/products/managed-postgres/terraform"
       ]
     },
     {
-      "group": "Pricing",
+      "group": "Цены",
       "pages": [
         "ru/products/managed-postgres/pricing"
       ]
@@ -47,7 +55,7 @@
       ]
     },
     {
-      "group": "Migrations",
+      "group": "Миграции",
       "pages": [
         "ru/products/managed-postgres/migrations/overview",
         "ru/products/managed-postgres/migrations/clickpipes",
@@ -60,7 +68,7 @@
       ]
     },
     {
-      "group": "Monitoring",
+      "group": "Мониторинг",
       "pages": [
         "ru/products/managed-postgres/monitoring/overview",
         "ru/products/managed-postgres/monitoring/dashboard",

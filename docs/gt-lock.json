@@ -4,40 +4,40 @@
   "entries": [
     {
       "fileId": "b7b4169fa5b2e02aa17d40553a73c5d9520086753c501eeb926c63b162bb6d9e",
-      "versionId": "6b659816bd63442be260ef7cbeb6670c3540f9a97a0f4d909f5ea5d10189d7f2",
+      "versionId": "a372f4e7d54d9b799344f85fa77a6c684c792c8951b74039b53becd67db973b4",
       "translations": {
-        "es": {
-          "updatedAt": "2026-09-07T09:15:46.554Z",
-          "fileName": "docs.json"
-        },
         "ja": {
-          "updatedAt": "2026-09-07T09:15:46.755Z",
-          "fileName": "docs.json"
-        },
-        "fr": {
-          "updatedAt": "2026-09-07T09:15:47.792Z",
-          "fileName": "docs.json",
-          "postProcessHash": "2cd43b34a2c6166b3bd37f7e8dc4eff2f34bfe31efb97a24235168a15aa803ba"
-        },
-        "ru": {
-          "updatedAt": "2026-09-07T09:15:47.276Z",
-          "fileName": "docs.json"
-        },
-        "pt-BR": {
-          "updatedAt": "2026-09-07T09:15:47.100Z",
+          "updatedAt": "2026-09-07T13:29:24.204Z",
           "fileName": "docs.json"
         },
         "zh": {
-          "updatedAt": "2026-09-07T09:15:47.450Z",
-          "fileName": "docs.json"
-        },
-        "ko": {
-          "updatedAt": "2026-09-07T09:15:46.923Z",
+          "updatedAt": "2026-09-07T13:29:24.482Z",
           "fileName": "docs.json"
         },
         "ar": {
-          "updatedAt": "2026-09-07T09:15:47.623Z",
+          "updatedAt": "2026-09-07T13:29:24.745Z",
           "fileName": "docs.json"
+        },
+        "es": {
+          "updatedAt": "2026-09-07T13:29:24.982Z",
+          "fileName": "docs.json"
+        },
+        "fr": {
+          "updatedAt": "2026-09-07T13:29:25.215Z",
+          "fileName": "docs.json"
+        },
+        "pt-BR": {
+          "updatedAt": "2026-09-07T13:29:25.452Z",
+          "fileName": "docs.json"
+        },
+        "ko": {
+          "updatedAt": "2026-09-07T13:29:25.693Z",
+          "fileName": "docs.json"
+        },
+        "ru": {
+          "updatedAt": "2026-09-07T13:29:25.899Z",
+          "fileName": "docs.json",
+          "postProcessHash": "a7a7d21fb82073332f10adac65594ac86857b914ab454da5b35d8034cb974344"
         }
       },
       "fileName": "docs.json"
@@ -32131,51 +32131,50 @@
     },
     {
       "fileId": "df7412f17253edd6af06fb6c209f725f1480775460df7fa7bd9707a97b51e47b",
-      "versionId": "6ef9bb37b4566a74c80a0354c3a5bc244fc03610fc27d6622636ea68e0862b8b",
+      "versionId": "4e5d1f1e6c662bc159803fe0003b856891443a87975fa2f3ff560b1f9a0b476f",
       "translations": {
-        "es": {
-          "updatedAt": "2026-08-14T10:41:06.398Z",
-          "fileName": "es/concepts/features/performance/allocation-profiling.mdx",
-          "postProcessHash": "806628d6359c4536783ad660e967dfa4bfbd6260d5d84a51d2d0d64588864899"
-        },
-        "ja": {
-          "updatedAt": "2026-08-14T10:41:06.398Z",
-          "fileName": "ja/concepts/features/performance/allocation-profiling.mdx",
-          "postProcessHash": "2441df42027f92ac5d322fd582f8f20ee05c9d21d6bb2b274520acc7d62afd7e"
-        },
-        "ko": {
-          "updatedAt": "2026-08-14T10:41:06.398Z",
-          "fileName": "ko/concepts/features/performance/allocation-profiling.mdx",
-          "postProcessHash": "f5b883925ee648939f064a9185590e5f9b679f9b0d499b94d2756d67fcbd57b4"
+        "zh": {
+          "updatedAt": "2026-09-07T13:29:25.452Z",
+          "fileName": "zh/concepts/features/performance/allocation-profiling.mdx",
+          "postProcessHash": "335106d6ffb4661de372ba43e1500afda812502a3afc4fccf1112b34e82a8fb3"
         },
         "pt-BR": {
-          "updatedAt": "2026-08-14T10:41:06.398Z",
+          "updatedAt": "2026-09-07T13:29:25.900Z",
           "fileName": "pt-BR/concepts/features/performance/allocation-profiling.mdx",
-          "postProcessHash": "7aa4a3fd58394f0722e4d5c2703b914c78c62006b1c2abc9b41d28263856060b"
+          "postProcessHash": "b59a51da1a873147beea5451fe2e17ce5a9ce92fd7de37eb39f812f96b5ab762"
         },
         "ru": {
-          "updatedAt": "2026-08-14T10:41:06.398Z",
+          "updatedAt": "2026-09-07T13:29:25.901Z",
           "fileName": "ru/concepts/features/performance/allocation-profiling.mdx",
-          "postProcessHash": "f13927972ffad195d2953fe7e206cf32c7e2e9524600f444b7b2ee15ff9a27cc"
+          "postProcessHash": "a035e11d5e49aecd71ee92b5b381f9afbbe5015d919e6a3a9bb4d906a230bc73"
         },
-        "zh": {
-          "updatedAt": "2026-08-14T10:41:06.399Z",
-          "fileName": "zh/concepts/features/performance/allocation-profiling.mdx",
-          "postProcessHash": "d3686569593dc83d8fa39c6f49641b9278f7fcca867b34098f4e0cb78b61a7ae"
-        },
-        "ar": {
-          "updatedAt": "2026-08-14T10:41:06.399Z",
-          "fileName": "ar/concepts/features/performance/allocation-profiling.mdx",
-          "postProcessHash": "5316e31c74f6b38fd960b5d0b63f851ad8d9471115999b74df5532d02d745968"
+        "ko": {
+          "updatedAt": "2026-09-07T13:29:25.902Z",
+          "fileName": "ko/concepts/features/performance/allocation-profiling.mdx",
+          "postProcessHash": "4546b1f3d102f92fb3a6aecbeccea4c21d18ccc048de6639e52fcc81eeb7577a"
         },
         "fr": {
-          "updatedAt": "2026-08-14T10:41:06.399Z",
+          "updatedAt": "2026-09-07T13:29:25.903Z",
           "fileName": "fr/concepts/features/performance/allocation-profiling.mdx",
-          "postProcessHash": "2bf84b191e0f9f9ffd220a3b7f5a9a5d19ffec7e236968f81ae89b693e494cd9"
+          "postProcessHash": "b3a02316dea70e9bb3748e5bfcdfa65832d070f0fea1637500c62f1fa8ad9155"
+        },
+        "es": {
+          "updatedAt": "2026-09-07T13:29:25.905Z",
+          "fileName": "es/concepts/features/performance/allocation-profiling.mdx",
+          "postProcessHash": "cf355b398f548984fbe71eea1016b1a48753055d8bc203d7301b96946295406b"
+        },
+        "ja": {
+          "updatedAt": "2026-09-07T13:29:25.906Z",
+          "fileName": "ja/concepts/features/performance/allocation-profiling.mdx",
+          "postProcessHash": "e0e4507236bd691ea9ae7b69438b70d7f07322a84883a1c6cc1fdf56db4aeb57"
+        },
+        "ar": {
+          "updatedAt": "2026-09-07T13:29:25.908Z",
+          "fileName": "ar/concepts/features/performance/allocation-profiling.mdx",
+          "postProcessHash": "9bcd02f4d0abe42ab34e16741cd4fdb631307240b0e712d2c9520c052b3123df"
         }
       },
-      "fileName": "concepts/features/performance/allocation-profiling.mdx",
-      "staged": false
+      "fileName": "concepts/features/performance/allocation-profiling.mdx"
     },
     {
       "fileId": "0f8f3a1a001821eca0a2511d5398c2a88f22d3db66f1438d57ae5755dbdaf0fb",
@@ -137905,6 +137904,147 @@
         }
       },
       "fileName": "reference/statements/create/token.mdx"
+    },
+    {
+      "fileId": "59c92b541f6f43883dad28e03cd5bede26ca5936f6c3ede3f7e5ecdd42cc5b37",
+      "versionId": "e0c89ee42ef52b2127d2dd087fd0fdc9373309c3335426d72758c6952a6f154e",
+      "translations": {
+        "ru": {
+          "updatedAt": "2026-09-07T13:29:24.205Z",
+          "fileName": "ru/products/managed-postgres/extensions/chdb/chdb.mdx",
+          "postProcessHash": "3051f7432a6ba52d194232c15cc6b689e961c776737c0b86ea2c7b1831504236"
+        },
+        "pt-BR": {
+          "updatedAt": "2026-09-07T13:29:24.207Z",
+          "fileName": "pt-BR/products/managed-postgres/extensions/chdb/chdb.mdx",
+          "postProcessHash": "7445c81a5e101db836eb0abb42367a1f2b81e6ea2c5f7c8ab74bfe5dfb4ed015"
+        },
+        "ko": {
+          "updatedAt": "2026-09-07T13:29:24.208Z",
+          "fileName": "ko/products/managed-postgres/extensions/chdb/chdb.mdx",
+          "postProcessHash": "ad7b1875bf5fff035dda12e0222a87f61dd45a965d823dd51381d3c2d71fd5c5"
+        },
+        "fr": {
+          "updatedAt": "2026-09-07T13:29:24.982Z",
+          "fileName": "fr/products/managed-postgres/extensions/chdb/chdb.mdx",
+          "postProcessHash": "234a9f1abc71ceb5f9ff559563b2ce723240d6e758caf17375e9c1755c7f1caa"
+        },
+        "es": {
+          "updatedAt": "2026-09-07T13:29:24.983Z",
+          "fileName": "es/products/managed-postgres/extensions/chdb/chdb.mdx",
+          "postProcessHash": "1d68928c72b799f39c0bc966f2fcfa10d7207da29836bb073d79c05086e4dad5"
+        },
+        "zh": {
+          "updatedAt": "2026-09-07T13:29:25.216Z",
+          "fileName": "zh/products/managed-postgres/extensions/chdb/chdb.mdx",
+          "postProcessHash": "8b2daab6863d3e691d310f906a7f6efa8ad13565976b664eaeea1c6a853f0261"
+        },
+        "ar": {
+          "updatedAt": "2026-09-07T13:29:25.694Z",
+          "fileName": "ar/products/managed-postgres/extensions/chdb/chdb.mdx",
+          "postProcessHash": "e9307f3c4b4dcca77449e6a8f0d115d1c3c8e2a941c20b670df69e0e028c0a3d"
+        },
+        "ja": {
+          "updatedAt": "2026-09-07T13:29:25.907Z",
+          "fileName": "ja/products/managed-postgres/extensions/chdb/chdb.mdx",
+          "postProcessHash": "2302abe08d3fb59b80705316ee2b2d18cdca813dadd9f600627fdcab1520b0d3"
+        }
+      },
+      "fileName": "products/managed-postgres/extensions/chdb/chdb.mdx"
+    },
+    {
+      "fileId": "56f1eddf2e974f21a0c25d3b3eea2cea292af9d06bd2b9f667e861bd00bddbaa",
+      "versionId": "0579bd42dfb4a8ccfcd50f0812a068969aac335c944980dd791f4e4fceaab124",
+      "translations": {
+        "fr": {
+          "updatedAt": "2026-09-07T13:29:24.206Z",
+          "fileName": "fr/products/managed-postgres/extensions/chdb/introduction.mdx",
+          "postProcessHash": "a299767a9217637097c3e50fc54653abf945e1150d3ad950424abafd72a2839d"
+        },
+        "es": {
+          "updatedAt": "2026-09-07T13:29:24.208Z",
+          "fileName": "es/products/managed-postgres/extensions/chdb/introduction.mdx",
+          "postProcessHash": "006d2a3a3b5a36e43df80131e40980b9754a9b5cebbc80c7fd767f2b15dcb3c1"
+        },
+        "ko": {
+          "updatedAt": "2026-09-07T13:29:24.984Z",
+          "fileName": "ko/products/managed-postgres/extensions/chdb/introduction.mdx",
+          "postProcessHash": "092b240371901c8d4aa145305d97bbb933ea0be2e84bcd0f79b3d250ba299cc3"
+        },
+        "pt-BR": {
+          "updatedAt": "2026-09-07T13:29:25.216Z",
+          "fileName": "pt-BR/products/managed-postgres/extensions/chdb/introduction.mdx",
+          "postProcessHash": "22c4423ce8bf981985fbcd9dd62db5544322fea9abc74c3ea4e4c1082b201f6b"
+        },
+        "zh": {
+          "updatedAt": "2026-09-07T13:29:25.217Z",
+          "fileName": "zh/products/managed-postgres/extensions/chdb/introduction.mdx",
+          "postProcessHash": "0c9333d99864385004dd65c746459affcfc4eec9f3e85589cbe19348de48f886"
+        },
+        "ja": {
+          "updatedAt": "2026-09-07T13:29:25.453Z",
+          "fileName": "ja/products/managed-postgres/extensions/chdb/introduction.mdx",
+          "postProcessHash": "97bfa9ceb3383a8eb60ba239ffbd1c8efdf1f978eec19cec0b0e2dfe3478c8b8"
+        },
+        "ru": {
+          "updatedAt": "2026-09-07T13:29:25.695Z",
+          "fileName": "ru/products/managed-postgres/extensions/chdb/introduction.mdx",
+          "postProcessHash": "6de4a36f83f62a88f72fce0aa130f02405d8deabae7e1a55599340fc1af94645"
+        },
+        "ar": {
+          "updatedAt": "2026-09-07T13:29:25.902Z",
+          "fileName": "ar/products/managed-postgres/extensions/chdb/introduction.mdx",
+          "postProcessHash": "df8dc70d13180423d1b163511e099a9bb98ac79682f859311ba5c58107abdd53"
+        }
+      },
+      "fileName": "products/managed-postgres/extensions/chdb/introduction.mdx"
+    },
+    {
+      "fileId": "cd7d383d320b6b2366e02524c03dc20b555070585e2394466624acf2e0150497",
+      "versionId": "3523fa7fdbd7fc1fb0f3b74fb357bd89c0b654028ad9e6b0ef6517199dd32d55",
+      "translations": {
+        "zh": {
+          "updatedAt": "2026-09-07T13:29:25.454Z",
+          "fileName": "zh/products/managed-postgres/extensions/chdb/chdb_hook.mdx",
+          "postProcessHash": "2ed6ff0535882863b039dc6f98031d5acd4e7141b33d13f9e914ab4f5829d887"
+        },
+        "fr": {
+          "updatedAt": "2026-09-07T13:29:25.904Z",
+          "fileName": "fr/products/managed-postgres/extensions/chdb/chdb_hook.mdx",
+          "postProcessHash": "3bc023e4b631c7e2f574c8bf29e01f2f709e47a2a02da2e4f69b8aa68f4dd551"
+        },
+        "pt-BR": {
+          "updatedAt": "2026-09-07T13:29:25.904Z",
+          "fileName": "pt-BR/products/managed-postgres/extensions/chdb/chdb_hook.mdx",
+          "postProcessHash": "1bcb3d20645e68775464c0cdad8b77b5fb0a97d49d0a79b57ff9f97292e0d59a"
+        },
+        "ja": {
+          "updatedAt": "2026-09-07T13:29:25.905Z",
+          "fileName": "ja/products/managed-postgres/extensions/chdb/chdb_hook.mdx",
+          "postProcessHash": "8310afce4652af5f8f6b14458776912f4d3d577b67a1f7f8f56f7512cb4e43a9"
+        },
+        "ko": {
+          "updatedAt": "2026-09-07T13:29:25.906Z",
+          "fileName": "ko/products/managed-postgres/extensions/chdb/chdb_hook.mdx",
+          "postProcessHash": "876668fd4a84dbda85d2d86f8e983eaa3009138af1814a62c75123f77e800d10"
+        },
+        "es": {
+          "updatedAt": "2026-09-07T13:29:25.908Z",
+          "fileName": "es/products/managed-postgres/extensions/chdb/chdb_hook.mdx",
+          "postProcessHash": "deba8312ac7ad3d7285205474dea3d2b54237a86599aa3fc4172549465714b88"
+        },
+        "ar": {
+          "updatedAt": "2026-09-07T13:29:25.909Z",
+          "fileName": "ar/products/managed-postgres/extensions/chdb/chdb_hook.mdx",
+          "postProcessHash": "df563874cb179ce60bc12ba345c51fab8408b38d5570feb1ffa6f9c7136d4859"
+        },
+        "ru": {
+          "updatedAt": "2026-09-07T13:29:25.910Z",
+          "fileName": "ru/products/managed-postgres/extensions/chdb/chdb_hook.mdx",
+          "postProcessHash": "6157e322a869077ae31eb194179ebab741e319aa4148585cbc50858fa4536289"
+        }
+      },
+      "fileName": "products/managed-postgres/extensions/chdb/chdb_hook.mdx"
     }
   ]
 }

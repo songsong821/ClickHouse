@@ -1,14 +1,14 @@
 {
   "groups": [
     {
-      "group": "Get started",
+      "group": "Premiers pas",
       "pages": [
         "fr/products/managed-postgres/overview",
         "fr/products/managed-postgres/quickstart"
       ]
     },
     {
-      "group": "Features",
+      "group": "Fonctionnalités",
       "pages": [
         "fr/products/managed-postgres/connection",
         "fr/products/managed-postgres/settings",
@@ -29,13 +29,21 @@
             "fr/products/managed-postgres/extensions/pg_clickhouse/tutorial"
           ]
         },
+        {
+          "group": "pg_chdb",
+          "pages": [
+            "fr/products/managed-postgres/extensions/chdb/introduction",
+            "fr/products/managed-postgres/extensions/chdb/chdb",
+            "fr/products/managed-postgres/extensions/chdb/chdb_hook"
+          ]
+        },
         "fr/products/managed-postgres/upgrades",
         "fr/products/managed-postgres/openapi",
         "fr/products/managed-postgres/terraform"
       ]
     },
     {
-      "group": "Pricing",
+      "group": "Tarification",
       "pages": [
         "fr/products/managed-postgres/pricing"
       ]
@@ -60,7 +68,7 @@
       ]
     },
     {
-      "group": "Monitoring",
+      "group": "Surveillance",
       "pages": [
         "fr/products/managed-postgres/monitoring/overview",
         "fr/products/managed-postgres/monitoring/dashboard",
