@@ -4697,13 +4697,31 @@ bool ClientBase::aiQueryLogMarkerAllowed()
         if (!connection)
             return false;
 
-        const Block probe = materializeBlock(fetchInternalQueryResult(
-            "SELECT readonly FROM system.settings WHERE name = 'log_comment'", {}, /*from_ai_agent=*/ false));
-        /// An answer that is not a plain "the current user can change it" is taken for a no: the
-        /// marker is optional, and offering `read_query_log` on top of a guess would report the
-        /// activity of the agent itself back as the history of the user.
-        ai_query_log_marker_writable
-            = probe.rows() == 1 && probe.columns() == 1 && probe.getByPosition(0).column->getUInt(0) == 0;
+        /// Asking can fail for reasons that say nothing about the answer: the session may limit
+        /// the execution time of its queries to less than this one takes as the first query of a
+        /// cold server, the user may cancel, the connection may break. The marker is optional and
+        /// the agent is not, so such a failure must not end the turn - and it would, because the
+        /// question is asked from `refreshToolSet`, which is the first thing every turn does.
+        /// It is answered with a no instead, which is the fail-closed answer: the marker is
+        /// dropped and `read_query_log` goes with it, and nothing else changes. Reported once,
+        /// because a tool that is silently missing looks like a model that chose not to use it.
+        try
+        {
+            const Block probe = materializeBlock(fetchInternalQueryResult(
+                "SELECT readonly FROM system.settings WHERE name = 'log_comment'", {}, /*from_ai_agent=*/ false));
+            /// An answer that is not a plain "the current user can change it" is taken for a no: the
+            /// marker is optional, and offering `read_query_log` on top of a guess would report the
+            /// activity of the agent itself back as the history of the user.
+            ai_query_log_marker_writable
+                = probe.rows() == 1 && probe.columns() == 1 && probe.getByPosition(0).column->getUInt(0) == 0;
+        }
+        catch (...)
+        {
+            ai_query_log_marker_writable = false;
+            error_stream << "The AI agent cannot check whether it may tag its queries in the query log, so the "
+                            "query-log tool is unavailable in this session: "
+                         << getCurrentExceptionMessage(false) << std::endl;
+        }
     }
 
     if (!*ai_query_log_marker_writable)
