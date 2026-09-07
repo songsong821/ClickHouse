@@ -117,6 +117,12 @@ $CLICKHOUSE_CLIENT -q "
 " 2>&1 | grep -E '^\s+(status|verdict):|Code:' | awk '{$1=$1; print}'
 
 # a projection sort key has no direction, so the synthetic part is sorted the only way one can be
+echo "--- the preferred-projection setting only narrows existing projections, so it is ignored ---"
+$CLICKHOUSE_CLIENT -q "
+    CREATE HYPOTHETICAL PROJECTION p_b ON t_est (SELECT a, b, v ORDER BY b);
+    EXPLAIN WHATIF SELECT count() FROM t_est WHERE b = 42 SETTINGS ${PIN}, preferred_optimize_projection_name = 'p_other';
+" 2>&1 | grep -E '^\s+(status|verdict):|Code:' | awk '{$1=$1; print}'
+
 echo "--- a descending projection key does not parse ---"
 $CLICKHOUSE_CLIENT -q "CREATE HYPOTHETICAL PROJECTION p_desc ON t_est (SELECT a, b, v ORDER BY b DESC);" 2>&1 | grep -m1 -oE 'SYNTAX_ERROR'
 

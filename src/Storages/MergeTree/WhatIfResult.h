@@ -31,7 +31,6 @@ struct WhatIfCandidateResult
 
     /// projections only, what the projection read would touch and whether the optimizer would switch to it
     std::optional<UInt64> estimated_rows;
-    std::optional<UInt64> estimated_bytes;
     String verdict;
 
     enum EmpiricalStatus { Ok, Unsupported, Disabled };

@@ -184,6 +184,7 @@ void stripWhatIfControlledSettings(IAST * node, std::vector<String> & removed_fo
                     /// keep the estimate local, use_skip_indexes_on_data_read: avoid over-reporting marks
                     return change.name == "force_optimize_projection"
                         || change.name == "force_optimize_projection_name"
+                        || change.name == "preferred_optimize_projection_name"
                         || change.name == "enable_parallel_replicas"
                         || change.name == "allow_experimental_parallel_reading_from_replicas"
                         || change.name == "use_skip_indexes_on_data_read";
@@ -361,7 +362,10 @@ WhatIfResult estimateHypotheticalIndexes(
     /// Grab the forced index names, drop them for baseline planning, re-check them at the end
     /// a forced projection would throw PROJECTION_NOT_USED while planning, before any candidate is seen
     local_context->resetSettingsToDefaultValue(
-        {"force_data_skipping_indices", "force_optimize_projection", "force_optimize_projection_name"});
+        {"force_data_skipping_indices",
+         "force_optimize_projection",
+         "force_optimize_projection_name",
+         "preferred_optimize_projection_name"});
 
     auto select_query_copy = select_query->clone();
     std::vector<String> forced_strings;

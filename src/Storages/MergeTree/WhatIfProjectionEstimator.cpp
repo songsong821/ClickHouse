@@ -172,7 +172,7 @@ bool buildProjectionPart(
     for (size_t i = 0; i < key_columns.size(); ++i)
         out.key_block.insert({std::move(key_columns[i]), proj_key.data_types[i], proj_key.column_names[i]});
 
-    /// compact parts report zero per column, then the whole part is an upper bound and the benefit is understated
+    /// only used to pick the granularity; compact parts report zero per column, then the whole part is the bound
     for (const auto & name : projection.required_columns)
         out.bytes += part->getColumnSize(name).data_uncompressed;
     if (out.bytes == 0)
@@ -275,7 +275,6 @@ bool tryEstimateProjection(
 
     UInt64 projection_marks = 0;
     UInt64 projection_rows = 0;
-    UInt64 projection_bytes = 0;
     UInt64 scanned_parts = 0;
     UInt64 scanned_marks = 0;
 
@@ -303,16 +302,12 @@ bool tryEstimateProjection(
         MarkRanges pruned
             = pruneSyntheticProjectionPart(part_data, projection, part, key_condition, mt_settings, query_settings, granularity, log);
 
-        const UInt64 rows_in_ranges = granularity->getRowsCountInRanges(pruned);
         projection_marks += pruned.getNumberOfMarks();
-        projection_rows += rows_in_ranges;
-        projection_bytes += static_cast<UInt64>(
-            static_cast<double>(part_data.bytes) / static_cast<double>(part_data.rows) * static_cast<double>(rows_in_ranges));
+        projection_rows += granularity->getRowsCountInRanges(pruned);
     }
 
     result.estimated_marks = projection_marks;
     result.estimated_rows = projection_rows;
-    result.estimated_bytes = projection_bytes;
     /// signed on purpose, a projection can read more marks than the base table
     result.skip_ratio = baseline_marks > 0
         ? (static_cast<double>(baseline_marks) - static_cast<double>(projection_marks)) / static_cast<double>(baseline_marks)
