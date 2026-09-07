@@ -1140,7 +1140,22 @@ bool settingCanAffectQueryRows(std::string_view setting_name)
         "max_result_rows",
     };
 
-    return !settings_not_affecting_rows.contains(setting_name);
+    if (settings_not_affecting_rows.contains(setting_name))
+        return false;
+
+    /// The query result cache settings only decide whether, where and for how long a result is cached;
+    /// none of them changes which rows a `SELECT` produces. `QueryResultCache` already leaves them out
+    /// of its own cache key for the same reason (`isQueryResultCacheRelatedSetting`). They are matched by
+    /// shape rather than listed one by one so that a query cache setting added later is covered without
+    /// touching this function, and `query_cache_tag` is excluded here as well - unlike in the cache key,
+    /// where the tag deliberately separates entries, it cannot change a single row. Without this a pure
+    /// caching-policy edit such as `ALTER USER ... SETTINGS use_query_cache = 1` would look like a data
+    /// change: it would move a view's `modification_hash` and discard a `REFRESH ... IF CHANGED`
+    /// watermark, making an `APPEND` view append a duplicate copy of unchanged rows.
+    if (setting_name.starts_with("query_cache_") || setting_name.ends_with("_query_cache"))
+        return false;
+
+    return true;
 }
 
 }
