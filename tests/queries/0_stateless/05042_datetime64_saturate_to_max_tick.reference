@@ -34,3 +34,6 @@ accurate casts saturate the same way, wide carriers still reject
 999:59:59.999999	999:59:59.999999	999:59:59.999999
 2262-04-11 23:47:16.854775807
 \N	\N	\N
+accurate casts still saturate for these targets
+999:59:59.999999	999:59:59.999999
+2262-04-11 23:47:16.854775807

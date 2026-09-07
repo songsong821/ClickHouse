@@ -2215,11 +2215,9 @@ struct ConvertImpl
                 return DateTimeTransformImpl<FromDataType, ToDataType, ToTime64TransformSigned<typename FromDataType::FieldType, default_date_time_overflow_behavior>, false>::template execute<Additions>(
                     arguments, result_type, input_rows_count, additions);
         }
-        /// Without this the narrow unsigned types skip the saturating transform and store out-of-range values raw
-        else if constexpr ((std::is_same_v<FromDataType, DataTypeUInt8>
-                || std::is_same_v<FromDataType, DataTypeUInt16>
-                || std::is_same_v<FromDataType, DataTypeUInt32>)
-            && std::is_same_v<ToDataType, DataTypeTime64>)
+        /// Without this UInt32 skips the saturating transform and stores an out-of-range value raw. UInt8 and
+        /// UInt16 cannot exceed MAX_TIME_TIMESTAMP, so they have nothing to saturate and keep the generic path.
+        else if constexpr (std::is_same_v<FromDataType, DataTypeUInt32> && std::is_same_v<ToDataType, DataTypeTime64>)
         {
             return DateTimeTransformImpl<FromDataType, ToDataType, ToTime64TransformUnsigned<typename FromDataType::FieldType, default_date_time_overflow_behavior>, false>::template execute<Additions>(
                 arguments, result_type, input_rows_count, additions);
