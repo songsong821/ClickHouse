@@ -199,7 +199,8 @@ static bool dagReferencesUnshippableSubquerySet(const ActionsDAG & dag)
 }
 
 /// True if any step in the fragment references such an unshippable subquery set (in a WHERE/HAVING filter,
-/// an expression, or a MergeTree PREWHERE). Used to keep that fragment local instead of shipping it.
+/// an expression, or a source step's row-level filter or PREWHERE). Used to keep that fragment local
+/// instead of shipping it.
 static bool fragmentHasUnshippableSubquerySet(const QueryPlan::Node * node)
 {
     if (!node)
@@ -218,6 +219,13 @@ static bool fragmentHasUnshippableSubquerySet(const QueryPlan::Node * node)
     }
     else if (const auto * source_with_filter = dynamic_cast<const SourceStepWithFilter *>(step))
     {
+        /// Both are serialized with the read (`ReadFromMergeTree::serialize` writes `row_level_filter` and
+        /// `prewhere_info`), and index analysis builds the sets of both in place, so either can carry a set
+        /// whose plan is gone. A row policy (`USING k IN (SELECT ...)`) reaches the read this way.
+        if (const auto row_level_filter = source_with_filter->getRowLevelFilter())
+            if (dagReferencesUnshippableSubquerySet(row_level_filter->actions))
+                return true;
+
         if (const auto prewhere_info = source_with_filter->getPrewhereInfo())
             if (dagReferencesUnshippableSubquerySet(prewhere_info->prewhere_actions))
                 return true;
