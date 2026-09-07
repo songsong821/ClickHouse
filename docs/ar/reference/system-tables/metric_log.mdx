@@ -714,8 +714,8 @@ import SystemTableCloud from '/snippets/ar/_system_table_cloud.mdx';
 * `ProfileEvent_S3ReadRequestsErrors` ([UInt64](/ar/reference/data-types/int-uint)) — عدد الأخطاء غير المرتبطة بتقييد المعدل في طلبات GET وHEAD إلى S3 storage.
 * `ProfileEvent_S3ReadRequestsThrottling` ([UInt64](/ar/reference/data-types/int-uint)) — عدد أخطاء 429 و503 في طلبات GET وHEAD إلى S3 storage.
 * `ProfileEvent_S3ReadRequestsRedirects` ([UInt64](/ar/reference/data-types/int-uint)) — عدد عمليات إعادة التوجيه في طلبات GET وHEAD إلى S3 storage.
-* `ProfileEvent_S3ReadRequestAttempts` ([UInt64](/ar/reference/data-types/int-uint)) — عدد محاولات طلبات GET وHEAD، بما في ذلك المحاولة الأولى وأي محاولات إعادة، باستثناء المحاولات التي تُنفَّذ داخليًا بواسطة retry strategy الخاصة بـ S3
-* `ProfileEvent_S3ReadRequestRetryableErrors` ([UInt64](/ar/reference/data-types/int-uint)) — عدد الأخطاء القابلة لإعادة المحاولة لطلبات GET وHEAD، باستثناء المحاولات التي تُنفَّذ داخليًا بواسطة retry strategy الخاصة بـ S3
+* `ProfileEvent_S3ReadRequestAttempts` ([UInt64](/ar/reference/data-types/int-uint)) — عدد محاولات طلبات GET وHEAD، بما في ذلك المحاولة الأولى وأي محاولات إعادة، باستثناء المحاولات التي تُنفَّذ داخليًا بواسطة retry strategy الخاصة بـ S3
+* `ProfileEvent_S3ReadRequestRetryableErrors` ([UInt64](/ar/reference/data-types/int-uint)) — عدد الأخطاء القابلة لإعادة المحاولة لطلبات GET وHEAD، باستثناء المحاولات التي تُنفَّذ داخليًا بواسطة retry strategy الخاصة بـ S3
 * `ProfileEvent_S3WriteMicroseconds` ([UInt64](/ar/reference/data-types/int-uint)) — زمن طلبات POST وDELETE وPUT وPATCH إلى S3 storage.
 * `ProfileEvent_S3WriteRequestsCount` ([UInt64](/ar/reference/data-types/int-uint)) — عدد طلبات POST وDELETE وPUT وPATCH في تخزين S3.
 * `ProfileEvent_S3WriteRequestsErrors` ([UInt64](/ar/reference/data-types/int-uint)) — عدد الأخطاء غير الناتجة عن تقييد المعدل في طلبات POST وDELETE وPUT وPATCH في تخزين S3.
@@ -921,11 +921,15 @@ import SystemTableCloud from '/snippets/ar/_system_table_cloud.mdx';
 * `ProfileEvent_AdaptiveAggregationStagedRecordsMerged` ([UInt64](/ar/reference/data-types/int-uint)) — عدد السجلات المرحلية التي أزال التجميع التكيفي تكرارها بسبب مفاتيح مكررة عند النشر والإغلاق.
 * `ProfileEvent_AdaptiveAggregationStagedBytes` ([UInt64](/ar/reference/data-types/int-uint)) — عدد بايتات المفاتيح التي جهّزها التجميع التكيفي للتصريف وقت الدمج.
 * `ProfileEvent_AdaptiveAggregationSealedChunks` ([UInt64](/ar/reference/data-types/int-uint)) — عدد المقاطع المدمجة التي أغلقها التجميع التكيفي من دفعات التنظيم المؤقت المخزنة.
+* `ProfileEvent_AdaptiveAggregationStagedChunkSplits` ([UInt64](/ar/reference/data-types/int-uint)) — عدد المقاطع المرحلية التي قسّمها التجميع التكيفي عند حدود الحاويات وقت النشر لأن تقدير تصريف أحد المقاطع تجاوز حد جزء الضغط.
+* `ProfileEvent_AdaptiveAggregationStagedChunkPiecesOverBound` ([UInt64](/ar/reference/data-types/int-uint)) — عدد أجزاء المقاطع المرحلية المقسّمة التي نشرها التجميع التكيفي رغم استمرار تجاوزها الحد الذي قُسّم المقطع للالتزام به. يُقسّم المقطع عند حدود الحاويات، وسجلًا بسجل داخل الحاوية التي تتجاوز الحد بمفردها؛ لذا يكون هذا الجزء سجلًا واحدًا تتجاوز بايتاته المرحلية وحدها الحد. ويُطالب بهذا الجزء كاملًا، وقد يتجاوز تصريفه حد جزء الضغط بهذا المقدار.
+* `ProfileEvent_AdaptiveAggregationStagedClaimsClosedAtBound` ([UInt64](/ar/reference/data-types/int-uint)) — عدد مطالبات المقاطع المرحلية التي أغلقتها عمليات تصريف التجميع التكيفي قبل مقطع كانت إضافته سترفع الدفعة إلى حد جزء الضغط، فيُترك ذلك المقطع للمطالبة التالية. ينطبق الحد على الدفعة بعد تصريفها؛ لذا يُصرَّف مقطعان يقل كل منهما قليلًا عن الحد — وهما جزآن من مقطع مقسّم، كل منهما سجل واحد يتجاوز نصف الجزء — إلى جدولين بدلًا من جدول واحد. والاستثناء الوحيد هو أول مقطع يتجاوز الحد بمفرده، إذ يُطالب به على أي حال.
 * `ProfileEvent_AdaptiveAggregationSealNormalizations` ([UInt64](/ar/reference/data-types/int-uint)) — عدد أعمدة الوسيطات المرحلية التي وحّدها إغلاق التجميع التكيفي من تمثيل مغلّف (Const وReplicated وSparse وLowCardinality) إلى الشكل الكثيف الذي يستهلكه التصريف.
 * `ProfileEvent_AdaptiveAggregationDrainedRecords` ([UInt64](/ar/reference/data-types/int-uint)) — عدد السجلات المؤجلة التي صرّفها التجميع التكيفي إلى الجدول المشترك وقت الدمج.
 * `ProfileEvent_AdaptiveAggregationPressureSweeps` ([UInt64](/ar/reference/data-types/int-uint)) — عدد المرات التي صرّف فيها التجميع التكيفي السجلات المرحلية مبكرًا بسبب ضغط الذاكرة.
 * `ProfileEvent_AdaptiveAggregationPressureDrainedRecords` ([UInt64](/ar/reference/data-types/int-uint)) — عدد السجلات المرحلية التي صرّفها التجميع التكيفي مبكرًا تحت ضغط الذاكرة.
 * `ProfileEvent_AdaptiveAggregationResidueReleases` ([UInt64](/ar/reference/data-types/int-uint)) — عدد المرات التي أخرج فيها التجميع التكيفي جدول التصريف المشترك إلى القرص لأن خيطًا عاد إلى الخوارزمية الأساسية وكان على وشك التفريغ بسببه.
+* `ProfileEvent_AdaptiveAggregationSharedTableSpills` ([UInt64](/ar/reference/data-types/int-uint)) — عدد المرات التي أخرج فيها التجميع التكيفي جدول التصريف المشترك إلى القرص لأنه بلغ حد الجزء تحت ضغط الذاكرة.
 * `ProfileEvent_AdaptiveAggregationBucketsRetired` ([UInt64](/ar/reference/data-types/int-uint)) — عدد الحاويات ثنائية المستوى التي حُررت ذاكرتها العاملة (فتحة Arena، ومراجع المقاطع المرحلية) مباشرةً بعد اكتمال دمجها وتحويلها، قبل انتهاء الدمج بالكامل.
 * `ProfileEvent_AggregationBucketTopKConversions` ([UInt64](/ar/reference/data-types/int-uint)) — عدد الحاويات ثنائية المستوى التي حُوّلت عبر اختيار Top-K المحلي للحاوية (تحسين خطة aggregationBucketTopK).
 * `ProfileEvent_AggregationHashTablesInitializedAsTwoLevel` ([UInt64](/ar/reference/data-types/int-uint)) — عدد جداول التجزئة التي هُيئت بمستويين لأغراض التجميع.
@@ -1294,8 +1298,8 @@ import SystemTableCloud from '/snippets/ar/_system_table_cloud.mdx';
 * `ProfileEvent_SharedMergeTreeBlobsListInlineFilesWritten` ([UInt64](/ar/reference/data-types/int-uint)) — عدد الملفات الصغيرة المخزّنة مضمنةً في خرائط blobs.list الخاصة بـ SharedMergeTree بدلًا من blobs منفصلة
 * `ProfileEvent_SharedMergeTreeMergeSelectingTaskMicroseconds` ([UInt64](/ar/reference/data-types/int-uint)) — عدد الميكروثواني لمهمة اختيار الدمج في SMT
 * `ProfileEvent_SharedMergeTreeReplicaSetUpdateTaskRuns` ([UInt64](/ar/reference/data-types/int-uint)) — عدد مرات تشغيل updateReplicaSetTask
-* `ProfileEvent_SharedMergeTreeOptimizeAsync` ([UInt64](/ar/reference/data-types/int-uint)) — عدد استعلامات OPTIMIZE غير المتزامنة التي نُفِّذت
-* `ProfileEvent_SharedMergeTreeOptimizeSync` ([UInt64](/ar/reference/data-types/int-uint)) — عدد استعلامات OPTIMIZE المتزامنة التي نُفِّذت
+* `ProfileEvent_SharedMergeTreeOptimizeAsync` ([UInt64](/ar/reference/data-types/int-uint)) — عدد استعلامات OPTIMIZE غير المتزامنة التي نُفِّذت
+* `ProfileEvent_SharedMergeTreeOptimizeSync` ([UInt64](/ar/reference/data-types/int-uint)) — عدد استعلامات OPTIMIZE المتزامنة التي نُفِّذت
 * `ProfileEvent_SharedMergeTreePartitionOperationRetries` ([UInt64](/ar/reference/data-types/int-uint)) — عدد المرات التي اضطرت فيها عملية على مستوى القسم (DROP/MOVE/REPLACE/CLONE/TRUNCATE PARTITION) إلى إعادة محاولة الكتابة المتعددة في Keeper بسبب تغيير متزامن
 * `ProfileEvent_SharedMergeTreeScheduleDataProcessingJob` ([UInt64](/ar/reference/data-types/int-uint)) — عدد مرات استدعاء scheduleDataProcessingJob/
 * `ProfileEvent_SharedMergeTreeScheduleDataProcessingJobNothingToScheduled` ([UInt64](/ar/reference/data-types/int-uint)) — عدد مرات استدعاء scheduleDataProcessingJob دون وجود أي عمل للتنفيذ

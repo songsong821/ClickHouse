@@ -1602,7 +1602,54 @@ Valores posibles:
 
 <SettingsInfoBlock type="UInt64" default_value="10000" />
 
-<VersionHistory rows={[{"id": "row-1","items": [{"label": "26.8"},{"label": "10000"},{"label": "Nueva configuración para limitar el coste de estimar la selectividad de `IN` con un conjunto grande: por encima del límite, el estimador usa el tamaño del conjunto y su rango acotado en lugar de los rangos exactos. Antes de la versión 26.8, la estimación no tenía límite, por lo que el valor anterior es 0 (sin límite) y `compatibility` con una versión anterior restaura los rangos exactos para conjuntos de cualquier tamaño."}]}]} />
+<VersionHistory
+  rows={[
+{
+  id: "row-1",
+  items: [
+    { label: "26.9" },
+    { label: "10000" },
+    {
+      label:
+        "El límite del coste de estimar la selectividad de `IN` con un conjunto grande se mantiene con `compatibility` de una versión anterior: el valor anterior se ha establecido deliberadamente igual al nuevo, de modo que no se restaure la estimación sin límite, que podría añadir cientos de milisegundos a la planificación de una sola consulta."
+    }
+  ]
+},
+{
+  id: "row-2",
+  items: [
+    { label: "26.8" },
+    { label: "10000" },
+    {
+      label:
+        "Nueva configuración para limitar el coste de estimar la selectividad de `IN` con un conjunto grande: por encima del límite, el estimador usa el tamaño del conjunto y su rango acotado en lugar de los rangos exactos. El valor anterior se ha establecido deliberadamente igual al nuevo, de modo que `compatibility` con una versión anterior mantenga el límite en lugar de restaurar la estimación sin límite, que podría añadir cientos de milisegundos a la planificación de una sola consulta."
+    }
+  ]
+},
+{
+  id: "row-3",
+  items: [
+    { label: "26.7" },
+    { label: "10000" },
+    {
+      label:
+        "El límite del coste de estimar la selectividad de `IN` con un conjunto grande se mantiene con `compatibility` de una versión anterior: el valor anterior se ha establecido deliberadamente igual al nuevo, de modo que no se restaure la estimación sin límite, que podría añadir cientos de milisegundos a la planificación de una sola consulta."
+    }
+  ]
+},
+{
+  id: "row-4",
+  items: [
+    { label: "26.6" },
+    { label: "10000" },
+    {
+      label:
+        "El límite del coste de estimar la selectividad de `IN` con un conjunto grande se mantiene con `compatibility` de una versión anterior: el valor anterior se ha establecido deliberadamente igual al nuevo, de modo que no se restaure la estimación sin límite, que podría añadir cientos de milisegundos a la planificación de una sola consulta."
+    }
+  ]
+}
+]}
+/>
 
 El tamaño máximo del conjunto situado en el lado derecho del operador `IN` para el que el estimador de selectividad determina los rangos exactos que abarca el conjunto. Determinarlos requiere un `Field` por elemento, una ordenación y una sonda de estadísticas por elemento, lo que, en conjuntos grandes, domina la planificación de consultas. Por encima de este límite, el estimador calcula la selectividad a partir del tamaño del conjunto y de su rango acotado, mediante una única pasada lineal por el conjunto, sin ordenación ni sondas de estadísticas por elemento. Cero significa que no hay límite.
 

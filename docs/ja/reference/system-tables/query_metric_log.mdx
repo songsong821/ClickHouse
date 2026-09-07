@@ -927,11 +927,15 @@ import SystemTableCloud from '/snippets/ja/_system_table_cloud.mdx';
 * `ProfileEvent_AdaptiveAggregationStagedRecordsMerged` ([UInt64](/ja/reference/data-types/int-uint)) — アダプティブ集計がパブリッシュ時およびシール時に重複キーとしてマージ・除去したステージング済みレコード数。
 * `ProfileEvent_AdaptiveAggregationStagedBytes` ([UInt64](/ja/reference/data-types/int-uint)) — アダプティブ集計がマージ時の排出に備えてステージングしたキーバイト数。
 * `ProfileEvent_AdaptiveAggregationSealedChunks` ([UInt64](/ja/reference/data-types/int-uint)) — アダプティブ集計がバッファリングされたステージングバッチからシールした結合済み chunk 数。
+* `ProfileEvent_AdaptiveAggregationStagedChunkSplits` ([UInt64](/ja/reference/data-types/int-uint)) — 1 つの chunk の排出量がメモリ逼迫時のパート境界を超えると見積もられたため、アダプティブ集計がパブリッシュ時に bucket 境界で分割したステージング済み chunk 数。
+* `ProfileEvent_AdaptiveAggregationStagedChunkPiecesOverBound` ([UInt64](/ja/reference/data-types/int-uint)) — 分割の基準となった境界をなお超えたままアダプティブ集計がパブリッシュした、分割済みステージング chunk の断片数。chunk は bucket 境界で分割され、単独で境界を超える bucket 内ではレコード単位で分割されます。したがって、これはステージング済みバイト数だけで境界を超える単一レコードです。このような断片は全体としてクレームされ、その排出量はその分だけメモリ逼迫時のパート境界を超える場合があります。
+* `ProfileEvent_AdaptiveAggregationStagedClaimsClosedAtBound` ([UInt64](/ja/reference/data-types/int-uint)) — 追加するとバッチがメモリ逼迫時のパート境界に達する chunk の手前で閉じられ、その chunk が次のクレームに回された、アダプティブ集計の排出処理によるステージング済み chunk のクレーム数。境界は排出されたバッチに適用されるため、それぞれが境界をわずかに下回る 2 つの chunk (パートの半分を超える単一レコードである、分割済み chunk の 2 つの断片) は、1 つではなく 2 つのテーブルに排出されます。ただし、単独で境界を超える最初の chunk は必ずクレームされます。
 * `ProfileEvent_AdaptiveAggregationSealNormalizations` ([UInt64](/ja/reference/data-types/int-uint)) — アダプティブ集計のシール処理が、ラップされた表現 (Const、Replicated、Sparse、LowCardinality) から排出処理で使用する密な形式に正規化したステージング済み引数カラム数。
 * `ProfileEvent_AdaptiveAggregationDrainedRecords` ([UInt64](/ja/reference/data-types/int-uint)) — アダプティブ集計がマージ時に共有テーブルへ排出した遅延レコード数。
 * `ProfileEvent_AdaptiveAggregationPressureSweeps` ([UInt64](/ja/reference/data-types/int-uint)) — メモリ逼迫により、アダプティブ集計がステージング済みレコードを早期に排出した回数。
 * `ProfileEvent_AdaptiveAggregationPressureDrainedRecords` ([UInt64](/ja/reference/data-types/int-uint)) — メモリ逼迫下でアダプティブ集計が早期に排出したステージング済みレコード数。
 * `ProfileEvent_AdaptiveAggregationResidueReleases` ([UInt64](/ja/reference/data-types/int-uint)) — ベースラインアルゴリズムに戻ったスレッドが共有排出テーブルが原因でスピルしそうになったため、アダプティブ集計がその共有排出テーブルを書き出した回数。
+* `ProfileEvent_AdaptiveAggregationSharedTableSpills` ([UInt64](/ja/reference/data-types/int-uint)) — メモリ逼迫下でパート境界に達したため、アダプティブ集計が共有排出テーブルを書き出した回数。
 * `ProfileEvent_AdaptiveAggregationBucketsRetired` ([UInt64](/ja/reference/data-types/int-uint)) — マージと変換が完了した直後に、マージ全体の完了を待たずに作業メモリ (アリーナスロット、ステージング済み chunk 参照) が解放された二段階 bucket 数。
 * `ProfileEvent_AggregationBucketTopKConversions` ([UInt64](/ja/reference/data-types/int-uint)) — bucket ローカルの Top-K 選択 (aggregationBucketTopK プラン最適化) を通じて変換された二段階 bucket 数。
 * `ProfileEvent_AggregationHashTablesInitializedAsTwoLevel` ([UInt64](/ja/reference/data-types/int-uint)) — aggregation 用に 2 レベルとして初期化されたハッシュテーブルの数。
@@ -1009,7 +1013,7 @@ import SystemTableCloud from '/snippets/ja/_system_table_cloud.mdx';
 * `ProfileEvent_KeeperPacketsSent` ([UInt64](/ja/reference/data-types/int-uint)) — Keeper サーバーによって送信されたパケット数
 * `ProfileEvent_KeeperPacketsReceived` ([UInt64](/ja/reference/data-types/int-uint)) — Keeper サーバーが受信したパケット数
 * `ProfileEvent_KeeperRequestTotal` ([UInt64](/ja/reference/data-types/int-uint)) — Keeper サーバー上のリクエスト総数
-* `ProfileEvent_KeeperRequestTotalWithSubrequests` ([UInt64](/ja/reference/data-types/int-uint)) — 複数リクエスト内の各 subrequest を含めてカウントした Keeper サーバー上のリクエスト総数
+* `ProfileEvent_KeeperRequestTotalWithSubrequests` ([UInt64](/ja/reference/data-types/int-uint)) — マルチリクエスト内の各 subrequest を含めてカウントした Keeper サーバー上のリクエスト総数
 * `ProfileEvent_KeeperLatency` ([UInt64](/ja/reference/data-types/int-uint)) — Keeper のレイテンシ
 * `ProfileEvent_KeeperTotalElapsedMicroseconds` ([UInt64](/ja/reference/data-types/int-uint)) — 単一リクエストにおける Keeper の合計レイテンシ
 * `ProfileEvent_KeeperProcessElapsedMicroseconds` ([UInt64](/ja/reference/data-types/int-uint)) — 単一リクエストにおける Keeper のコミットレイテンシ

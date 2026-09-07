@@ -921,11 +921,15 @@ import SystemTableCloud from '/snippets/zh/_system_table_cloud.mdx';
 * `ProfileEvent_AdaptiveAggregationStagedRecordsMerged` ([UInt64](/zh/reference/data-types/int-uint)) — 自适应聚合在发布和封存时合并并去除的重复键暂存记录数量。
 * `ProfileEvent_AdaptiveAggregationStagedBytes` ([UInt64](/zh/reference/data-types/int-uint)) — 自适应聚合为在合并时排空而暂存的键字节数。
 * `ProfileEvent_AdaptiveAggregationSealedChunks` ([UInt64](/zh/reference/data-types/int-uint)) — 自适应聚合从缓冲的暂存批次中封存的合并块数量。
+* `ProfileEvent_AdaptiveAggregationStagedChunkSplits` ([UInt64](/zh/reference/data-types/int-uint)) — 由于估算某个块的排空量超过压力分片上限，自适应聚合在发布时沿桶边界切分的暂存块数量。
+* `ProfileEvent_AdaptiveAggregationStagedChunkPiecesOverBound` ([UInt64](/zh/reference/data-types/int-uint)) — 自适应聚合发布的、在切分后仍超过其切分所要满足上限的暂存块分片数量。块会沿桶边界切分；若某个桶本身就超过上限，则会在该桶内逐条记录切分，因此这种分片就是单条其暂存字节数本身即超过上限的记录；此类分片会被整体领取，其排空量可能因此超出压力分片相应的量。
+* `ProfileEvent_AdaptiveAggregationStagedClaimsClosedAtBound` ([UInt64](/zh/reference/data-types/int-uint)) — 自适应聚合的排空操作对暂存块的领取，在遇到某个加入后会使该批次达到压力分片上限的块之前被关闭的次数，该块留待下一次领取。该上限针对实际排空的批次生效，因此两个各自略低于上限的块 (例如某个被切分块中两个各自超过半个分片的单条记录分片) 会被排空到两张表而非一张表；只有当第一个块本身即超过上限时，才会无论如何都被领取。
 * `ProfileEvent_AdaptiveAggregationSealNormalizations` ([UInt64](/zh/reference/data-types/int-uint)) — 自适应聚合在封存时将暂存参数列从包装表示 (Const、Replicated、Sparse、LowCardinality) 归一化为排空操作所使用的稠密形式的次数。
 * `ProfileEvent_AdaptiveAggregationDrainedRecords` ([UInt64](/zh/reference/data-types/int-uint)) — 自适应聚合在合并时排空到共享表中的延迟记录数量。
 * `ProfileEvent_AdaptiveAggregationPressureSweeps` ([UInt64](/zh/reference/data-types/int-uint)) — 自适应聚合因内存压力而提前排空暂存记录的次数。
 * `ProfileEvent_AdaptiveAggregationPressureDrainedRecords` ([UInt64](/zh/reference/data-types/int-uint)) — 自适应聚合在内存压力下提前排空的暂存记录数量。
 * `ProfileEvent_AdaptiveAggregationResidueReleases` ([UInt64](/zh/reference/data-types/int-uint)) — 由于切回基线算法的线程即将因该共享排空表而落盘，自适应聚合将其写出的次数。
+* `ProfileEvent_AdaptiveAggregationSharedTableSpills` ([UInt64](/zh/reference/data-types/int-uint)) — 由于在内存压力下达到分片上限，自适应聚合将其共享排空表写出的次数。
 * `ProfileEvent_AdaptiveAggregationBucketsRetired` ([UInt64](/zh/reference/data-types/int-uint)) — 两级桶在其合并和转换完成后、整个合并结束前立即释放工作内存 (Arena 插槽、暂存块引用) 的数量。
 * `ProfileEvent_AggregationBucketTopKConversions` ([UInt64](/zh/reference/data-types/int-uint)) — 通过桶本地 Top-K 选择 (aggregationBucketTopK 查询计划优化) 转换的两级桶数量。
 * `ProfileEvent_AggregationHashTablesInitializedAsTwoLevel` ([UInt64](/zh/reference/data-types/int-uint)) — 为聚合初始化为两级结构的哈希表数量。
@@ -1003,7 +1007,7 @@ import SystemTableCloud from '/snippets/zh/_system_table_cloud.mdx';
 * `ProfileEvent_KeeperPacketsSent` ([UInt64](/zh/reference/data-types/int-uint)) — Keeper server 发送的数据包数
 * `ProfileEvent_KeeperPacketsReceived` ([UInt64](/zh/reference/data-types/int-uint)) — Keeper 服务器接收的数据包数
 * `ProfileEvent_KeeperRequestTotal` ([UInt64](/zh/reference/data-types/int-uint)) — Keeper 服务器上的请求总数
-* `ProfileEvent_KeeperRequestTotalWithSubrequests` ([UInt64](/zh/reference/data-types/int-uint)) — Keeper 服务器上的请求总数，在多请求中每个子请求都会单独计数
+* `ProfileEvent_KeeperRequestTotalWithSubrequests` ([UInt64](/zh/reference/data-types/int-uint)) — Keeper 服务器上的请求总数，在多重请求中每个子请求都会单独计数
 * `ProfileEvent_KeeperLatency` ([UInt64](/zh/reference/data-types/int-uint)) — Keeper 延迟
 * `ProfileEvent_KeeperTotalElapsedMicroseconds` ([UInt64](/zh/reference/data-types/int-uint)) — 单个请求的 Keeper 总延迟
 * `ProfileEvent_KeeperProcessElapsedMicroseconds` ([UInt64](/zh/reference/data-types/int-uint)) — 单个请求的 Keeper 提交延迟
@@ -1827,7 +1831,7 @@ import SystemTableCloud from '/snippets/zh/_system_table_cloud.mdx';
 * `CurrentMetric_DiskPlainRewritableLocalDirectoryMapSize` ([Int64](/zh/reference/data-types/int-uint)) — LocalObjectStorage 的 &#39;plain&#95;rewritable&#39; 内存映射中本地到远程路径条目的数量。
 * `CurrentMetric_DiskPlainRewritableLocalFileCount` ([Int64](/zh/reference/data-types/int-uint)) — LocalObjectStorage 的 &#39;plain&#95;rewritable&#39; 内存映射中文件条目的数量。
 * `CurrentMetric_DiskPlainRewritableS3DirectoryMapSize` ([Int64](/zh/reference/data-types/int-uint)) — S3ObjectStorage 的 &#39;plain&#95;rewritable&#39; 内存映射中本地到远程路径条目的数量。
-* `CurrentMetric_DiskPlainRewritableS3FileCount` ([Int64](/zh/reference/data-types/int-uint)) — S3ObjectStorage 中 `plain_rewritable` 内存映射里的文件条目数。
+* `CurrentMetric_DiskPlainRewritableS3FileCount` ([Int64](/zh/reference/data-types/int-uint)) — S3ObjectStorage 的 &#39;plain&#95;rewritable&#39; 内存映射中文件条目的数量。
 * `CurrentMetric_MergeTreeFetchPartitionThreads` ([Int64](/zh/reference/data-types/int-uint)) — 用于 ALTER TABLE FETCH PARTITION 的线程数。
 * `CurrentMetric_MergeTreeFetchPartitionThreadsActive` ([Int64](/zh/reference/data-types/int-uint)) — 用于 ALTER TABLE FETCH PARTITION 拉取分片的线程数。
 * `CurrentMetric_MergeTreeFetchPartitionThreadsScheduled` ([Int64](/zh/reference/data-types/int-uint)) — ALTER TABLE FETCH PARTITION 中已排队或正在执行的分片拉取数。
@@ -1921,7 +1925,7 @@ import SystemTableCloud from '/snippets/zh/_system_table_cloud.mdx';
 * `CurrentMetric_FiberStackBytes` ([Int64](/zh/reference/data-types/int-uint)) — 当前已分配的 fiber 栈总大小。
 * `CurrentMetric_AsynchronousReadWait` ([Int64](/zh/reference/data-types/int-uint)) — 等待异步读取的线程数。
 * `CurrentMetric_PendingAsyncInsert` ([Int64](/zh/reference/data-types/int-uint)) — 等待刷盘的异步插入数。
-* `CurrentMetric_KafkaConsumers` ([Int64](/zh/reference/data-types/int-uint)) — 活跃 Kafka 消费者数量。
+* `CurrentMetric_KafkaConsumers` ([Int64](/zh/reference/data-types/int-uint)) — 活跃 Kafka 消费者数量
 * `CurrentMetric_KafkaConsumersWithAssignment` ([Int64](/zh/reference/data-types/int-uint)) — 已分配分区的活跃 Kafka 消费者数量。
 * `CurrentMetric_KafkaProducers` ([Int64](/zh/reference/data-types/int-uint)) — 已创建的活跃 Kafka 生产者数量。
 * `CurrentMetric_KafkaLibrdkafkaThreads` ([Int64](/zh/reference/data-types/int-uint)) — 活跃 librdkafka 线程数。

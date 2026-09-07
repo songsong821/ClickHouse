@@ -1602,7 +1602,54 @@ Valeurs possibles :
 
 <SettingsInfoBlock type="UInt64" default_value="10000" />
 
-<VersionHistory rows={[{"id": "row-1","items": [{"label": "26.8"},{"label": "10000"},{"label": "Nouveau paramètre qui limite le coût de l'estimation de la sélectivité de `IN` avec un grand ensemble : au-delà de cette limite, l'estimateur utilise la taille de l'ensemble et sa plage englobante plutôt que les plages exactes. Avant la version 26.8, l'estimation n'était pas plafonnée ; la valeur précédente est donc 0 (aucune limite), et `compatibility` avec une version antérieure rétablit les plages exactes pour les ensembles de toute taille."}]}]} />
+<VersionHistory
+  rows={[
+{
+  id: "row-1",
+  items: [
+    { label: "26.9" },
+    { label: "10000" },
+    {
+      label:
+        "La limite du coût de l'estimation de la sélectivité de `IN` avec un grand ensemble est conservée avec `compatibility` pour une version antérieure : la valeur précédente est délibérément égale à la nouvelle, afin que l'estimation non plafonnée, qui pouvait ajouter des centaines de millisecondes à la planification d'une seule requête, ne soit pas rétablie."
+    }
+  ]
+},
+{
+  id: "row-2",
+  items: [
+    { label: "26.8" },
+    { label: "10000" },
+    {
+      label:
+        "Nouveau paramètre qui limite le coût de l'estimation de la sélectivité de `IN` avec un grand ensemble : au-delà de cette limite, l'estimateur utilise la taille de l'ensemble et sa plage englobante plutôt que les plages exactes. La valeur précédente est délibérément égale à la nouvelle, afin que `compatibility` avec une version antérieure conserve la limite au lieu de rétablir l'estimation non plafonnée, qui pouvait ajouter des centaines de millisecondes à la planification d'une seule requête."
+    }
+  ]
+},
+{
+  id: "row-3",
+  items: [
+    { label: "26.7" },
+    { label: "10000" },
+    {
+      label:
+        "La limite du coût de l'estimation de la sélectivité de `IN` avec un grand ensemble est conservée avec `compatibility` pour une version antérieure : la valeur précédente est délibérément égale à la nouvelle, afin que l'estimation non plafonnée, qui pouvait ajouter des centaines de millisecondes à la planification d'une seule requête, ne soit pas rétablie."
+    }
+  ]
+},
+{
+  id: "row-4",
+  items: [
+    { label: "26.6" },
+    { label: "10000" },
+    {
+      label:
+        "La limite du coût de l'estimation de la sélectivité de `IN` avec un grand ensemble est conservée avec `compatibility` pour une version antérieure : la valeur précédente est délibérément égale à la nouvelle, afin que l'estimation non plafonnée, qui pouvait ajouter des centaines de millisecondes à la planification d'une seule requête, ne soit pas rétablie."
+    }
+  ]
+}
+]}
+/>
 
 La taille maximale de l&#39;ensemble situé à droite de l&#39;opérateur `IN` pour laquelle l&#39;estimateur de sélectivité détermine les plages exactes couvertes par l&#39;ensemble. Cette opération nécessite un `Field` par élément, un tri et une sonde de statistiques par élément, ce qui, pour un grand ensemble, représente la majeure partie de la planification de la requête. Au-delà de cette limite, l&#39;estimateur détermine plutôt la sélectivité à partir de la taille de l&#39;ensemble et de sa plage englobante, en un seul parcours linéaire de l&#39;ensemble, sans tri ni sondes de statistiques par élément. Zéro signifie qu&#39;il n&#39;y a pas de limite.
 

@@ -512,12 +512,13 @@ const SessionSettingsExplorer = ({ href: baseRoute }) => {
     },
     {
       label: "create_*",
-      count: 4,
+      count: 5,
       settings: [
         { name: "create_if_not_exists", path: "/create#create_if_not_exists", default: "0" },
         { name: "create_index_ignore_unique", path: "/create#create_index_ignore_unique", default: "0" },
         { name: "create_replicated_merge_tree_fault_injection_probability", path: "/create#create_replicated_merge_tree_fault_injection_probability", default: "0" },
-        { name: "create_table_empty_primary_key_by_default", path: "/create#create_table_empty_primary_key_by_default", default: "1" }
+        { name: "create_table_empty_primary_key_by_default", path: "/create#create_table_empty_primary_key_by_default", default: "1" },
+        { name: "create_token_default_ttl_seconds", path: "/create#create_token_default_ttl_seconds", default: "1800" }
       ],
       children: []
     },
@@ -2316,7 +2317,7 @@ const SessionSettingsExplorer = ({ href: baseRoute }) => {
     },
     {
       label: "query_plan_*",
-      count: 53,
+      count: 55,
       settings: [
         { name: "query_plan_aggregation_bucket_top_k", path: "/query-plan#query_plan_aggregation_bucket_top_k", default: "1" },
         { name: "query_plan_aggregation_in_order", path: "/query-plan#query_plan_aggregation_in_order", default: "1" },
@@ -2351,6 +2352,8 @@ const SessionSettingsExplorer = ({ href: baseRoute }) => {
         { name: "query_plan_optimize_join_order_limit", path: "/query-plan#query_plan_optimize_join_order_limit", default: "10" },
         { name: "query_plan_optimize_join_order_max_searched_plans", path: "/query-plan#query_plan_optimize_join_order_max_searched_plans", default: "100000" },
         { name: "query_plan_optimize_join_order_randomize", path: "/query-plan#query_plan_optimize_join_order_randomize", default: "0" },
+        { name: "query_plan_optimize_join_order_use_cd_a_conflict_detector", path: "/query-plan#query_plan_optimize_join_order_use_cd_a_conflict_detector", default: "0" },
+        { name: "query_plan_optimize_join_order_use_cd_c_conflict_detector", path: "/query-plan#query_plan_optimize_join_order_use_cd_c_conflict_detector", default: "0" },
         { name: "query_plan_optimize_lazy_final", path: "/query-plan#query_plan_optimize_lazy_final", default: "0" },
         { name: "query_plan_optimize_lazy_materialization", path: "/query-plan#query_plan_optimize_lazy_materialization", default: "1" },
         { name: "query_plan_optimize_lazy_materialization_for_file", path: "/query-plan#query_plan_optimize_lazy_materialization_for_file", default: "1" },
@@ -3345,13 +3348,13 @@ const SessionSettingsExplorer = ({ href: baseRoute }) => {
       {isSearching && (
         <div className="mt-2 text-right text-xs text-gray-500 dark:text-gray-400">
           <span>
-            匹配到 {matchingCount} 项{matchingCount === 1 ? "设置" : "设置"}
+            {matchingCount} 个匹配的 {matchingCount === 1 ? "设置" : "设置"}
           </span>
         </div>
       )}
       <div className="mt-3 w-full overflow-x-auto rounded-xl border border-gray-200 bg-gray-50/50 px-4 py-3 font-mono text-sm leading-6 dark:border-white/10 dark:bg-transparent">
         <div className="flex min-w-full items-center justify-between gap-4">
-          <div className="min-w-max font-semibold">/session-settings</div>
+          <div className="min-w-max font-semibold">/session-设置</div>
           <button
             type="button"
             aria-label={allGroupsExpanded ? "全部折叠" : "全部展开"}

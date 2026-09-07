@@ -920,11 +920,15 @@ import SystemTableCloud from '/snippets/ja/_system_table_cloud.mdx';
 * `ProfileEvent_AdaptiveAggregationStagedRecordsMerged` ([UInt64](/ja/reference/data-types/int-uint)) — アダプティブ集計がパブリッシュ時およびシール時に重複キーとしてマージ・除去したステージング済みレコード数。
 * `ProfileEvent_AdaptiveAggregationStagedBytes` ([UInt64](/ja/reference/data-types/int-uint)) — マージ時のドレインに備えてアダプティブ集計がステージングしたキーバイト数。
 * `ProfileEvent_AdaptiveAggregationSealedChunks` ([UInt64](/ja/reference/data-types/int-uint)) — バッファリングされたステージングバッチからアダプティブ集計がシールした結合済み chunk 数。
+* `ProfileEvent_AdaptiveAggregationStagedChunkSplits` ([UInt64](/ja/reference/data-types/int-uint)) — 1 つの chunk のドレインがメモリ逼迫時のパーツ境界を超えると推定されたため、アダプティブ集計がパブリッシュ時に bucket 境界で分割したステージング済み chunk 数。
+* `ProfileEvent_AdaptiveAggregationStagedChunkPiecesOverBound` ([UInt64](/ja/reference/data-types/int-uint)) — 分割の基準となった境界をなお超えた状態でアダプティブ集計がパブリッシュした、分割済みステージング chunk の断片数。chunk は bucket 境界で分割され、単独で境界を超える bucket 内ではレコード単位で分割されます。したがって、これはステージング済みバイト数だけで境界を超える単一レコードです。このような断片は全体として取得され、そのドレインはメモリ逼迫時のパーツをその分だけ超過する可能性があります。
+* `ProfileEvent_AdaptiveAggregationStagedClaimsClosedAtBound` ([UInt64](/ja/reference/data-types/int-uint)) — アダプティブ集計のドレインによるステージング済み chunk の取得のうち、その chunk を追加するとバッチがメモリ逼迫時のパーツ境界に達するため、その前に閉じられ、当該 chunk が次の取得に残された回数。この境界はドレインされたバッチに適用されるため、それぞれが境界をわずかに下回る 2 つの chunk、すなわちパーツの半分を超える単一レコードである分割済み chunk の 2 つの断片は、1 つではなく 2 つのテーブルにドレインされます。単独で境界を超える最初の chunk のみが例外として取得されます。
 * `ProfileEvent_AdaptiveAggregationSealNormalizations` ([UInt64](/ja/reference/data-types/int-uint)) — アダプティブ集計のシール処理が、ラップされた表現 (Const、Replicated、Sparse、LowCardinality) からドレインで使用する密な形式へ正規化したステージング済み引数カラム数。
 * `ProfileEvent_AdaptiveAggregationDrainedRecords` ([UInt64](/ja/reference/data-types/int-uint)) — アダプティブ集計がマージ時に共有テーブルへドレインした遅延レコード数。
 * `ProfileEvent_AdaptiveAggregationPressureSweeps` ([UInt64](/ja/reference/data-types/int-uint)) — メモリ逼迫によりアダプティブ集計がステージング済みレコードを早期にドレインした回数。
 * `ProfileEvent_AdaptiveAggregationPressureDrainedRecords` ([UInt64](/ja/reference/data-types/int-uint)) — メモリ逼迫下でアダプティブ集計が早期にドレインしたステージング済みレコード数。
 * `ProfileEvent_AdaptiveAggregationResidueReleases` ([UInt64](/ja/reference/data-types/int-uint)) — ベースラインアルゴリズムに戻ったスレッドが、それが原因でスピルしそうになったため、アダプティブ集計が共有ドレインテーブルを書き出した回数。
+* `ProfileEvent_AdaptiveAggregationSharedTableSpills` ([UInt64](/ja/reference/data-types/int-uint)) — メモリ逼迫下でパーツ境界に達したため、アダプティブ集計が共有ドレインテーブルを書き出した回数。
 * `ProfileEvent_AdaptiveAggregationBucketsRetired` ([UInt64](/ja/reference/data-types/int-uint)) — マージ・変換の完了直後、マージ全体の完了前に作業メモリ (アリーナスロット、ステージング済み chunk への参照) が解放された二段階 bucket 数。
 * `ProfileEvent_AggregationBucketTopKConversions` ([UInt64](/ja/reference/data-types/int-uint)) — bucket ローカルの Top-K 選択 (aggregationBucketTopK プラン最適化) によって変換された二段階 bucket 数。
 * `ProfileEvent_AggregationHashTablesInitializedAsTwoLevel` ([UInt64](/ja/reference/data-types/int-uint)) — aggregation 用に two-level として初期化された hash table の数。
@@ -1126,7 +1130,7 @@ import SystemTableCloud from '/snippets/ja/_system_table_cloud.mdx';
 * `ProfileEvent_MergeTreeReadTaskRequestsSent` ([UInt64](/ja/reference/data-types/int-uint)) — 読み取りタスクを選択するために、リモートサーバーからイニシエーターサーバーへ返されるコールバック要求の回数 (MergeTree テーブル向け) 。リモートサーバー側で計測されます。
 * `ProfileEvent_MergeTreeAllRangesAnnouncementsSent` ([UInt64](/ja/reference/data-types/int-uint)) — データパーツの集合について、リモートサーバーからイニシエーターサーバーへ送信された通知の回数 (MergeTree テーブル向け) 。リモートサーバー側で計測されます。
 * `ProfileEvent_ReadTaskRequestsSentElapsedMicroseconds` ([UInt64](/ja/reference/data-types/int-uint)) — 読み取りタスクを選択するために、リモートサーバーからイニシエーターサーバーへ返されるコールバック要求に費やされた時間 (`s3Cluster` テーブル関数など) 。リモートサーバー側で計測されます。
-* `ProfileEvent_MergeTreeReadTaskRequestsSentElapsedMicroseconds` ([UInt64](/ja/reference/data-types/int-uint)) — 読み取りタスクを選択するために、リモートサーバーからイニシエーターサーバーへ返されるコールバック要求に費やされた時間 (MergeTree テーブル向け) 。リモートサーバー側で計測されます。
+* `ProfileEvent_MergeTreeReadTaskRequestsSentElapsedMicroseconds` ([UInt64](/ja/reference/data-types/int-uint)) — 読み取りタスクを選択するために、リモートサーバーからイニシーターサーバーへ返されるコールバック要求に費やされた時間 (MergeTree テーブル向け) 。リモートサーバー側で計測されます。
 * `ProfileEvent_MergeTreeAllRangesAnnouncementsSentElapsedMicroseconds` ([UInt64](/ja/reference/data-types/int-uint)) — データパーツの集合に関する通知をリモートサーバーからイニシエーターサーバーへ送信するのに費やされた時間 (MergeTree テーブル向け) 。リモートサーバー側で計測されます。
 * `ProfileEvent_MergerMutatorsGetPartsForMergeElapsedMicroseconds` ([UInt64](/ja/reference/data-types/int-uint)) — データパーツのスナップショットを取得し、そこから範囲を構築するのに費やされた時間
 * `ProfileEvent_MergerMutatorPrepareRangesForMergeElapsedMicroseconds` ([UInt64](/ja/reference/data-types/int-uint)) — マージ条件に従ってマージ可能なパーツの範囲を準備するのに費やされた時間
@@ -2078,7 +2082,7 @@ import SystemTableCloud from '/snippets/ja/_system_table_cloud.mdx';
 * `CurrentMetric_BlobCopierThreads` ([Int64](/ja/reference/data-types/int-uint)) — オブジェクトストレージディスクのバックグラウンドレプリケーションプロセスのスレッドプール内のスレッド数
 * `CurrentMetric_BlobCopierThreadsActive` ([Int64](/ja/reference/data-types/int-uint)) — オブジェクトストレージディスクのバックグラウンドレプリケーションプロセスのスレッドプール内でタスクを実行中のスレッド数
 * `CurrentMetric_BlobCopierThreadsScheduled` ([Int64](/ja/reference/data-types/int-uint)) — オブジェクトストレージディスクのバックグラウンドレプリケーションプロセスのスレッドプール内でキュー待ちまたは実行中のタスク数
-* `CurrentMetric_DiskObjectStorageCopyObjectThreads` ([Int64](/ja/reference/data-types/int-uint)) — オブジェクトストレージディスクのトランザクション内で `copyObjectToAnotherObjectStorage` 呼び出しを並列化するために使用されるスレッドプール内のスレッド数
+* `CurrentMetric_DiskObjectStorageCopyObjectThreads` ([Int64](/ja/reference/data-types/int-uint)) — オブジェクトストレージディスクのトランザクション内で copyObjectToAnotherObjectStorage 呼び出しを並列化するために使用されるスレッドプール内のスレッド数
 * `CurrentMetric_DiskObjectStorageCopyObjectThreadsActive` ([Int64](/ja/reference/data-types/int-uint)) — ディスクオブジェクトストレージのコピースレッドプール内でタスクを実行中のスレッド数
 * `CurrentMetric_DiskObjectStorageCopyObjectThreadsScheduled` ([Int64](/ja/reference/data-types/int-uint)) — ディスクオブジェクトストレージのコピースレッドプール内でキュー待ちまたは実行中のタスク数
 * `CurrentMetric_HTTPConnectionsStored` ([Int64](/ja/reference/data-types/int-uint)) — HTTP ホスト向けセッションプールに格納されているセッションの総数

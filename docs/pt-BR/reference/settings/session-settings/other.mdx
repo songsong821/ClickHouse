@@ -1602,7 +1602,54 @@ Valores possíveis:
 
 <SettingsInfoBlock type="UInt64" default_value="10000" />
 
-<VersionHistory rows={[{"id": "row-1","items": [{"label": "26.8"},{"label": "10000"},{"label": "Nova configuração para limitar o custo de estimar a seletividade de `IN` com um conjunto grande: acima do limite, o estimador usa o tamanho do conjunto e seu intervalo delimitador em vez dos intervalos exatos. Antes da versão 26.8, a estimativa não tinha limite; portanto, o valor anterior é 0 (sem limite), e a `compatibility` com uma versão anterior restaura os intervalos exatos para conjuntos de qualquer tamanho."}]}]} />
+<VersionHistory
+  rows={[
+{
+  id: "row-1",
+  items: [
+    { label: "26.9" },
+    { label: "10000" },
+    {
+      label:
+        "O limite sobre o custo de estimar a seletividade de `IN` com um conjunto grande é mantido sob `compatibility` com uma versão anterior: o valor anterior é deliberadamente igual ao novo, de modo que a estimativa sem limite, que poderia acrescentar centenas de milissegundos ao planejamento de uma única consulta, não seja restaurada."
+    }
+  ]
+},
+{
+  id: "row-2",
+  items: [
+    { label: "26.8" },
+    { label: "10000" },
+    {
+      label:
+        "Nova configuração para limitar o custo de estimar a seletividade de `IN` com um conjunto grande: acima do limite, o estimador usa o tamanho do conjunto e seu intervalo delimitador em vez dos intervalos exatos. O valor anterior é deliberadamente igual ao novo, de modo que a `compatibility` com uma versão anterior mantenha o limite em vez de restaurar a estimativa sem limite, que poderia acrescentar centenas de milissegundos ao planejamento de uma única consulta."
+    }
+  ]
+},
+{
+  id: "row-3",
+  items: [
+    { label: "26.7" },
+    { label: "10000" },
+    {
+      label:
+        "O limite sobre o custo de estimar a seletividade de `IN` com um conjunto grande é mantido sob `compatibility` com uma versão anterior: o valor anterior é deliberadamente igual ao novo, de modo que a estimativa sem limite, que poderia acrescentar centenas de milissegundos ao planejamento de uma única consulta, não seja restaurada."
+    }
+  ]
+},
+{
+  id: "row-4",
+  items: [
+    { label: "26.6" },
+    { label: "10000" },
+    {
+      label:
+        "O limite sobre o custo de estimar a seletividade de `IN` com um conjunto grande é mantido sob `compatibility` com uma versão anterior: o valor anterior é deliberadamente igual ao novo, de modo que a estimativa sem limite, que poderia acrescentar centenas de milissegundos ao planejamento de uma única consulta, não seja restaurada."
+    }
+  ]
+}
+]}
+/>
 
 O tamanho máximo do conjunto no lado direito do operador `IN` para o qual o estimador de seletividade determina os intervalos exatos abrangidos pelo conjunto. Essa determinação requer um `Field` por elemento, uma ordenação e uma sondagem de estatísticas por elemento, o que, em conjuntos grandes, domina o planejamento da consulta. Acima desse limite, o estimador determina a seletividade a partir do tamanho do conjunto e de seu intervalo delimitador, em uma única passagem linear pelo conjunto, sem ordenação nem sondagens de estatísticas por elemento. Zero significa sem limite.
 
