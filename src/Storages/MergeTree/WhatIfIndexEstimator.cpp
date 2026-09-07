@@ -10,11 +10,7 @@
 #include <Parsers/ASTSelectWithUnionQuery.h>
 #include <Parsers/ASTSetQuery.h>
 #include <Interpreters/parseIdentifiersOrStringLiteralsWithSettings.h>
-#include <Common/typeid_cast.h>
-#include <Processors/QueryPlan/ExpressionStep.h>
-#include <Processors/QueryPlan/FilterStep.h>
 #include <Processors/QueryPlan/QueryPlan.h>
-#include <Processors/QueryPlan/SortingStep.h>
 #include <Processors/QueryPlan/Optimizations/QueryPlanOptimizationSettings.h>
 #include <Processors/QueryPlan/ReadFromMergeTree.h>
 #include <Storages/MergeTree/KeyCondition.h>
@@ -66,43 +62,6 @@ void collectReadSteps(const QueryPlan::Node * node, std::vector<ReadFromMergeTre
         collectReadSteps(child, steps);
 }
 
-bool findPath(const QueryPlan::Node * node, const IQueryPlanStep * target, std::vector<const QueryPlan::Node *> & path)
-{
-    if (!node)
-        return false;
-    path.push_back(node);
-    if (node->step.get() == target)
-        return true;
-    for (const auto * child : node->children)
-        if (findPath(child, target, path))
-            return true;
-    path.pop_back();
-    return false;
-}
-
-/// the full sort right above the read, walking up through filters and expressions only, same as optimizeUseNormalProjections
-std::pair<const SortingStep *, const QueryPlan::Node *>
-findOuterSorting(const QueryPlan::Node * root, const ReadFromMergeTree * read_step)
-{
-    std::vector<const QueryPlan::Node *> path;
-    if (!findPath(root, read_step, path) || path.size() < 2)
-        return {};
-
-    size_t i = path.size() - 1;
-    while (i > 0)
-    {
-        --i;
-        const auto * step = path[i]->step.get();
-        if (!typeid_cast<const FilterStep *>(step) && !typeid_cast<const ExpressionStep *>(step))
-            break;
-    }
-
-    const auto * sort = typeid_cast<const SortingStep *>(path[i]->step.get());
-    if (sort && sort->getType() == SortingStep::Type::Full)
-        return {sort, path[i + 1]};
-    return {};
-}
-
 /// Resolve the source table from the query
 StoragePtr tryResolveSingleTable(const ASTPtr & query, const ContextPtr & context)
 {
@@ -152,7 +111,6 @@ WhatIfResult buildResultWithoutScan(
         r.name = projection.name;
         r.type = projection.type == ProjectionDescription::Type::Aggregate ? "projection (aggregate)" : "projection (normal)";
         r.status = WhatIfCandidateResult::NotApplicable;
-        /// a definition that no longer fits beats the blanket reason
         r.not_applicable_reason = reason;
         refreshHypotheticalProjection(projection, data, metadata, context, r.not_applicable_reason);
         result.candidates.push_back(std::move(r));
@@ -360,7 +318,6 @@ WhatIfResult estimateHypotheticalIndexes(
     local_context->setSetting("enable_parallel_replicas", Field{UInt64{0}});
     local_context->setSetting("use_skip_indexes_on_data_read", Field{UInt64{0}});
     /// Grab the forced index names, drop them for baseline planning, re-check them at the end
-    /// a forced projection would throw PROJECTION_NOT_USED while planning, before any candidate is seen
     local_context->resetSettingsToDefaultValue(
         {"force_data_skipping_indices",
          "force_optimize_projection",
@@ -392,8 +349,7 @@ WhatIfResult estimateHypotheticalIndexes(
         interpreter.buildQueryPlan(plan);
     }
 
-    QueryPlanOptimizationSettings optimization_settings(plan_context);
-    plan.optimize(optimization_settings);
+    plan.optimize(QueryPlanOptimizationSettings(plan_context));
 
     std::vector<ReadFromMergeTree *> read_steps;
     collectReadSteps(plan.getRootNode(), read_steps);
@@ -599,13 +555,9 @@ WhatIfResult estimateHypotheticalIndexes(
         result.candidates.push_back(std::move(combined));
     }
 
-    /// the ORDER BY tie-break exists only when the planner would really read in order
-    const auto [outer_sorting, subtree_above_reading] = optimization_settings.read_in_order
-        ? findOuterSorting(plan.getRootNode(), read_step)
-        : std::pair<const SortingStep *, const QueryPlan::Node *>{};
     for (const auto & projection : store.getProjectionsForTable(data.getStorageID()))
-        result.candidates.push_back(evaluateProjection(
-            projection, read_step, analysis, baseline_parts, settings, outer_sorting, subtree_above_reading, plan_context));
+        result.candidates.push_back(
+            evaluateProjection(projection, read_step, analysis, baseline_parts, settings, plan.getRootNode(), plan_context));
 
     if (result.candidates.empty())
         appendNoCandidatesRow(result);

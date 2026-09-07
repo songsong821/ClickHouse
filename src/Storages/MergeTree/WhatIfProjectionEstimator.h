@@ -13,7 +13,6 @@ namespace DB
 {
 
 class MergeTreeData;
-class SortingStep;
 struct ProjectionDescription;
 struct WhatIfSettings;
 
@@ -32,8 +31,7 @@ WhatIfCandidateResult evaluateProjection(
     const ReadFromMergeTree::AnalysisResult & analysis,
     const RangesInDataParts & baseline_parts,
     const WhatIfSettings & settings,
-    const SortingStep * outer_sorting,
-    const QueryPlan::Node * subtree_above_reading,
+    const QueryPlan::Node * plan_root,
     ContextPtr context);
 
 }

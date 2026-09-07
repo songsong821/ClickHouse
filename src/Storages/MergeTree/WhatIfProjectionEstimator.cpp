@@ -5,6 +5,7 @@
 #include <Columns/ColumnSparse.h>
 #include <Common/Stopwatch.h>
 #include <Common/quoteString.h>
+#include <Common/typeid_cast.h>
 #include <Core/Settings.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/ExpressionActions.h>
@@ -12,6 +13,9 @@
 #include <Interpreters/sortBlock.h>
 #include <Processors/Executors/PullingPipelineExecutor.h>
 #include <Processors/IProcessor.h>
+#include <Processors/QueryPlan/ExpressionStep.h>
+#include <Processors/QueryPlan/FilterStep.h>
+#include <Processors/QueryPlan/Optimizations/QueryPlanOptimizationSettings.h>
 #include <Processors/QueryPlan/Optimizations/optimizeReadInOrder.h>
 #include <Processors/QueryPlan/Optimizations/projectionsCommon.h>
 #include <Processors/QueryPlan/SortingStep.h>
@@ -68,7 +72,44 @@ struct ProjectionPartData
     size_t bytes = 0;
 };
 
-/// a normal projection re-sorts every row, so the whole part is read, wired like the empirical index scan
+bool findPath(const QueryPlan::Node * node, const IQueryPlanStep * target, std::vector<const QueryPlan::Node *> & path)
+{
+    if (!node)
+        return false;
+    path.push_back(node);
+    if (node->step.get() == target)
+        return true;
+    for (const auto * child : node->children)
+        if (findPath(child, target, path))
+            return true;
+    path.pop_back();
+    return false;
+}
+
+/// the full sort right above the read, through filters and expressions only
+std::pair<const SortingStep *, const QueryPlan::Node *>
+findOuterSorting(const QueryPlan::Node * root, const ReadFromMergeTree * read_step)
+{
+    std::vector<const QueryPlan::Node *> path;
+    if (!findPath(root, read_step, path) || path.size() < 2)
+        return {};
+
+    size_t i = path.size() - 1;
+    while (i > 0)
+    {
+        --i;
+        const auto * step = path[i]->step.get();
+        if (!typeid_cast<const FilterStep *>(step) && !typeid_cast<const ExpressionStep *>(step))
+            break;
+    }
+
+    const auto * sort = typeid_cast<const SortingStep *>(path[i]->step.get());
+    if (sort && sort->getType() == SortingStep::Type::Full)
+        return {sort, path[i + 1]};
+    return {};
+}
+
+/// reads the whole part, wired like the empirical index scan
 Pipe makeWholePartPipe(const DataPartPtr & part, const Names & columns_to_read, ReadFromMergeTree * read_step, const ContextPtr & context)
 {
     const auto & data = read_step->getMergeTreeData();
@@ -172,7 +213,7 @@ bool buildProjectionPart(
     for (size_t i = 0; i < key_columns.size(); ++i)
         out.key_block.insert({std::move(key_columns[i]), proj_key.data_types[i], proj_key.column_names[i]});
 
-    /// only used to pick the granularity; compact parts report zero per column, then the whole part is the bound
+    /// only used to pick the granularity
     for (const auto & name : projection.required_columns)
         out.bytes += part->getColumnSize(name).data_uncompressed;
     if (out.bytes == 0)
@@ -215,7 +256,6 @@ MarkRanges pruneSyntheticProjectionPart(
     granularity_out
         = std::make_shared<MergeTreeIndexGranularityConstant>(granule_rows, last_mark_rows, num_marks, /* has_final_mark */ false);
 
-    /// nothing to prune with, the projection reads all of its marks
     if (!key_condition)
         return MarkRanges{{0, num_marks}};
 
@@ -247,7 +287,6 @@ MarkRanges pruneSyntheticProjectionPart(
         synthetic_ranges, projection.metadata, *key_condition, nullptr, nullptr, nullptr, nullptr, query_settings, log);
 }
 
-/// the optimizer only considers parts that survived the base analysis, so do the same
 bool tryEstimateProjection(
     WhatIfCandidateResult & result,
     const ProjectionDescription & projection,
@@ -259,12 +298,11 @@ bool tryEstimateProjection(
     const ContextPtr & context)
 {
     const auto & data = read_step->getMergeTreeData();
-    /// the projection's own WITH SETTINGS win, same as when it is really written
     const auto mt_settings_ptr = data.getSettings(&projection.settings_changes);
     const auto & mt_settings = *mt_settings_ptr;
     const auto & query_settings = context->getSettingsRef();
 
-    /// not the normal read pipeline, so enforce the read limits by hand
+    /// enforce the read limits by hand
     const SizeLimits read_limits(
         query_settings[Setting::max_rows_to_read], query_settings[Setting::max_bytes_to_read], query_settings[Setting::read_overflow_mode]);
     UInt64 total_rows_read = 0;
@@ -308,11 +346,9 @@ bool tryEstimateProjection(
 
     result.estimated_marks = projection_marks;
     result.estimated_rows = projection_rows;
-    /// signed on purpose, a projection can read more marks than the base table
     result.skip_ratio = baseline_marks > 0
         ? (static_cast<double>(baseline_marks) - static_cast<double>(projection_marks)) / static_cast<double>(baseline_marks)
         : 0.0;
-    /// the same rule as optimizeUseNormalProjections, every baseline part has the candidate so nothing to add
     if (projection_marks < baseline_marks)
         result.verdict = "would be chosen, it reads fewer marks than the base table";
     else if (projection_marks > baseline_marks)
@@ -338,7 +374,6 @@ std::optional<ProjectionDescription> refreshHypotheticalProjection(
     const ContextPtr & context,
     String & reason)
 {
-    /// same validation as CREATE, so a dropped column or a setting change becomes not_applicable, not an exception
     try
     {
         checkHypotheticalProjectionIsAddable(data, metadata, stored.definition_ast, /* if_not_exists */ false, context);
@@ -358,8 +393,7 @@ WhatIfCandidateResult evaluateProjection(
     const ReadFromMergeTree::AnalysisResult & analysis,
     const RangesInDataParts & baseline_parts,
     const WhatIfSettings & settings,
-    const SortingStep * outer_sorting,
-    const QueryPlan::Node * subtree_above_reading,
+    const QueryPlan::Node * plan_root,
     ContextPtr context)
 {
     const auto & data = read_step->getMergeTreeData();
@@ -372,13 +406,11 @@ WhatIfCandidateResult evaluateProjection(
     result.total_parts = data.getActivePartsCount();
     result.total_marks = data.getTotalMarksCount();
 
-    /// a definition that no longer fits is the answer whatever the session settings say
     auto metadata = read_step->getStorageMetadata();
     auto projection = refreshHypotheticalProjection(stored_projection, data, metadata, context, result.not_applicable_reason);
     if (!projection)
         return result;
 
-    /// context already carries the inner SELECT settings
     if (!context->getSettingsRef()[Setting::optimize_use_projections])
     {
         result.not_applicable_reason = "Projections are disabled by `optimize_use_projections = 0`";
@@ -398,8 +430,6 @@ WhatIfCandidateResult evaluateProjection(
         return result;
     }
 
-    /// only the sort key is modelled, a projection can also prune with its own skip indexes
-    /// (WITH SETTINGS add_minmax_index_*), and counting those marks as read would understate it
     if (!projection->metadata->getSecondaryIndices().empty())
     {
         result.not_applicable_reason = "EXPLAIN WHATIF does not estimate projections with their own skip indexes yet";
@@ -419,7 +449,6 @@ WhatIfCandidateResult evaluateProjection(
         return result;
     }
 
-    /// the engine's own preconditions for considering a projection here
     if (!QueryPlanOptimizations::canUseProjectionForReadingStep(read_step))
     {
         result.not_applicable_reason = "The optimizer does not consider projections for this read (for example FINAL, SAMPLE, "
@@ -427,7 +456,6 @@ WhatIfCandidateResult evaluateProjection(
         return result;
     }
 
-    /// same coverage rule as optimizeUseNormalProjections
     for (const auto & column_name : read_step->getAllColumnNames())
     {
         if (!projection->sample_block.findColumnOrSubcolumnByName(column_name) && !projection->metadata->virtuals.has(column_name))
@@ -447,13 +475,14 @@ WhatIfCandidateResult evaluateProjection(
         return result;
     }
 
-    /// CREATE did not need SELECT, the scan does
     if (!projection->required_columns.empty())
         context->checkAccess(AccessType::SELECT, data.getStorageID(), projection->required_columns);
 
-    /// the other way a normal projection wins, it hands the outer ORDER BY rows already in order
-    const bool sort_order_helps = outer_sorting && subtree_above_reading
-        && QueryPlanOptimizations::wouldReadInOrderBeUseful(*outer_sorting, proj_key, *subtree_above_reading);
+    const auto [outer_sorting, subtree_above_reading] = QueryPlanOptimizationSettings(context).read_in_order
+        ? findOuterSorting(plan_root, read_step)
+        : std::pair<const SortingStep *, const QueryPlan::Node *>{};
+    const bool sort_order_helps
+        = outer_sorting && QueryPlanOptimizations::wouldReadInOrderBeUseful(*outer_sorting, proj_key, *subtree_above_reading);
 
     /// PK-range condition over the projection key, from the query predicate
     const auto & filter_dag = read_step->getFilterActionsDAG();
@@ -462,14 +491,12 @@ WhatIfCandidateResult evaluateProjection(
     if (filter_dag)
     {
         predicate_dag.emplace(filter_dag->getOutputs().front(), context, /* boolean_context */ true);
-        /// the KeyDescription overload, so the key's own directions and `use_primary_key` are honoured like a real read
         key_condition.emplace(
             *predicate_dag, context, proj_key, /* single_point */ false, !context->getSettingsRef()[Setting::use_primary_key]);
         if (key_condition->alwaysUnknownOrTrue())
             key_condition.reset();
     }
 
-    /// without pruning the projection reads all of its marks, which only pays off when it serves the ORDER BY
     if (!key_condition && !sort_order_helps)
     {
         result.not_applicable_reason = filter_dag ? "Projection sort key cannot filter this predicate (always unknown or true)"
@@ -492,7 +519,6 @@ WhatIfCandidateResult evaluateProjection(
         result.empirical_status = WhatIfCandidateResult::Disabled;
     }
 
-    /// projection marks live in the projection's own granularity, so the base table's count is not one
     result.estimate_source = WhatIfCandidateResult::ApplicabilityOnly;
     return result;
 }

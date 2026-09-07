@@ -39,7 +39,7 @@ void WhatIfResult::format(WriteBuffer & out) const
         if (idx.estimated_rows)
             writeString(fmt::format("  rows:         {}\n", *idx.estimated_rows), out);
 
-        /// only for indexes, a projection granule holds different rows so base bytes cannot be scaled into it
+        /// only for indexes
         if (idx.kind == WhatIfCandidateResult::Index && idx.estimated_marks && baseline_marks > 0 && baseline_est_bytes > 0)
         {
             UInt64 hypo_bytes = static_cast<UInt64>(
