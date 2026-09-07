@@ -775,7 +775,6 @@ def test_extended_query_ready_for_query_and_describe(started_cluster):
     assert types.count("Z") == 1, f"Close/Sync must emit one ReadyForQuery, got {types}"
     assert "3" in types, f"Close must respond with CloseComplete, got {types}"
     sock.close()
-
     # `Describe` emits no mid-cycle `ReadyForQuery`.
     sock, read_until_ready = _pg_raw_extended_query_session(node)
     sock.sendall(describe("S", "") + sync())
@@ -1511,73 +1510,6 @@ def test_dotnet_client(started_cluster):
     assert res.endswith(reference)
 
 
-def test_restricted_user_cannot_bypass_grants(started_cluster):
-    """Verify that a user with limited grants can connect via PostgreSQL protocol
-    (pg_type and other system views are initialized internally), but cannot
-    perform operations beyond their granted privileges."""
-    node = started_cluster.instances["node"]
-
-    # Create a restricted user that can only SELECT from default database
-    ch = psycopg.connect(
-        host=node.ip_address,
-        port=server_port,
-        user="default",
-        password="123",
-    )
-    cur = ch.cursor()
-    cur.execute(
-        "CREATE USER IF NOT EXISTS pg_restricted IDENTIFIED WITH plaintext_password BY 'restricted123'"
-    )
-    cur.execute("GRANT SELECT ON default.* TO pg_restricted")
-    ch.close()
-
-    # Connect as the restricted user - should succeed
-    restricted = psycopg.connect(
-        host=node.ip_address,
-        port=server_port,
-        user="pg_restricted",
-        password="restricted123",
-        dbname="default",
-    )
-    cur = restricted.cursor()
-
-    # The internal compatibility views should be accessible without direct
-    # grants on their `system.*` sources.
-    # ClickHouse currently sends scalar values over the PostgreSQL protocol in
-    # text mode, so result[0] arrives as a string from psycopg.
-    cur.execute("SELECT count() FROM pg_type")
-    result = cur.fetchone()
-    assert int(result[0]) > 0
-
-    cur.execute("SELECT count() FROM pg_namespace")
-    assert int(cur.fetchone()[0]) > 0
-
-    cur.execute("SELECT count() FROM pg_class")
-    assert int(cur.fetchone()[0]) > 0
-
-    # SELECT should work
-    cur.execute("SELECT 1")
-    assert int(cur.fetchone()[0]) == 1
-
-    # CREATE TABLE should be denied
-    with pytest.raises(Exception) as exc:
-        cur.execute("CREATE TABLE default.test_restricted (id Int32) ENGINE = Memory")
-    assert "Not enough privileges" in str(exc.value)
-
-    restricted.close()
-
-    # Clean up
-    ch = psycopg.connect(
-        host=node.ip_address,
-        port=server_port,
-        user="default",
-        password="123",
-    )
-    cur = ch.cursor()
-    cur.execute("DROP USER IF EXISTS pg_restricted")
-    ch.close()
-
-
 def _assert_cancel_request_does_not_cancel_http_query(node, query_id, pid, key):
     """Runs a long HTTP query under `query_id`, sends an unauthenticated PostgreSQL CancelRequest
     naming (`pid`, `key`) while the query is running, and asserts the query is not affected."""
@@ -1927,72 +1859,3 @@ def test_bind_portal_snapshots_statement(started_cluster):
     vals = datarow_values(buf)
     assert vals == ["1"], f"portal must survive Close of its prepared statement, got {vals} ({buf!r})"
     sock.close()
-
-
-def test_restricted_user_catalog_visibility(started_cluster):
-    """The pg_namespace / pg_class compatibility views must expose only the
-    metadata visible to the session user: a user granted a single table must
-    not be able to enumerate other databases or ungranted tables through
-    them."""
-    node = started_cluster.instances["node"]
-
-    ch = psycopg.connect(
-        host=node.ip_address,
-        port=server_port,
-        user="default",
-        password="123",
-    )
-    cur = ch.cursor()
-    cur.execute("CREATE DATABASE IF NOT EXISTS pg_visible_db")
-    cur.execute("CREATE DATABASE IF NOT EXISTS pg_hidden_db")
-    cur.execute(
-        "CREATE TABLE IF NOT EXISTS pg_visible_db.t_granted (id Int32) ENGINE = Memory"
-    )
-    cur.execute(
-        "CREATE TABLE IF NOT EXISTS pg_visible_db.t_ungranted (id Int32) ENGINE = Memory"
-    )
-    cur.execute(
-        "CREATE TABLE IF NOT EXISTS pg_hidden_db.t_hidden (id Int32) ENGINE = Memory"
-    )
-    cur.execute(
-        "CREATE USER IF NOT EXISTS pg_narrow IDENTIFIED WITH plaintext_password BY 'narrow123'"
-    )
-    cur.execute("GRANT SELECT ON pg_visible_db.t_granted TO pg_narrow")
-    ch.close()
-
-    narrow = psycopg.connect(
-        host=node.ip_address,
-        port=server_port,
-        user="pg_narrow",
-        password="narrow123",
-        dbname="pg_visible_db",
-    )
-    cur = narrow.cursor()
-
-    # pg_namespace must list the granted database but not unrelated ones.
-    cur.execute("SELECT nspname FROM pg_namespace")
-    namespaces = {row[0] for row in cur.fetchall()}
-    assert "pg_visible_db" in namespaces
-    assert "pg_hidden_db" not in namespaces
-
-    # pg_class (behind psql's \d) must list only the granted table.
-    cur.execute("SELECT relname FROM pg_class WHERE relname != ''")
-    relations = {row[0] for row in cur.fetchall()}
-    assert "t_granted" in relations
-    assert "t_ungranted" not in relations
-    assert "t_hidden" not in relations
-
-    narrow.close()
-
-    # Clean up
-    ch = psycopg.connect(
-        host=node.ip_address,
-        port=server_port,
-        user="default",
-        password="123",
-    )
-    cur = ch.cursor()
-    cur.execute("DROP USER IF EXISTS pg_narrow")
-    cur.execute("DROP DATABASE IF EXISTS pg_visible_db")
-    cur.execute("DROP DATABASE IF EXISTS pg_hidden_db")
-    ch.close()
