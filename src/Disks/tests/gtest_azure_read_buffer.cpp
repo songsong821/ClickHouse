@@ -15,6 +15,7 @@
 #include <Disks/DiskObjectStorage/ObjectStorages/AzureBlobStorage/AzureBlobStorageCommon.h>
 #include <Disks/DiskObjectStorage/ObjectStorages/AzureBlobStorage/AzureObjectStorage.h>
 #include <Disks/DiskObjectStorage/ObjectStorages/StoredObject.h>
+#include <Disks/IO/AsynchronousBoundedReadBuffer.h>
 #include <Disks/IO/ReadBufferFromAzureBlobStorage.h>
 #include <IO/AzureBlobStorage/copyAzureBlobStorageFile.h>
 #include <IO/ReadHelpers.h>
@@ -811,11 +812,13 @@ struct CopyObjectOutcome
 
 /// Copies the blob `blob` (100 bytes) through `AzureObjectStorage::copyObject` from a source
 /// `StoredObject` that carries the generation `caller_etag` (unpinned when empty) and the size
-/// `caller_size`, while the endpoint holds `generation_at_endpoint`.
-CopyObjectOutcome copyObjectThroughObjectStorage(const std::string & caller_etag, uint64_t caller_size, const std::string & generation_at_endpoint)
+/// `caller_size`, while the endpoint holds `generation_at_endpoint` (and reports it only when
+/// `send_etag`).
+CopyObjectOutcome copyObjectThroughObjectStorage(
+    const std::string & caller_etag, uint64_t caller_size, const std::string & generation_at_endpoint, bool send_etag = true)
 {
     auto transport = std::make_shared<MisbehavingRangeTransport>(
-        100, 100, 100, /* send_etag */ true, /* reported_length */ std::nullopt, /* ignore_range */ false,
+        100, 100, 100, send_etag, /* reported_length */ std::nullopt, /* ignore_range */ false,
         ETagBehaviour{.etag = generation_at_endpoint, .etag_after_first = "", .honour_if_match = true});
 
     DB::StoredObject object_from("blob", /* local_path */ "", caller_size);
@@ -1665,6 +1668,31 @@ TEST(AzureCopyObject, UnpinnedSource)
     assertCountsUpFromZero(outcome.copied);
 }
 
+/// The caller knows neither the generation nor the size, and the endpoint reports no `ETag` at
+/// all: the `HEAD` that was made in order to pin the copy cannot name a generation, so the copy is
+/// refused instead of transferring an unknown generation without `If-Match`.
+TEST(AzureCopyObject, SourceWithoutETagFromTheHeadIsRefused)
+{
+    CopyObjectOutcome outcome;
+    ASSERT_NO_THROW(outcome = copyObjectThroughObjectStorage(
+        /* caller_etag */ "", DB::StoredObject::UnknownSize, ETagBehaviour::first_generation, /* send_etag */ false));
+
+    ASSERT_EQ(outcome.error_code, std::optional<int>(DB::ErrorCodes::AZURE_BLOB_STORAGE_ERROR));
+    ASSERT_TRUE(outcome.copied.empty());
+}
+
+/// The same refusal applies when only the size was missing: the generation the caller carries
+/// cannot be checked against a `HEAD` that reports none, so the copy does not start.
+TEST(AzureCopyObject, SizingHeadWithoutETagIsRefused)
+{
+    CopyObjectOutcome outcome;
+    ASSERT_NO_THROW(outcome = copyObjectThroughObjectStorage(
+        ETagBehaviour::first_generation, DB::StoredObject::UnknownSize, ETagBehaviour::first_generation, /* send_etag */ false));
+
+    ASSERT_EQ(outcome.error_code, std::optional<int>(DB::ErrorCodes::AZURE_BLOB_STORAGE_ERROR));
+    ASSERT_TRUE(outcome.copied.empty());
+}
+
 /// The source is overwritten after the copy has completed and before the delete: the delete is
 /// pinned to the generation that was copied, so the endpoint refuses it, the move fails with the
 /// object having changed, and the newer generation, which was never copied, is not deleted.
@@ -2448,6 +2476,61 @@ TEST(AzureStaleSizeThroughCreateReadBuffer, ReaderExecutorDoesNotCutBackAnUnpinn
     std::string data;
     ASSERT_NO_THROW(DB::readStringUntilEOF(data, *buffer));
     ASSERT_EQ(data.size(), static_cast<size_t>(200));
+    assertCountsUpFromZero(data);
+}
+
+/// The async prefetch path (`use_prefetch` / `needAsyncPrefetch`). `AsynchronousBoundedReadBuffer`
+/// takes the size of the buffer it wraps in its constructor and `setReadUntilEnd` makes it the hard
+/// right bound of the read, so before the fix the prefetching wrapper cut the object back to the
+/// stale size even though the buffer underneath it was willing to read on.
+TEST(AzureStaleSizeThroughCreateReadBuffer, AsyncPrefetchDoesNotCutBackAnUnpinnedRead)
+{
+    /// The endpoint answers the size probe of the wrapper with the stale 100 bytes and then serves
+    /// the 200 bytes the blob holds now, which is the window the wrapper must not bound the read by.
+    auto transport = std::make_shared<MisbehavingRangeTransport>(
+        /* max_response_size */ 200, /* served_size */ 200, /* blob_size */ 100, /* send_etag */ true);
+    DB::ObjectStoragePtr object_storage = objectStorageOver(transport);
+
+    auto context = DB::Context::createCopy(getContext().context);
+    context->setSetting("s3_validate_etag_on_read", false);
+
+    auto read_settings = context->getReadSettings();
+    read_settings.remote_fs_settings.method = DB::RemoteFSReadMethod::threadpool;
+    read_settings.remote_fs_settings.prefetch = true;
+
+    auto entry = listingEntry(ETagBehaviour::first_generation_bare);
+    auto buffer = DB::createReadBuffer(
+        entry, object_storage, context, getLogger("AzureStaleSizeThroughCreateReadBuffer"), read_settings);
+
+    std::string data;
+    ASSERT_NO_THROW(DB::readStringUntilEOF(data, *buffer));
+    ASSERT_EQ(data.size(), static_cast<size_t>(200));
+    assertCountsUpFromZero(data);
+}
+
+/// A read that is pinned to the generation the size was measured on keeps the prefetch: the size
+/// then describes the very generation the `GET` serves, so bounding the read by it is correct and
+/// the small-object fast path must not be given up for it.
+TEST(AzureStaleSizeThroughCreateReadBuffer, PinnedReadKeepsTheAsyncPrefetch)
+{
+    auto transport = std::make_shared<MisbehavingRangeTransport>(
+        /* max_response_size */ 100, /* served_size */ 100, /* blob_size */ 100, /* send_etag */ true);
+    DB::ObjectStoragePtr object_storage = objectStorageOver(transport);
+
+    auto context = DB::Context::createCopy(getContext().context);
+
+    auto read_settings = context->getReadSettings();
+    read_settings.remote_fs_settings.method = DB::RemoteFSReadMethod::threadpool;
+    read_settings.remote_fs_settings.prefetch = true;
+
+    auto entry = listingEntry(ETagBehaviour::first_generation_bare);
+    auto buffer = DB::createReadBuffer(
+        entry, object_storage, context, getLogger("AzureStaleSizeThroughCreateReadBuffer"), read_settings);
+    ASSERT_NE(typeid_cast<DB::AsynchronousBoundedReadBuffer *>(buffer.get()), nullptr);
+
+    std::string data;
+    ASSERT_NO_THROW(DB::readStringUntilEOF(data, *buffer));
+    ASSERT_EQ(data.size(), static_cast<size_t>(100));
     assertCountsUpFromZero(data);
 }
 

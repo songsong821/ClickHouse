@@ -718,6 +718,21 @@ void AzureObjectStorage::copyObject( /// NOLINT
     if (src_etag.empty() || src_size == StoredObject::UnknownSize)
     {
         auto object_metadata = getObjectMetadata(object_from.remote_path, false);
+        /// The `HEAD` was made in order to pin the copy (or to size it, which only means something
+        /// for the generation it was measured on), so a `HEAD` that names no generation cannot
+        /// deliver what it was made for: the copy would proceed without `If-Match`, and the
+        /// read-and-write fallback would be free to stitch two generations of the source together.
+        /// An endpoint that omits the header is refused here, the same way the backup and the
+        /// `ObjectStorageQueue` paths refuse it, instead of copying an unknown generation. This is
+        /// decided before the comparison with a generation the caller carries: an endpoint that
+        /// reports nothing has not reported a change either.
+        if (object_metadata.etag.empty())
+            throw Exception(
+                ErrorCodes::AZURE_BLOB_STORAGE_ERROR,
+                "Object {} was not copied: the endpoint reports no `ETag` for it, so the copy cannot "
+                "be pinned to the generation of the object that is being copied",
+                object_from.remote_path);
+
         if (!src_etag.empty() && AzureBlobStorage::normalizeETag(object_metadata.etag) != AzureBlobStorage::normalizeETag(src_etag))
             throw Exception(
                 ErrorCodes::FILE_CHANGED_DURING_READ,

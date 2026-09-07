@@ -1796,42 +1796,6 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBuffer(
     modified_read_settings.use_page_cache_for_disks_without_file_cache = false;
     modified_read_settings.filesystem_cache_settings.boundary_alignment = settings[Setting::filesystem_cache_boundary_alignment];
 
-    // Create a read buffer that will prefetch the first ~1 MB of the file.
-    // When reading lots of tiny files, this prefetching almost doubles the throughput.
-    // For bigger files, parallel reading is more useful.
-    const bool object_too_small = is_size_known
-        && object_size <= 2 * context_->getSettingsRef()[Setting::max_download_buffer_size];
-    const bool use_prefetch = object_too_small
-        && modified_read_settings.remote_fs_settings.method == RemoteFSReadMethod::threadpool
-        && modified_read_settings.remote_fs_settings.prefetch;
-
-    /// FIXME: Use async buffer if use_cache,
-    /// because CachedOnDiskReadBufferFromFile does not work as an independent buffer currently.
-    bool use_async_buffer = use_prefetch || use_distributed_cache;
-
-    /// Prefer bigger buffer size when filesystem cache is active.
-    /// The pipeline configures buffer sizes BEFORE the cache stage is constructed,
-    /// so we gate on `use_filesystem_cache` rather than a runtime `isCached()` check.
-    /// This means the bigger buffer may be used even when the cache stage is later
-    /// skipped (e.g. missing etag) — slightly wasteful but not incorrect.
-    if (modified_read_settings.filesystem_cache_settings.prefer_bigger_buffer_size && use_filesystem_cache)
-        modified_read_settings.remote_fs_settings.buffer_size = std::max<size_t>(
-            modified_read_settings.remote_fs_settings.buffer_size,
-            modified_read_settings.remote_fs_settings.large_buffer_size);
-
-    /// Ensure the disk-level DC flag is consistent with the table-engine decision.
-    /// `table_engine_read_through_distributed_cache` is a separate setting that enables DC
-    /// for table engine reads. `readWithDistributedCache` checks `read_through_distributed_cache`
-    /// (the disk-level flag) internally, so it must be set when the pipeline uses DC.
-    if (use_distributed_cache)
-        modified_read_settings.read_through_distributed_cache = true;
-
-    ReadPipeline pipeline;
-
-    /// `local_path` is the logical name used by `ReadPipeline::build` when passing the
-    /// filename to `readWithDistributedCache` (it ends up in `getFileName()` and in
-    /// `system.distributed_cache_log.filename`). Use the object path so the DC log
-    /// shows a useful name rather than an empty string.
     /// Pin the read to the object generation seen here (etag from the LIST/HEAD): a GET with a
     /// different ETag means an in-place overwrite, reported as S3_OBJECT_CHANGED_DURING_READ
     /// instead of torn cross-generation data.
@@ -1877,6 +1841,53 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBuffer(
         use_page_cache = false;
     }
 
+    // Create a read buffer that will prefetch the first ~1 MB of the file.
+    // When reading lots of tiny files, this prefetching almost doubles the throughput.
+    // For bigger files, parallel reading is more useful.
+    const bool object_too_small = is_size_known
+        && object_size <= 2 * context_->getSettingsRef()[Setting::max_download_buffer_size];
+
+    /// The prefetching wrapper is another consumer of the pre-read size: `AsynchronousBoundedReadBuffer`
+    /// takes `getFileSize` of the buffer it wraps in its constructor, and `setReadUntilEnd` (called
+    /// right after the pipeline is built) turns that value into the hard right bound of the whole
+    /// read. For an unpinned Azure read that size is a statement about a generation of the blob that
+    /// the read is not tied to - and asking the endpoint again would only measure one more generation
+    /// before the `GET` - so a blob grown between the measurement and the download would be cut back
+    /// to the stale size, which is exactly the truncation the size is reported as unknown to avoid.
+    /// Such a read is therefore served without the prefetch, by the buffer that knows where the data
+    /// of the generation it reads actually ends.
+    const bool use_prefetch = object_too_small
+        && size_measured_before_the_read_is_authoritative
+        && modified_read_settings.remote_fs_settings.method == RemoteFSReadMethod::threadpool
+        && modified_read_settings.remote_fs_settings.prefetch;
+
+    /// FIXME: Use async buffer if use_cache,
+    /// because CachedOnDiskReadBufferFromFile does not work as an independent buffer currently.
+    bool use_async_buffer = use_prefetch || use_distributed_cache;
+
+    /// Prefer bigger buffer size when filesystem cache is active.
+    /// The pipeline configures buffer sizes BEFORE the cache stage is constructed,
+    /// so we gate on `use_filesystem_cache` rather than a runtime `isCached()` check.
+    /// This means the bigger buffer may be used even when the cache stage is later
+    /// skipped (e.g. missing etag) — slightly wasteful but not incorrect.
+    if (modified_read_settings.filesystem_cache_settings.prefer_bigger_buffer_size && use_filesystem_cache)
+        modified_read_settings.remote_fs_settings.buffer_size = std::max<size_t>(
+            modified_read_settings.remote_fs_settings.buffer_size,
+            modified_read_settings.remote_fs_settings.large_buffer_size);
+
+    /// Ensure the disk-level DC flag is consistent with the table-engine decision.
+    /// `table_engine_read_through_distributed_cache` is a separate setting that enables DC
+    /// for table engine reads. `readWithDistributedCache` checks `read_through_distributed_cache`
+    /// (the disk-level flag) internally, so it must be set when the pipeline uses DC.
+    if (use_distributed_cache)
+        modified_read_settings.read_through_distributed_cache = true;
+
+    ReadPipeline pipeline;
+
+    /// `local_path` is the logical name used by `ReadPipeline::build` when passing the
+    /// filename to `readWithDistributedCache` (it ends up in `getFileName()` and in
+    /// `system.distributed_cache_log.filename`). Use the object path so the DC log
+    /// shows a useful name rather than an empty string.
     const auto stored_object_size
         = is_size_known && size_measured_before_the_read_is_authoritative ? object_size : StoredObject::UnknownSize;
     StoredObject stored_object(object_info.getPath(), object_info.getPath(), stored_object_size, object_info.read_source_index);
