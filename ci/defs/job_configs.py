@@ -2071,7 +2071,7 @@ class JobConfigs:
     )
 
     # Every PR stateless environment is derived from these concrete configurations.
-    # The selected sanitizer variants collapse shards while retaining runner settings.
+    # Selected sanitizer jobs combine shards and execution flavors per configuration.
     stateless_tests_selected_pr_jobs = require_selection(
         selection_variants(
             [

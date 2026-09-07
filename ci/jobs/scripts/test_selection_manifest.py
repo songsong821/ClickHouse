@@ -9,6 +9,61 @@ from ci.jobs.scripts.test_selection_config import SELECTION_CONFIG
 SELECTION_MANIFEST = Path("ci/tmp/stateless-selection.json")
 
 
+def selection_manifest(diagnostics, info):
+    """Keep selection inputs and scoring evidence without duplicated diagnostics."""
+
+    def test_record(record):
+        result = {
+            "test": record["test"],
+            "sources": record["sources"] if "sources" in record else [record["source"]],
+        }
+        if "score" in record:
+            result["score"] = record["score"]
+        if record.get("features"):
+            result["coverage"] = [
+                {
+                    "region": feature["region"],
+                    "owners": feature["region_owners"],
+                    "exact_lines": feature["exact_lines"],
+                    "hunks": feature["hunks"],
+                    "runs": feature["coverage_run_frequency"],
+                }
+                for feature in record["features"]
+            ]
+        return result
+
+    coverage_files = {path for path, _ in diagnostics["coverage_lines"]}
+    manifest = {
+        "pr_number": info.pr_number,
+        "commit_sha": info.sha,
+        "diff_base_sha": diagnostics["diff_base_sha"],
+        "workflow_run_id": str(info.run_id),
+        "selector_version": diagnostics["selector_version"],
+        "coverage_path_version": diagnostics["coverage_path_version"],
+        "config": diagnostics["config"],
+        "cutoff": diagnostics["cutoff"],
+        "coverage_snapshots": diagnostics["coverage_snapshots"],
+        "canary": {"status": diagnostics["canary"]["status"]},
+        "coverage_lines": diagnostics["coverage_lines"],
+        "hunk_ranges": {
+            path: ranges
+            for path, ranges in diagnostics["hunk_ranges"].items()
+            if path in coverage_files
+        },
+        "tests": [test_record(record) for record in diagnostics["selected"]],
+        "rejected": [
+            {**test_record(record), "reason": record["admission_reason"]}
+            for record in diagnostics["rejected"]
+        ],
+        "mandatory_overflow": diagnostics["mandatory_overflow"],
+    }
+    if diagnostics["missing_tests"]:
+        manifest["missing_tests"] = [
+            record["test"] for record in diagnostics["missing_tests"]
+        ]
+    return manifest
+
+
 def cached_manifest(client, bucket, key, produce):
     from botocore.exceptions import ClientError
 
@@ -56,6 +111,7 @@ def load_selection(info, config=SELECTION_CONFIG):
         datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         config,
     )
-    if manifest["tests"] != [record["test"] for record in manifest["selected"]]:
-        raise ValueError("Selection manifest list does not match candidate records")
+    tests = [record["test"] for record in manifest["tests"]]
+    if len(tests) != len(set(tests)):
+        raise ValueError("Selection manifest contains duplicate tests")
     return manifest

@@ -15,6 +15,15 @@ The final ceiling is 250 tests and the operational target remains below 100.
 `SelectionConfig` is shared by queries, scoring, diagnostics, monitoring, and
 replay. Change the selector version when changing the persisted contract.
 
+The manifest records commit and selector identity, configuration, coverage
+snapshots, source diff coordinates, and an ordered `tests` list. Each test has
+its selection reasons, score, and compact coverage evidence: matching regions,
+owner counts, changed lines or hunks, and observation counts. Rejected candidates
+retain their scores, evidence, and rejection reason; mandatory overflow is
+reported explicitly. Test names are stored once. Full SQL queries, unrelated
+diff lines, duplicate candidate lists, and experimental scoring diagnostics are
+omitted from the manifest.
+
 ## Coverage publication
 
 Coverage collection and export preserve recorded file paths. The selector
@@ -78,8 +87,12 @@ exempt because those runners disable randomized settings. The selected sanitizer
 configurations are derived from the full-suite definitions. Targeted repetitions preserve each
 configuration's runner, build, environment, timeout, and flavor.
 
-The entire compatible selection is repeated in targeted jobs; ordinary selected
-jobs remain one-shot.
+Each selected-test configuration runs the full selected list once in a single
+job. The runner schedules parallel and sequential tests within that job. When
+combining execution flavors, the job uses the parallel flavor's runner. Build,
+storage, and query settings still define separate configurations.
+
+The entire compatible selection is repeated in targeted jobs.
 
 Validation on 2026-09-05 passed the live production canary with fresh snapshots
 from all eight shards. A pre-PR replay attempt for

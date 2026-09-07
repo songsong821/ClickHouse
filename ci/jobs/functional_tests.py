@@ -448,7 +448,7 @@ def main():
     config_installs_args = ""
     is_flaky_check = False
     is_targeted_check = False
-    is_selected_tests_run = False
+    is_selected_tests_run = SELECTED_TESTS_OPTION in test_options
     is_bugfix_validation = False
     is_s3_storage = False
     is_azure_storage = False
@@ -485,8 +485,10 @@ def main():
             config_installs_args += f" {OPTIONS_TO_INSTALL_ARGUMENTS[to]}"
 
         if to in OPTIONS_TO_TEST_RUNNER_ARGUMENTS:
-            if to in ("parallel", "sequential") and args.test:
-                # skip setting up parallel/sequential if specific tests are provided
+            if to in ("parallel", "sequential") and (
+                args.test or is_selected_tests_run
+            ):
+                # Explicit and selected test lists include both execution flavors.
                 continue
             else:
                 runner_options += f" {OPTIONS_TO_TEST_RUNNER_ARGUMENTS[to]}"
@@ -870,8 +872,10 @@ def main():
         assert not args.test, "--test cannot override a selection manifest"
         try:
             selection_manifest = load_selection(info)
-            tests = selection_manifest["tests"]
-            if "parallel" in test_options or "sequential" in test_options:
+            tests = [record["test"] for record in selection_manifest["tests"]]
+            if is_targeted_check and (
+                "parallel" in test_options or "sequential" in test_options
+            ):
                 tests = filter_selected_tests_by_flavor(
                     tests, keep_sequential="sequential" in test_options
                 )
@@ -879,7 +883,7 @@ def main():
                 Result(
                     name="Fetch relevant tests",
                     status=Result.Status.OK,
-                    info=f"Base selection: {len(selection_manifest['tests'])}; compatible flavor: {len(tests)}",
+                    info=f"Selected {len(tests)} tests",
                     files=[str(SELECTION_MANIFEST)],
                 )
             )
@@ -890,7 +894,7 @@ def main():
         if not tests:
             Result.create_from(
                 status=Result.Status.SKIPPED,
-                info="No compatible selected tests",
+                info="No selected tests to run",
                 results=results,
             ).complete_job()
 

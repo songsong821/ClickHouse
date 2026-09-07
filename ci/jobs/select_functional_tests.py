@@ -7,6 +7,7 @@ from ci.jobs.scripts.test_selection_manifest import (
     SELECTION_MANIFEST,
     cached_manifest,
     load_selection,
+    selection_manifest,
 )
 from ci.praktika.info import Info
 from ci.praktika.result import Result
@@ -22,14 +23,8 @@ def main():
 
     def produce():
         targeter.check_coverage_canary()
-        tests, _ = targeter.get_all_relevant_tests_with_info(include_changed_tests=True)
-        return {
-            **targeter.selection_diagnostics,
-            "pr_number": info.pr_number,
-            "commit_sha": info.sha,
-            "workflow_run_id": str(info.run_id),
-            "tests": tests,
-        }
+        targeter.get_all_relevant_tests_with_info(include_changed_tests=True)
+        return selection_manifest(targeter.selection_diagnostics, info)
 
     try:
         key = f"PRs/{info.pr_number}/{info.sha}/test-selection/{targeter.config.version}.json"

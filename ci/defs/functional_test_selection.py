@@ -5,13 +5,21 @@ from ci.jobs.scripts.test_selection_config import SELECTION_CONFIG
 
 
 def selection_variants(jobs, option):
-    """Collapse shards and preserve each concrete configuration's environment."""
+    """Collapse shards, and combine execution flavors for selected-test jobs."""
     variants = {}
+    source_flavors = {}
     for job in jobs:
+        source_options = job.parameter.split(", ")
+        flavor = next(
+            (part for part in source_options if part in ("parallel", "sequential")),
+            None,
+        )
         options = [
             part
-            for part in job.parameter.split(", ")
-            if part != "selected tests" and not re.fullmatch(r"\d+/\d+", part)
+            for part in source_options
+            if part != "selected tests"
+            and not re.fullmatch(r"\d+/\d+", part)
+            and not (option == "selected tests" and part in ("parallel", "sequential"))
         ]
         parameter = ", ".join([*options, option])
         variant = job.copy()
@@ -22,19 +30,29 @@ def selection_variants(jobs, option):
         if option == "targeted":
             variant.allow_failure = True
         previous = variants.get(parameter)
+        combine_flavors = (
+            previous
+            and option == "selected tests"
+            and {source_flavors[parameter], flavor} == {"parallel", "sequential"}
+        )
         if previous and (
-            previous.runs_on,
+            previous.runs_on if not combine_flavors else None,
             previous.requires,
             previous.timeout,
             previous.run_in_docker,
         ) != (
-            variant.runs_on,
+            variant.runs_on if not combine_flavors else None,
             variant.requires,
             variant.timeout,
             variant.run_in_docker,
         ):
             raise ValueError(f"Inconsistent shard environments: {parameter}")
+        # The parallel flavor's runner is sized for concurrent tests. Keep it
+        # when combining both flavors, regardless of the input job order.
+        if combine_flavors and flavor == "sequential":
+            continue
         variants[parameter] = variant
+        source_flavors[parameter] = flavor
     return list(variants.values())
 
 

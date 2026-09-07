@@ -30,9 +30,9 @@ CORE_BLOCKING_JOB_NAMES = [
             "_debug, parallel",
             "_binary, parallel",
             "_binary, sequential",
-            "_asan_ubsan, distributed plan, parallel",
-            "_asan_ubsan, db disk, distributed plan, sequential",
-            "_tsan, parallel",
+            "_asan_ubsan, distributed plan, selected tests",
+            "_asan_ubsan, db disk, distributed plan, selected tests",
+            "_tsan, selected tests",
         )
     )
 ] + [
