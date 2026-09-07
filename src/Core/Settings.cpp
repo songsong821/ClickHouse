@@ -871,6 +871,8 @@ The columns cache stores deserialized columns from `MergeTree` tables, eliminati
 Because entries are keyed by table UUID, the cache is only active for tables in databases that assign UUIDs (`Atomic` and `Replicated`); `MergeTree` tables in databases without UUIDs — legacy `Ordinary` databases, and `Shared` databases (the default database engine in ClickHouse Cloud) — have a nil UUID and silently ignore this setting.
 
 The cache currently applies to wide parts only: data in compact parts is not read from or written to the columns cache, so whether a read is accelerated depends on the part format.
+
+Entries cover whole mark ranges: a range enters the cache only after it has been read to its end, and a range whose columns together would not fit in the cache is not cached at all.
 )", EXPERIMENTAL) \
     DECLARE(Bool, enable_reads_from_columns_cache, true, R"(
 Whether to read from the columns cache when `use_columns_cache` is enabled. Accepts 0 or 1. By default, 1 (enabled).
