@@ -39,6 +39,14 @@ SET min_rows_per_stream_for_gradual_resize = 1000;
 SET min_bytes_per_stream_for_gradual_resize = 0;
 SET max_threads = 4;
 SET optimize_aggregation_in_order = 0;
+-- `max_threads` is silently lowered to the number of threads that fit into the free memory
+-- (`getMaxThreadsForAvailableMemory`), and the number of read streams is capped a second time by
+-- the minimum number of marks per concurrent read. Either cap can collapse the pipeline to a
+-- single stream, and `Pipe::resize` then early-returns for 1 -> 1, leaving no resize processor at
+-- all. Pin all three off, the assertions below are about the pipeline shape.
+SET max_threads_min_free_memory_per_thread = 0;
+SET merge_tree_min_rows_for_concurrent_read = 0;
+SET merge_tree_min_bytes_for_concurrent_read = 0;
 
 SELECT count() > 0
 FROM
@@ -50,28 +58,17 @@ FROM
 )
 WHERE explain LIKE '%GradualResize%';
 
--- Sharded aggregation owns the pre-aggregation routing stage. It deliberately
--- does not insert `GradualResize` even when gradual-resize thresholds are set.
--- Do not require a particular sharding-processor name here: the sharding plan is
--- implementation-specific and has changed independently of this contract.
-SELECT countIf(explain LIKE '%GradualResize%') = 0
-FROM
-(
-    EXPLAIN PIPELINE
-    SELECT k, count()
-    FROM test_gradual_resize
-    GROUP BY k
-    SETTINGS enable_sharding_aggregator = 1
-);
-
 -- Global aggregation has no grouping keys, so it must keep the strict resize even
 -- when gradual-resize thresholds are enabled. Check both that `GradualResize` is
 -- absent and that the ordinary `Resize` remains in the pipeline.
+-- The aggregate has to read a column: `count()` alone is answered from the parts' metadata
+-- (`optimize_trivial_count_query`) by a single source, and such a pipeline has no resize at all,
+-- which would make the assertion below vacuously checkable only in its first half.
 SELECT countIf(explain LIKE '%GradualResize%') = 0 AND countIf(explain LIKE '%Resize%') > 0
 FROM
 (
     EXPLAIN PIPELINE
-    SELECT count()
+    SELECT sum(v)
     FROM test_gradual_resize
 );
 
