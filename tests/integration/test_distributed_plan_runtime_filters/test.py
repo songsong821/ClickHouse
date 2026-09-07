@@ -3,8 +3,11 @@
 Shuffle joins ship partials through the merge tree (build -> `rf_merge_*` -> probe). Result
 equals the same query with `make_distributed_plan` off. Per-task `RuntimeFilterState*`
 ProfileEvents (`system.query_log`; workers share the initiator `initial_query_id`) pin stream
-and byte counts: `2 * N` states for `N` build and `N` probe tasks (all-to-all was `N * N`);
-a receiver consumes at most `RUNTIME_FILTER_MERGE_FAN_IN` (16) states, including through a
+and byte counts: `2 * N` states for `N` build and `N` probe tasks (all-to-all was `N * N`).
+A send is counted where the state is serialized, so send counts are exact; through the merge
+tree every state also arrives, while the root's broadcast to the probe tasks is best-effort, so
+its arrivals are bounded rather than pinned. A receiver consumes at most
+`RUNTIME_FILTER_MERGE_FAN_IN` (16) states, including through a
 2-level tree (`N = 32` -> 2 first-level merges -> root). Peak merge-task memory compared
 across `N = 2 / 8 / 32` with equal bloom sizes. Persisted exchanges, cancellation, and LIMIT
 early-close are separate cases.
@@ -212,18 +215,39 @@ def _check_topology(tasks, buckets, levels):
 
     total_sent = sum(t["states_sent"] for t in tasks)
     total_received = sum(t["states_received"] for t in tasks)
+    merge_received = sum(t["states_received"] for t in merge_tasks)
     # Linear topology: every build task sends once, every non-root merge task forwards once, and
     # the root broadcasts once per probe task -- against N * N for all-to-all delivery.
     tree_edges = buckets + sum(levels[:-1])
     broadcast_edges = buckets
-    assert total_sent == tree_edges + broadcast_edges, tasks
-    assert total_received == total_sent, tasks
+    # Bounded, not pinned. The root serializes its union once per probe task. It skips that work
+    # when every probe task has already closed its receive branch, so a broadcast send can be
+    # missing. Observed at `N = 32` on a machine oversubscribed 6x. The tree leg below pins the
+    # shape exactly; this bound is what separates a linear topology from all-to-all, which would
+    # send `N * N`.
+    assert total_sent <= tree_edges + broadcast_edges, (total_sent, tree_edges, broadcast_edges)
 
-    # Conservation of bytes, and every non-empty state is the settings-sized bloom.
+    # Inside the tree every state arrives, and this is the assertion that pins the topology
+    # exactly: a merge task publishes nothing unless all of its inputs did
+    # (`MergeRuntimeFiltersTransform::finalize`), so every one of the `tree_edges` must land.
+    # Unlike the send count above, no destination can disappear on this leg.
+    assert merge_received == tree_edges, (merge_received, tree_edges, tasks)
+
+    # The root's broadcast to the probe tasks is best-effort by design: a probe task cancels its
+    # receive branch once its data work is done (`RuntimeFilterReceiveBranches::finish`), and a
+    # filter that arrives after the scan it would have narrowed has nothing left to serve. So on
+    # that leg `received` may legitimately fall short of `sent` -- pinning them equal is what made
+    # this test fail in CI. It can never exceed it, because delivery invents no states.
+    assert total_received <= total_sent, (total_received, total_sent, tasks)
+
+    # Every state put on an exchange is the settings-sized bloom. On the send side that is exact:
+    # the counter is incremented where the state is serialized.
     total_bytes_sent = sum(t["bytes_sent"] for t in tasks)
     total_bytes_received = sum(t["bytes_received"] for t in tasks)
-    assert total_bytes_received == total_bytes_sent, tasks
-    assert total_bytes_received >= total_sent * BLOOM_BYTES, tasks
+    assert total_bytes_sent >= total_sent * BLOOM_BYTES, tasks
+    # Conservation, and every state that did arrive is one of those blooms.
+    assert total_bytes_received <= total_bytes_sent, tasks
+    assert total_bytes_received >= total_received * BLOOM_BYTES, tasks
 
     assert all(t["oversized_rejected"] == 0 for t in tasks), tasks
 
@@ -236,28 +260,45 @@ def _check_topology(tasks, buckets, levels):
         if not task["task"].startswith("rf_merge_"):
             assert task["states_received"] <= 1, task
 
-    return merge_tasks
+    return merge_tasks, total_received - merge_received
+
+
+def _assert_broadcast_delivered(probe_arrivals):
+    """At least one probe task consumed the complete union somewhere in a bucket sweep. Takes a
+    whole sweep and never a single topology: at one topology this is a race the receiver is
+    allowed to lose, and losing it is not a defect. Measured on a machine oversubscribed 6x, 10 of
+    139 single topologies saw no arrival, while none of 93 sweeps came up empty and the emptiest
+    of them still delivered 2 states. Worth asserting even so: every other count here is taken
+    where a state is serialized, so a broadcast that dropped all of them would pass unnoticed."""
+    assert max(probe_arrivals) >= 1, probe_arrivals
 
 
 def test_topology_is_linear(started_cluster):
     """N = 2, 4, 8 symmetric topologies: identical results and exactly 2 * N filter streams."""
     expected_totals = {}
+    probe_arrivals = []
     for buckets in (2, 4, 8):
         result, tasks = _run_and_collect(JOIN_QUERY, buckets)
         assert result == JOIN_EXPECTED
 
         # N <= 16 build tasks collapse into a single root merge task.
-        _check_topology(tasks, buckets, levels=[1])
+        _, probe_received = _check_topology(tasks, buckets, levels=[1])
+        probe_arrivals.append(probe_received)
         expected_totals[buckets] = sum(t["states_sent"] for t in tasks)
         logging.info(
-            "buckets=%d states=%d bytes=%d",
+            "buckets=%d states=%d bytes=%d probe_arrivals=%d",
             buckets,
             expected_totals[buckets],
             sum(t["bytes_sent"] for t in tasks),
+            probe_received,
         )
 
-    # Linear growth, pinned exactly: 2 * N streams.
-    assert expected_totals == {2: 4, 4: 8, 8: 16}
+    # Linear growth: at most 2 * N streams, against N * N for all-to-all. Bounded rather than
+    # pinned for the same reason as in `_check_topology` -- the root may skip a broadcast whose
+    # destinations have all finished. `merge_received == tree_edges` there pins the tree leg of
+    # each of these topologies exactly.
+    assert all(sent <= 2 * buckets for buckets, sent in expected_totals.items()), expected_totals
+    _assert_broadcast_delivered(probe_arrivals)
 
 
 def test_multi_level_tree_and_memory_bound(started_cluster):
@@ -265,10 +306,14 @@ def test_multi_level_tree_and_memory_bound(started_cluster):
     stays bounded by the fan-in and the payload, not by the build task count."""
     max_buckets = 32
     merge_tasks_by_buckets = {}
+    probe_arrivals = []
     for buckets, levels in ((2, [1]), (8, [1]), (max_buckets, [2, 1])):
         result, tasks = _run_and_collect(JOIN_QUERY, buckets)
         assert result == JOIN_EXPECTED
-        merge_tasks_by_buckets[buckets] = _check_topology(tasks, buckets, levels=levels)
+        merge_tasks_by_buckets[buckets], probe_received = _check_topology(
+            tasks, buckets, levels=levels
+        )
+        probe_arrivals.append(probe_received)
         logging.info(
             "buckets=%d merge tasks=%s",
             buckets,
@@ -306,6 +351,8 @@ def test_multi_level_tree_and_memory_bound(started_cluster):
         two_input_root_peak,
     )
 
+    _assert_broadcast_delivered(probe_arrivals)
+
 
 def test_exact_states_topology(started_cluster):
     """With fixed-width keys and default limits the estimates keep the transported states exact
@@ -321,8 +368,17 @@ def test_exact_states_topology(started_cluster):
     tasks = _collect_task_rows(query_id)
     total_sent = sum(t["states_sent"] for t in tasks)
     total_received = sum(t["states_received"] for t in tasks)
-    assert total_sent == total_received, tasks
-    assert total_sent == 8, tasks  # 4 into the root + 4 broadcast
+    merge_received = sum(
+        t["states_received"] for t in tasks if t["task"].startswith("rf_merge_")
+    )
+    # 4 into the root + 4 broadcast, bounded for the same reason as in `_check_topology`: the
+    # root may skip a broadcast whose destinations have all finished.
+    assert total_sent <= 8, tasks
+    # The same delivery split as in `_check_topology`: the tree leg is pinned exactly, the
+    # best-effort broadcast leg only bounded. The received-byte bound below therefore still bites
+    # at the root, which consumes all four partials.
+    assert merge_received == 4, (merge_received, tasks)
+    assert total_received <= total_sent, (total_received, total_sent, tasks)
 
     # The states must be exact, not degraded blooms: the default bloom is 512 KiB, and the 64000
     # exact keys of this join stay far below it, so a single degraded state would push some task's
@@ -355,8 +411,14 @@ def test_short_string_keys_arrive_exact(started_cluster):
     tasks = _collect_task_rows(query_id)
     total_sent = sum(t["states_sent"] for t in tasks)
     total_received = sum(t["states_received"] for t in tasks)
-    assert total_sent == 8, tasks  # 4 partials into the root + 4 broadcast copies of the union
-    assert total_received == total_sent, tasks
+    merge_received = sum(
+        t["states_received"] for t in tasks if t["task"].startswith("rf_merge_")
+    )
+    # 4 partials into the root + 4 broadcast copies of the union; bounded because the root may
+    # skip a broadcast whose destinations have all finished. `merge_received` pins the tree leg.
+    assert total_sent <= 8, tasks
+    assert merge_received == 4, (merge_received, tasks)
+    assert total_received <= total_sent, (total_received, total_sent, tasks)
     assert all(t["oversized_rejected"] == 0 for t in tasks), tasks
 
     # The settings bloom is 512 KiB; the exact states of all 20000 short keys together stay far
@@ -369,7 +431,8 @@ def test_short_string_keys_arrive_exact(started_cluster):
 
 def test_persisted_exchange_delivers_and_terminates(started_cluster):
     """The whole filter chain follows the forced-persisted kind; the scheduler runs the chain
-    to completion in dependency order without deadlocking, and the union still arrives."""
+    to completion in dependency order without deadlocking, and every partial still reaches the
+    root, which merges them and hands the union to the broadcast."""
     result, tasks = _run_and_collect(
         JOIN_QUERY,
         4,
