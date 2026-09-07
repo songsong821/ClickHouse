@@ -96,6 +96,8 @@ With p_where (projection (normal), hypothetical):
 reason: EXPLAIN WHATIF does not estimate projections with a WHERE clause yet
 With p_nocol (projection (normal), hypothetical):
 reason: Projection does not contain column v required by the query
+With p_skipidx (projection (normal), hypothetical):
+reason: EXPLAIN WHATIF does not estimate projections with their own skip indexes yet
 --- projections disabled by the query ---
 reason: Projections are disabled by `optimize_use_projections = 0`
 --- empirical = 0 scans nothing ---

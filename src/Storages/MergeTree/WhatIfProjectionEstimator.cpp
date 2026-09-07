@@ -404,6 +404,14 @@ WhatIfCandidateResult evaluateProjection(
         return result;
     }
 
+    /// only the sort key is modelled, a projection can also prune with its own skip indexes
+    /// (WITH SETTINGS add_minmax_index_*), and counting those marks as read would understate it
+    if (!projection->metadata->getSecondaryIndices().empty())
+    {
+        result.not_applicable_reason = "EXPLAIN WHATIF does not estimate projections with their own skip indexes yet";
+        return result;
+    }
+
     if (analysis.readFromProjection() && !baseline_parts.empty())
     {
         result.not_applicable_reason = "The query is already served from projection '" + baseline_parts.front().data_part->name

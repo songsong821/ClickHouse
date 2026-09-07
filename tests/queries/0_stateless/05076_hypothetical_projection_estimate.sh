@@ -84,6 +84,7 @@ $CLICKHOUSE_CLIENT -q "
     CREATE HYPOTHETICAL PROJECTION p_agg ON t_est (SELECT b, sum(v) GROUP BY b);
     CREATE HYPOTHETICAL PROJECTION p_where ON t_est (SELECT a, b, v WHERE b < 50 ORDER BY b);
     CREATE HYPOTHETICAL PROJECTION p_nocol ON t_est (SELECT a, b ORDER BY b);
+    CREATE HYPOTHETICAL PROJECTION p_skipidx ON t_est (SELECT a, b, v ORDER BY a) WITH SETTINGS (add_minmax_index_for_numeric_columns = 1);
     EXPLAIN WHATIF SELECT sum(v) FROM t_est WHERE a = 5000 SETTINGS ${PIN};
 " | grep -E '^With|^\s+reason:' | awk '{$1=$1; print}'
 
