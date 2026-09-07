@@ -11,4 +11,8 @@ bytes	UInt64			Size of cached column data in bytes
 1
 0
 10000
+4000	1998000	3996000	11560
+more than one entry warmed: 1
+row count with max_block_size = 1 matches: 1
+row contents with max_block_size = 1 match: 1
 System table and SYSTEM commands test passed
