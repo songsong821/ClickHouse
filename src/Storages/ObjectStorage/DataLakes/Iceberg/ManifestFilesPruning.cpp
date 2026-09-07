@@ -250,23 +250,20 @@ PartitionTransformKind parsePartitionTransformKind(const String & transform_name
     return PartitionTransformKind::NotInvertible;
 }
 
-std::optional<Int64> multiplyChecked(Int64 left, Int64 right)
+using ClosedInterval = std::pair<Int64, Int64>;
+
+/// `[a, b]` in one unit is `[a * factor, (b + 1) * factor - 1]` in a unit that many times finer.
+std::optional<ClosedInterval> refineInterval(ClosedInterval interval, Int64 factor)
 {
-    Int64 result = 0;
-    if (common::mulOverflow(left, right, result))
+    Int64 first = 0;
+    Int64 past_last = 0;
+    if (common::mulOverflow(interval.first, factor, first) || common::addOverflow(interval.second, Int64{1}, past_last)
+        || common::mulOverflow(past_last, factor, past_last))
         return {};
-    return result;
+    return ClosedInterval{first, past_last - 1};
 }
 
-std::optional<Int64> addChecked(Int64 left, Int64 right)
-{
-    Int64 result = 0;
-    if (common::addOverflow(left, right, result))
-        return {};
-    return result;
-}
-
-std::optional<std::pair<Int64, Int64>> dayIntervalOfPartitionValue(PartitionTransformKind kind, Int64 value)
+std::optional<ClosedInterval> dayIntervalOfPartitionValue(PartitionTransformKind kind, Int64 value)
 {
     const auto & utc = DateLUT::instance("UTC");
     const auto epoch = ExtendedDayNum(0);
@@ -274,47 +271,38 @@ std::optional<std::pair<Int64, Int64>> dayIntervalOfPartitionValue(PartitionTran
     switch (kind)
     {
         case PartitionTransformKind::Day:
-            return std::pair{value, value};
+            return ClosedInterval{value, value};
         case PartitionTransformKind::Month:
         {
             const auto first = utc.addMonths(epoch, value);
             if (utc.toMonthNumSinceEpoch(first) != value)
                 return {};
-            return std::pair{Int64{first}, Int64{utc.addMonths(epoch, value + 1)} - 1};
+            return ClosedInterval{Int64{first}, Int64{utc.addMonths(epoch, value + 1)} - 1};
         }
         case PartitionTransformKind::Year:
         {
             const auto first = utc.addYears(epoch, value);
             if (utc.toYearSinceEpoch(first) != value)
                 return {};
-            return std::pair{Int64{first}, Int64{utc.addYears(epoch, value + 1)} - 1};
+            return ClosedInterval{Int64{first}, Int64{utc.addYears(epoch, value + 1)} - 1};
         }
         default:
             return {};
     }
 }
 
-std::optional<std::pair<Int64, Int64>> secondIntervalOfPartitionValue(PartitionTransformKind kind, Int64 value)
+std::optional<ClosedInterval> secondIntervalOfPartitionValue(PartitionTransformKind kind, Int64 value)
 {
+    static constexpr Int64 seconds_per_hour = 3600;
+    static constexpr Int64 seconds_per_day = 86400;
+
     if (kind == PartitionTransformKind::Hour)
-    {
-        auto first = multiplyChecked(value, 3600);
-        auto next = first ? addChecked(*first, 3600) : std::nullopt;
-        if (!next)
-            return {};
-        return std::pair{*first, *next - 1};
-    }
+        return refineInterval({value, value}, seconds_per_hour);
 
     auto days = dayIntervalOfPartitionValue(kind, value);
     if (!days)
         return {};
-
-    auto first = multiplyChecked(days->first, 86400);
-    auto next_day = addChecked(days->second, 1);
-    auto next = first && next_day ? multiplyChecked(*next_day, 86400) : std::nullopt;
-    if (!next)
-        return {};
-    return std::pair{*first, *next - 1};
+    return refineInterval(*days, seconds_per_day);
 }
 
 std::optional<Range> rangeOfPartitionValue(const String & transform_name, const Field & partition_value, const IDataType & source_type)
@@ -357,13 +345,10 @@ std::optional<Range> rangeOfPartitionValue(const String & transform_name, const 
         return Range(seconds->first, true, seconds->second, true);
 
     const UInt32 scale = getDecimalScale(source_type);
-    const Int64 ticks_per_second = DecimalUtils::scaleMultiplier<Int64>(scale);
-    auto first = multiplyChecked(seconds->first, ticks_per_second);
-    auto next = addChecked(seconds->second, 1);
-    next = next ? multiplyChecked(*next, ticks_per_second) : std::nullopt;
-    if (!first || !next)
+    auto ticks = refineInterval(*seconds, DecimalUtils::scaleMultiplier<Int64>(scale));
+    if (!ticks)
         return {};
-    return Range(DecimalField<Decimal64>(*first, scale), true, DecimalField<Decimal64>(*next - 1, scale), true);
+    return Range(DecimalField<Decimal64>(ticks->first, scale), true, DecimalField<Decimal64>(ticks->second, scale), true);
 }
 
 }
