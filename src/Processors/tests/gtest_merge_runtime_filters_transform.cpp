@@ -660,7 +660,10 @@ TEST(MergeRuntimeFiltersTransform, PayloadRetentionIndependentOfInputCount)
     /// The measurement reads the current thread's memory tracker. Take the `current_thread` slot
     /// for this test only; the process-lifetime `MainThreadStatus` would leave it set forever, and
     /// any later fixture constructing its own `ThreadStatus` would assert on the occupied slot.
-    ThreadStatus * previous_thread_status = std::exchange(current_thread, nullptr);
+    /// Read the slot before clearing it: `current_thread` is a stateless accessor, so
+    /// `std::exchange` would return the value it had just stored, not the previous one.
+    ThreadStatus * previous_thread_status = current_thread;
+    current_thread = nullptr;
     SCOPE_EXIT({ current_thread = previous_thread_status; });
     ThreadStatus scoped_thread_status;
 

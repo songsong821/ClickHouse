@@ -305,7 +305,10 @@ DistributedQueryPlan wireSymmetric(size_t num_build_tasks, size_t num_receive_ta
 /// cleared before it is constructed and the previous value is restored after it is destroyed.
 struct CurrentThreadSlot
 {
-    ThreadStatus * previous = std::exchange(current_thread, nullptr);
+    /// Read the slot before clearing it: `current_thread` is a stateless accessor, so
+    /// `std::exchange` would return the value it had just stored, not the previous one.
+    ThreadStatus * previous = current_thread;
+    CurrentThreadSlot() { current_thread = nullptr; }
     ~CurrentThreadSlot() { current_thread = previous; }
 };
 
