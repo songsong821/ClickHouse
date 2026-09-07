@@ -9,7 +9,8 @@ cluster = ClickHouseCluster(__file__)
 # fed raw (without a column type) into the statistics and text-index streams, so a codec that
 # requires a column type (e.g. PCO) must be rejected when the configuration is loaded. An
 # experimental codec (e.g. ZXC) is rejected as well, unless the server-level
-# `enable_zxc_codec` policy (the default profile) enables it.
+# `enable_zxc_codec` policy (the default profile) enables it. That policy is consulted at every
+# part write, so a change to it takes effect without a `<compression>` configuration reload.
 node_pco = cluster.add_instance(
     "node_pco",
     main_configs=["configs/pco_compression_selector.xml"],
@@ -120,7 +121,22 @@ def test_compression_selector_uses_default_not_system_profile(start_cluster):
     node_zxc_default_profile_allowed.query("DROP TABLE t_zxc_default_profile")
 
 
-def test_compression_selector_reloads_default_profile_policy(start_cluster):
+ENABLE_ZXC_CODEC_POLICY = """
+<clickhouse>
+    <profiles>
+        <default>
+            <enable_zxc_codec>{value}</enable_zxc_codec>
+        </default>
+    </profiles>
+</clickhouse>
+"""
+
+
+def test_compression_selector_follows_default_profile_policy(start_cluster):
+    # The selector follows the policy in force at each part write, in both directions and without
+    # the `<compression>` configuration itself ever being reloaded. A selector cached across a
+    # policy change would keep writing parts with a codec the policy no longer allows - and, once
+    # the policy allows it again, keep refusing it.
     node_zxc_allowed.query(
         "CREATE TABLE t_zxc_reload_policy (x UInt32) ENGINE = MergeTree ORDER BY tuple()"
     )
@@ -130,15 +146,7 @@ def test_compression_selector_reloads_default_profile_policy(start_cluster):
 
     node_zxc_allowed.replace_config(
         "/etc/clickhouse-server/users.d/enable_zxc_codec.xml",
-        """
-<clickhouse>
-    <profiles>
-        <default>
-            <enable_zxc_codec>0</enable_zxc_codec>
-        </default>
-    </profiles>
-</clickhouse>
-""",
+        ENABLE_ZXC_CODEC_POLICY.format(value=0),
     )
     node_zxc_allowed.query("SYSTEM RELOAD USERS")
 
@@ -147,6 +155,21 @@ def test_compression_selector_reloads_default_profile_policy(start_cluster):
             "INSERT INTO t_zxc_reload_policy SELECT number FROM numbers(1000)"
         )
     assert "enable_zxc_codec" in str(exc.value), str(exc.value)
+
+    node_zxc_allowed.replace_config(
+        "/etc/clickhouse-server/users.d/enable_zxc_codec.xml",
+        ENABLE_ZXC_CODEC_POLICY.format(value=1),
+    )
+    node_zxc_allowed.query("SYSTEM RELOAD USERS")
+
+    node_zxc_allowed.query(
+        "INSERT INTO t_zxc_reload_policy SELECT number FROM numbers(1000)"
+    )
+    default_codecs = node_zxc_allowed.query(
+        "SELECT DISTINCT default_compression_codec FROM system.parts"
+        " WHERE table = 't_zxc_reload_policy' AND active"
+    ).strip()
+    assert "ZXC" in default_codecs, default_codecs
 
     node_zxc_allowed.query("DROP TABLE t_zxc_reload_policy")
 

@@ -146,6 +146,17 @@ public:
         }
     }
 
+    /// Whether a codec gate was consulted while validating this selector, i.e. whether it is only
+    /// valid for the policy (the `enable_<family>_codec` settings of the default profile) it was
+    /// validated against. A selector over generally available codecs is valid for any policy.
+    bool dependsOnCodecGates() const
+    {
+        for (const auto & element : elements)
+            if (CompressionCodecFactory::isCodecFamilyGated(element.family_name))
+                return true;
+        return false;
+    }
+
     CompressionCodecPtr choose(size_t part_size, double part_size_ratio) const
     {
         const auto & factory = CompressionCodecFactory::instance();
