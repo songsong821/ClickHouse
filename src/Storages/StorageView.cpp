@@ -587,6 +587,19 @@ StoragePtr StorageView::getUnderlyingMergeTreeStorageForParallelReplicas(const C
         const bool has_row_policy = view_row_policy_filter && !view_row_policy_filter->isAlwaysTrue();
         if (has_row_policy || canHideRows(inner_query_ast, metadata_snapshot->getSQLSecurityOverriddenContext(context)))
             return nullptr;
+
+        /// The shortcut only decides that the query *can* use parallel replicas; the query the
+        /// replicas receive still reads the view. A replica plans it on its own, and when an
+        /// `additional_table_filters` entry of the invoker applies to the view, the barrier keeps
+        /// the view a table expression instead of inlining it, so the replica reads it through
+        /// `readImpl` - which switches parallel replicas off for the inner query, because a
+        /// shipped fragment would run under the connection's identity. Every replica then reads
+        /// the whole view with no coordination and the result is the union of all of them, so the
+        /// rows are returned once per replica. The alias the outer query gives the view is not
+        /// known here, so fail closed on any additional table filter rather than try to match the
+        /// entry to this view.
+        if (!context->getSettingsRef()[Setting::additional_table_filters].value.empty())
+            return nullptr;
     }
 
     QueryTreeNodePtr inner_query_tree;

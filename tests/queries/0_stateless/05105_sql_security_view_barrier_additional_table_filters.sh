@@ -6,15 +6,18 @@ CUR_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 # An `additional_table_filters` entry keyed to a view (by its qualified name or by its alias) is a
 # predicate of the invoker, applied to the view's output. For a `SQL SECURITY DEFINER` / `NONE`
-# view it must stay above the view's own read: `QueryAnalyzer::inlineViewSubqueryIfNeeded` keeps
-# such a view a table expression, and the filter becomes a separate `Filter` step, while the same
-# predicate over the `SQL SECURITY INVOKER` twin is free to sink into the read as a PREWHERE.
+# view the barrier keeps the view a table expression instead of inlining it
+# (`QueryAnalyzer::inlineViewSubqueryIfNeeded`), so the predicate becomes a separate `Filter` step
+# above the view's own read.
 #
-# The same must hold under `parallel_replicas_allow_view_over_mergetree = 1`, which otherwise
-# replaces a "simple" view with the `MergeTree` table below it and reads that table with parallel
-# replicas under the outer query's context - the shortcut `05104` fences off for a view that hides
-# rows. A matched additional filter takes the query off the parallel-replicas path for every view
-# alike; the "no filter" line is the control showing the shortcut is engaged for this shape.
+# That must not combine with `parallel_replicas_allow_view_over_mergetree = 1`, which decides that
+# a "simple" view can be read with parallel replicas because the `MergeTree` table below it can:
+# the query the replicas receive still reads the view, a replica plans it on its own, and the
+# barrier makes it read the view through `StorageView::readImpl`, which switches parallel replicas
+# off for the inner query - so every replica reads the whole view with no coordination and each
+# row comes back once per replica. The `rows through the filter` line is the oracle for that (it
+# read `3 * max_parallel_replicas` rows before the shortcut was fenced off); the `no filter` line
+# is the control showing the shortcut is engaged for this shape.
 
 db=${CLICKHOUSE_DATABASE}
 invoker="user05105_${CLICKHOUSE_DATABASE}_$RANDOM"
@@ -46,33 +49,59 @@ GRANT SELECT ON $db.atf_none_view TO $invoker;
 GRANT SELECT ON $db.atf_invoker_view TO $invoker;
 EOSQL
 
+# `serialize_query_plan` is pinned by the loop below: with it, the plan (and not the query text) is
+# what a replica receives, and the shortcut is chosen for a shape the query text alone would take
+# off the parallel-replicas path, which is how the duplication above becomes observable.
 PR_SETTINGS="--enable_analyzer 1 --enable_parallel_replicas 1 --max_parallel_replicas 3 \
     --cluster_for_parallel_replicas test_cluster_one_shard_three_replicas_localhost \
     --parallel_replicas_for_non_replicated_merge_tree 1 --parallel_replicas_plan_based 0 \
     --parallel_replicas_allow_view_over_mergetree 1 --parallel_replicas_local_plan 0 \
     --parallel_replicas_min_number_of_rows_per_replica 0 --automatic_parallel_replicas_mode 0"
 
-function plan_markers()
+function parallel_replicas_reads()
 {
     # shellcheck disable=SC2086
-    ${CLICKHOUSE_CLIENT} $PR_SETTINGS --user "$invoker" --query "
-        SELECT countIf(explain LIKE '%ReadFromRemoteParallelReplicas%') AS parallel_replicas_reads,
-               countIf(explain LIKE '%Prewhere filter column%') AS filters_inside_the_read
-        FROM (EXPLAIN indexes = 0 $1)
+    ${CLICKHOUSE_CLIENT} $PR_SETTINGS --serialize_query_plan "$1" --user "$invoker" --query "
+        SELECT countIf(explain LIKE '%ReadFromRemoteParallelReplicas%')
+        FROM (EXPLAIN indexes = 0 $2)
         FORMAT TSV"
 }
 
-for view in atf_definer_view atf_none_view atf_invoker_view; do
-    echo "--- $view (parallel replicas reads, filters inside the read) ---"
-    echo -e "no filter:\t$(plan_markers "SELECT owner, secret FROM $db.$view")"
-    echo -e "filter on the view:\t$(plan_markers "SELECT owner, secret FROM $db.$view
-        SETTINGS additional_table_filters = {'$db.$view': 'owner = ''visible_owner'''}")"
-    echo -e "filter on the alias:\t$(plan_markers "SELECT owner, secret FROM $db.$view AS atf_alias
-        SETTINGS additional_table_filters = {'atf_alias': 'owner = ''visible_owner'''}")"
+function rows_through_the_filter()
+{
     # shellcheck disable=SC2086
-    echo -e "rows through the filter:\t$(${CLICKHOUSE_CLIENT} $PR_SETTINGS --user "$invoker" --query "
-        SELECT count() FROM $db.$view
-        SETTINGS additional_table_filters = {'$db.$view': 'owner = ''visible_owner'''}")"
+    ${CLICKHOUSE_CLIENT} $PR_SETTINGS --serialize_query_plan "$1" --user "$invoker" --query "$2"
+}
+
+for serialize in 0 1; do
+    for view in atf_definer_view atf_none_view atf_invoker_view; do
+        echo "--- $view (serialize_query_plan = $serialize) ---"
+        echo -e "no filter, parallel replicas reads:\t$(parallel_replicas_reads "$serialize" "SELECT owner, secret FROM $db.$view")"
+        # A barrier view is read locally once an additional table filter is in play; the plan of the
+        # `SQL SECURITY INVOKER` twin depends on whether the plan or the query text is shipped, so
+        # only the two barrier views are asserted structurally.
+        if [[ $view != atf_invoker_view ]]; then
+            echo -e "filter on the view, parallel replicas reads:\t$(parallel_replicas_reads "$serialize" "SELECT owner, secret FROM $db.$view
+                SETTINGS additional_table_filters = {'$db.$view': 'owner = ''visible_owner'''}")"
+            echo -e "filter on the alias, parallel replicas reads:\t$(parallel_replicas_reads "$serialize" "SELECT owner, secret FROM $db.$view AS atf_alias
+                SETTINGS additional_table_filters = {'atf_alias': 'owner = ''visible_owner'''}")"
+        fi
+        echo -e "rows through the filter on the view:\t$(rows_through_the_filter "$serialize" "
+            SELECT count() FROM $db.$view
+            SETTINGS additional_table_filters = {'$db.$view': 'owner = ''visible_owner'''}")"
+        # An alias-keyed `additional_table_filters` entry is not asserted for the
+        # `SQL SECURITY INVOKER` twin: it is dropped, and the rows are returned once per replica,
+        # for a plain `MergeTree` table read with parallel replicas and a shipped plan as well
+        # (`SELECT count() FROM t AS a SETTINGS additional_table_filters = {'a': ...}` returns
+        # `count() * max_parallel_replicas` of the unfiltered table), which has nothing to do with
+        # a view. The barrier views are asserted because for them the shortcut is fenced off and
+        # the read stays local.
+        if [[ $view != atf_invoker_view ]]; then
+            echo -e "rows through the filter on the alias:\t$(rows_through_the_filter "$serialize" "
+                SELECT count() FROM $db.$view AS atf_alias
+                SETTINGS additional_table_filters = {'atf_alias': 'owner = ''visible_owner'''}")"
+        fi
+    done
 done
 
 ${CLICKHOUSE_CLIENT} --query "DROP VIEW $db.atf_definer_view, $db.atf_none_view, $db.atf_invoker_view"
