@@ -1429,8 +1429,16 @@ void pushOrderByIntoView(
     if (!sel)
         return;
 
-    /// View must not have transformations that change ORDER BY semantics
-    if (sel->hasJoin() || sel->groupBy() || sel->distinct)
+    /// View must not have transformations that change ORDER BY semantics.
+    /// `GROUP BY ALL` leaves `groupBy()` empty and only raises the `group_by_all` flag, so the
+    /// expression-list check alone misses it; the `WITH TOTALS`/`ROLLUP`/`CUBE`/`GROUPING SETS`
+    /// modifiers are aggregation markers of the same kind. Under the pushdown the aggregation
+    /// would run per shard over the shard-local top-N instead of once on the coordinator over
+    /// all rows, so the outer `ORDER BY ... LIMIT` could return the wrong result. This mirrors
+    /// the shape test that `StorageView::tryGetTrivialViewUnderlyingStorage` already applies.
+    if (sel->hasJoin() || sel->groupBy() || sel->group_by_all || sel->group_by_with_totals
+        || sel->group_by_with_rollup || sel->group_by_with_cube || sel->group_by_with_grouping_sets
+        || sel->distinct)
         return;
 
     /// Window functions partition/order globally; with ORDER BY/LIMIT pushed
@@ -1455,8 +1463,18 @@ void pushOrderByIntoView(
     if (sel->qualify())
         return;
 
-    /// View must not already have ORDER BY/LIMIT
-    if (sel->orderBy() || sel->limitBy() || sel->limitLength() || sel->limitOffset())
+    /// View must not already have ORDER BY/LIMIT. A per-group limit applied per shard keeps
+    /// different rows than the same limit applied once over all rows, which the outer
+    /// `ORDER BY ... LIMIT` can no longer recover from, so every carrier of `LIMIT BY` and of
+    /// `ORDER BY ALL` is checked: the `ALL` forms raise the `limit_by_all` / `order_by_all` flags
+    /// and the `N`/`OFFSET` of a `LIMIT BY` live in `limitByLength()`/`limitByOffset()`. The
+    /// parser happens to leave a (empty) `limitBy()` list and an `orderBy()` placeholder behind
+    /// for the `ALL` forms, so the two list checks already reject them today; the flags and the
+    /// payload are checked as well so that the guard does not depend on that, exactly as
+    /// `StorageView::tryGetTrivialViewUnderlyingStorage` does it.
+    if (sel->orderBy() || sel->order_by_all
+        || sel->limitBy() || sel->limit_by_all || sel->limitByLength() || sel->limitByOffset()
+        || sel->limitLength() || sel->limitOffset())
         return;
 
     /// The view's own `SETTINGS` clause is applied to the context its inner query runs in, so it
