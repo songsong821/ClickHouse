@@ -30,8 +30,7 @@ void validateBearerToken(const DB::ContextPtr & context, const std::string & bea
         return;
 
     DB::HTTPHeaderEntries auth_header{{"Authorization", "Bearer " + bearer_token}};
-    /// Validation only (throws on an invalid header); the synthetic header is not sent from here.
-    (void)context->getGlobalContext()->getHTTPHeaderFilter().checkAndNormalizeHeaders(std::move(auth_header));
+    context->getGlobalContext()->getHTTPHeaderFilter().checkAndNormalizeHeaders(auth_header);
 }
 
 DB::ReadWriteBufferFromHTTPPtr createReadBuffer(

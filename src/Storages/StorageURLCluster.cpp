@@ -55,7 +55,7 @@ StorageURLCluster::StorageURLCluster(
 {
     auto headers = configuration_.headers;
     context->getRemoteHostFilter().checkURL(Poco::URI(uri));
-    headers = context->getHTTPHeaderFilter().checkAndNormalizeHeaders(std::move(headers));
+    context->getHTTPHeaderFilter().checkAndNormalizeHeaders(headers);
 
     StorageInMemoryMetadata storage_metadata;
 

@@ -1103,11 +1103,12 @@ std::pair<ColumnsDescription, String> IStorageURLBase::getTableStructureAndForma
     /// Enforce <http_forbid_headers> before any network access. This is the single funnel for
     /// schema inference (StorageURL ctor, StorageURLCluster, TableFunctionURL analysis), so the
     /// check here also covers the DESCRIBE / INSERT..SELECT / format-detection paths that never
-    /// reach the StorageURL ctor body. checkAndNormalizeHeaders returns the normalized headers, so
-    /// send that normalized copy — the normalized names are what reach the wire. Ban "Range" on the
+    /// reach the StorageURL ctor body. checkAndNormalizeHeaders normalizes in place, so validate a
+    /// copy and send that copy — the normalized names are what reach the wire. Ban "Range" on the
     /// normalized names (a padded spelling normalizes to "Range") so schema inference never reads a
     /// partial-content response.
-    const auto headers_to_check = context->getHTTPHeaderFilter().checkAndNormalizeHeaders(headers);
+    HTTPHeaderEntries headers_to_check(headers);
+    context->getHTTPHeaderFilter().checkAndNormalizeHeaders(headers_to_check);
     rejectRangeHeaders(headers_to_check);
 
     Poco::Net::HTTPBasicCredentials credentials;
@@ -1620,7 +1621,7 @@ StorageURL::StorageURL(
         distributed_processing_)
 {
     context_->getRemoteHostFilter().checkURL(Poco::URI(uri));
-    headers = context_->getHTTPHeaderFilter().checkAndNormalizeHeaders(std::move(headers));
+    context_->getHTTPHeaderFilter().checkAndNormalizeHeaders(headers);
 }
 
 

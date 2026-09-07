@@ -1448,8 +1448,7 @@ void registerDatabaseDataLake(DatabaseFactory & factory)
             if (pos != std::string::npos)
             {
                 DB::HTTPHeaderEntries header_entries{{auth_header_str.substr(0, pos), auth_header_str.substr(pos + 1)}};
-                /// CREATE-time validation only (throws on an invalid or forbidden header); the normalized result is not stored.
-                (void)args.context->getGlobalContext()->getHTTPHeaderFilter().checkAndNormalizeHeaders(std::move(header_entries));
+                args.context->getGlobalContext()->getHTTPHeaderFilter().checkAndNormalizeHeaders(header_entries);
             }
             else
             {
