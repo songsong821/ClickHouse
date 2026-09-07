@@ -30,6 +30,28 @@ def _elide(text, limit=_GH_DIAGNOSTIC_FIELD_LIMIT):
     return f"{text[:limit]}...(+{len(text) - limit} chars elided)"
 
 
+def parse_paginated_json_arrays(output):
+    """Flatten the output of `gh api --paginate --jq '[...]'`.
+
+    With `--paginate` and a `--jq` filter, `gh` applies the filter per page and
+    concatenates the results, so an array-producing filter emits one JSON array
+    per page. A single `json.loads` then fails with "Extra data" as soon as the
+    response has a second page - which for the PR comment list means every PR
+    with more than 100 comments.
+    """
+    decoder = json.JSONDecoder()
+    items = []
+    text = (output or "").strip()
+    idx = 0
+    while idx < len(text):
+        page, end = decoder.raw_decode(text, idx)
+        items.extend(page)
+        idx = end
+        while idx < len(text) and text[idx].isspace():
+            idx += 1
+    return items
+
+
 class GH:
     # This run's object, cached for the lifetime of the process (see
     # get_workflow_run), so reading a second field costs no second request.
@@ -934,7 +956,7 @@ class GH:
         output = cls.get_output_with_retries(cmd_list, verbose=verbose)
         if output:
             try:
-                for comment in json.loads(output):
+                for comment in parse_paginated_json_arrays(output):
                     if TAG_START in comment["body"] and TAG_END in comment["body"]:
                         comment_id = comment["id"]
                         if verbose:
@@ -1005,7 +1027,7 @@ class GH:
             )
             return False
         try:
-            comments = json.loads(output)
+            comments = parse_paginated_json_arrays(output)
         except json.JSONDecodeError as e:
             print(
                 f"WARNING: failed to parse gh api response as JSON ({e}); "

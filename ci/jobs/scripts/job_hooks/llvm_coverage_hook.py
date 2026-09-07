@@ -4,7 +4,7 @@ import traceback
 from pathlib import Path
 
 from ci.jobs.scripts.cidb_cluster import CIDBCluster
-from ci.praktika.gh import GH
+from ci.praktika.gh import GH, parse_paginated_json_arrays
 from ci.praktika.info import Info
 
 _COVERAGE_TAG_START = "<!-- CI automatic comment start :coverage: -->"
@@ -29,22 +29,6 @@ def preserved_coverage_lines(section: str) -> str:
     return "\n".join(kept).strip()
 
 
-def parse_paginated_arrays(output: str) -> list:
-    """Flatten the output of `gh api --paginate --jq '[...]'`, which emits one
-    JSON array per page, concatenated - a single json.loads breaks on page 2."""
-    decoder = json.JSONDecoder()
-    items = []
-    text = (output or "").strip()
-    idx = 0
-    while idx < len(text):
-        page, end = decoder.raw_decode(text, idx)
-        items.extend(page)
-        idx = end
-        while idx < len(text) and text[idx].isspace():
-            idx += 1
-    return items
-
-
 def current_coverage_section(repo: str, pr: int) -> str:
     """The coverage section of the existing updateable PR comment, "" if absent."""
     cmd = (
@@ -53,7 +37,7 @@ def current_coverage_section(repo: str, pr: int) -> str:
     )
     output = GH.get_output_with_retries(cmd, verbose=False)
     try:
-        bodies = parse_paginated_arrays(output)
+        bodies = parse_paginated_json_arrays(output)
     except (json.JSONDecodeError, TypeError):
         return ""
     for body in bodies:
