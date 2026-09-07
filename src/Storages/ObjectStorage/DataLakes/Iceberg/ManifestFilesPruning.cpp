@@ -6,6 +6,9 @@
 #include <Columns/ColumnNullable.h>
 #include <Columns/ColumnsDateTime.h>
 #include <Common/DateLUTImpl.h>
+#include <Common/DateLUT.h>
+#include <Core/DecimalFunctions.h>
+#include <base/arithmeticOverflow.h>
 #include <DataTypes/DataTypeNullable.h>
 #include <DataTypes/DataTypesDecimal.h>
 #include <Common/logger_useful.h>
@@ -220,6 +223,151 @@ Field decodePartitionDecimalByType(const String & bytes, const IDataType & type)
 
 }
 
+namespace
+{
+
+std::optional<Int64> floorDivideChecked(Int64 numerator, Int64 denominator)
+{
+    if (denominator == 0)
+        return {};
+    Int64 quotient = numerator / denominator;
+    if (numerator % denominator != 0 && (numerator < 0) != (denominator < 0))
+    {
+        if (quotient == std::numeric_limits<Int64>::min())
+            return {};
+        --quotient;
+    }
+    return quotient;
+}
+
+std::optional<Int64> multiplyChecked(Int64 left, Int64 right)
+{
+    Int64 result = 0;
+    if (common::mulOverflow(left, right, result))
+        return {};
+    return result;
+}
+
+std::optional<Int64> addChecked(Int64 left, Int64 right)
+{
+    Int64 result = 0;
+    if (common::addOverflow(left, right, result))
+        return {};
+    return result;
+}
+
+std::optional<std::pair<Int64, Int64>> dayIntervalOfPartitionValue(const String & transform_name, Int64 value)
+{
+    if (transform_name == "day" || transform_name == "days" || transform_name == "date" || transform_name == "dates")
+        return std::pair{value, value};
+
+    const auto & utc = DateLUT::instance("UTC");
+
+    auto day_num_of = [&](Int64 year, Int64 month) -> std::optional<Int64>
+    {
+        if (year < std::numeric_limits<Int16>::min() || year > std::numeric_limits<Int16>::max())
+            return {};
+        auto day_num = utc.tryToMakeDayNum(static_cast<Int16>(year), static_cast<UInt8>(month), 1);
+        if (!day_num)
+            return {};
+        return static_cast<Int64>(day_num->toUnderType());
+    };
+
+    if (transform_name == "month" || transform_name == "months")
+    {
+        auto years = floorDivideChecked(value, 12);
+        if (!years)
+            return {};
+        Int64 year = 1970 + *years;
+        Int64 month = value - *years * 12 + 1;
+        auto first = day_num_of(year, month);
+        auto next = month == 12 ? day_num_of(year + 1, 1) : day_num_of(year, month + 1);
+        if (!first || !next)
+            return {};
+        return std::pair{*first, *next - 1};
+    }
+
+    if (transform_name == "year" || transform_name == "years")
+    {
+        auto first = day_num_of(1970 + value, 1);
+        auto next = day_num_of(1970 + value + 1, 1);
+        if (!first || !next)
+            return {};
+        return std::pair{*first, *next - 1};
+    }
+
+    return {};
+}
+
+std::optional<Range> rangeOfPartitionValue(const String & transform_name_src, const Field & partition_value, const IDataType & source_type)
+{
+    if (partition_value.isNull())
+        return {};
+
+    Int64 value = 0;
+    if (partition_value.getType() == Field::Types::Int64)
+        value = partition_value.safeGet<Int64>();
+    else if (partition_value.getType() == Field::Types::UInt64)
+    {
+        UInt64 unsigned_value = partition_value.safeGet<UInt64>();
+        if (unsigned_value > static_cast<UInt64>(std::numeric_limits<Int64>::max()))
+            return {};
+        value = static_cast<Int64>(unsigned_value);
+    }
+    else
+        return {};
+
+    const String transform_name = Poco::toLower(transform_name_src);
+    const WhichDataType which(source_type);
+
+    if (which.isDateOrDate32())
+    {
+        auto days = dayIntervalOfPartitionValue(transform_name, value);
+        if (!days)
+            return {};
+        return Range(days->first, true, days->second, true);
+    }
+
+    if (!which.isDateTime() && !which.isDateTime64())
+        return {};
+
+    std::optional<std::pair<Int64, Int64>> seconds;
+    if (transform_name == "hour" || transform_name == "hours")
+    {
+        auto first = multiplyChecked(value, 3600);
+        auto next = first ? addChecked(*first, 3600) : std::nullopt;
+        if (!next)
+            return {};
+        seconds = std::pair{*first, *next - 1};
+    }
+    else if (auto days = dayIntervalOfPartitionValue(transform_name, value))
+    {
+        auto first = multiplyChecked(days->first, 86400);
+        auto next_day = addChecked(days->second, 1);
+        auto next = first && next_day ? multiplyChecked(*next_day, 86400) : std::nullopt;
+        if (!next)
+            return {};
+        seconds = std::pair{*first, *next - 1};
+    }
+    else
+        return {};
+
+    if (which.isDateTime())
+        return Range(seconds->first, true, seconds->second, true);
+
+    const UInt32 scale = getDecimalScale(source_type);
+    const Int64 ticks_per_second = DecimalUtils::scaleMultiplier<Int64>(scale);
+    auto first = multiplyChecked(seconds->first, ticks_per_second);
+    auto next = addChecked(seconds->second, 1);
+    next = next ? multiplyChecked(*next, ticks_per_second) : std::nullopt;
+    if (!first || !next)
+        return {};
+    return Range(
+        DecimalField<Decimal64>(*first, scale), true, DecimalField<Decimal64>(*next - 1, scale), true);
+}
+
+}
+
 PruningReturnStatus ManifestFilesPruner::canBePruned(
     const ProcessedManifestFileEntryPtr & entry, const std::unordered_map<Int32, DB::Range> & entry_hyperrectangles) const
 {
@@ -246,6 +394,34 @@ PruningReturnStatus ManifestFilesPruner::canBePruned(
         if (!can_be_true)
         {
             return PruningReturnStatus::PARTITION_PRUNED;
+        }
+    }
+
+    if (partition_key_condition.has_value() && entry->common_partition_specification)
+    {
+        const auto & partition_value = entry->parsed_entry->partition_key_value;
+        for (const auto & partition_field : *entry->common_partition_specification)
+        {
+            auto key_condition_it = min_max_key_conditions.find(partition_field.source_id);
+            if (key_condition_it == min_max_key_conditions.end())
+                continue;
+
+            auto name_and_type = schema_processor.tryGetFieldCharacteristics(initial_schema_id, partition_field.source_id);
+            if (!name_and_type.has_value())
+                continue;
+
+            if (partition_field.tuple_index < 0 || static_cast<size_t>(partition_field.tuple_index) >= partition_value.size())
+                continue;
+
+            auto range = rangeOfPartitionValue(
+                partition_field.transform_name,
+                partition_value[partition_field.tuple_index],
+                *removeNullable(name_and_type->type));
+            if (!range.has_value())
+                continue;
+
+            if (!key_condition_it->second.mayBeTrueInRange(1, &range->left, &range->right, {name_and_type->type}))
+                return PruningReturnStatus::PARTITION_PRUNED;
         }
     }
 
