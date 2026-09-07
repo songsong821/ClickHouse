@@ -132,6 +132,13 @@ void ReadBufferFromRemoteFSGather::initialize()
 
 bool ReadBufferFromRemoteFSGather::nextImpl()
 {
+    /// The requested range can be empty, e.g. a `seek` to the boundary between two objects followed by
+    /// `setReadUntilPosition` to the same offset. `initialize` picks the object that starts exactly
+    /// there, and reading from it would return data past the right bound. `moveToNextBuffer` already
+    /// stops on the same condition.
+    if (read_until_position && file_offset_of_buffer_end >= read_until_position)
+        return false;
+
     /// Find first available buffer that fits to given offset.
     if (!current_buf)
         initialize();

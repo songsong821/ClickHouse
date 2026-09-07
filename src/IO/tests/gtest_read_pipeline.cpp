@@ -324,6 +324,37 @@ catch (...)
 }
 
 
+TEST(ReadPipeline, GatherEmptyRangeAtObjectBoundary)
+try
+{
+    /// An empty range at the boundary between two objects: the position is already at the right bound,
+    /// so nothing must be read from the object that starts exactly there.
+    auto creator = perObjectCreator({
+        {"obj/a", "AAA"},
+        {"obj/b", "BBB"},
+    });
+
+    ReadPipeline pipeline;
+    pipeline.setSource(
+        std::move(creator),
+        StoredObjects{testObject("obj/a", 3), testObject("obj/b", 3)},
+        ReadSettings{});
+    pipeline.needGather();
+    auto buf = pipeline.build();
+
+    buf->seek(3, SEEK_SET);
+    buf->setReadUntilPosition(3);
+
+    String result;
+    readStringUntilEOF(result, *buf);
+    EXPECT_EQ(result, "");
+}
+catch (...)
+{
+    FAIL() << getCurrentExceptionMessage(true);
+}
+
+
 /// -- Validation --
 
 TEST(ReadPipeline, BuildWithoutSourceThrows)
