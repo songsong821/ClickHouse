@@ -6,10 +6,11 @@
 -- now declined when an endpoint does not fit the column type.
 
 SET session_timezone = 'UTC';
--- The optimization pass and `EXPLAIN QUERY TREE` exist only in the analyzer; the old-analyzer CI run turns it off.
-SET enable_analyzer = 1;
--- The flaky check randomizes `optimize_time_filter_with_preimage`; the `EXPLAIN` checks below need it on.
+-- The flaky check randomizes `optimize_time_filter_with_preimage`; the checks below need it on.
 SET optimize_time_filter_with_preimage = 1;
+-- The analyzer is not pinned session-wide on purpose: the result checks then cover the old AST
+-- optimizer too on the CI run that turns the analyzer off. Only the `EXPLAIN QUERY TREE` checks,
+-- which exist in the analyzer alone, pin it per query.
 
 DROP TABLE IF EXISTS t_preimage_date;
 CREATE TABLE t_preimage_date (d Date) ENGINE = MergeTree ORDER BY d;
@@ -51,8 +52,8 @@ CREATE TABLE t_preimage_ordinary (d Date) ENGINE = MergeTree ORDER BY d;
 INSERT INTO t_preimage_ordinary VALUES ('2019-12-31'),('2020-01-01'),('2020-06-15'),('2020-12-31'),('2021-01-01');
 SELECT count() FROM t_preimage_ordinary WHERE toYear(d) = 2020;
 SELECT count() FROM t_preimage_ordinary WHERE toYear(d) = 2020 SETTINGS optimize_time_filter_with_preimage = 0;
-SELECT count() > 0 FROM (EXPLAIN QUERY TREE SELECT count() FROM t_preimage_ordinary WHERE toYear(d) = 2020) WHERE explain LIKE '%2021-01-01%';
-SELECT count() FROM (EXPLAIN QUERY TREE SELECT count() FROM t_preimage_date WHERE toYear(d) = 2149) WHERE explain LIKE '%2150-01-01%';
+SELECT count() > 0 FROM (EXPLAIN QUERY TREE SELECT count() FROM t_preimage_ordinary WHERE toYear(d) = 2020) WHERE explain LIKE '%2021-01-01%' SETTINGS enable_analyzer = 1;
+SELECT count() FROM (EXPLAIN QUERY TREE SELECT count() FROM t_preimage_date WHERE toYear(d) = 2149) WHERE explain LIKE '%2150-01-01%' SETTINGS enable_analyzer = 1;
 
 SELECT 'Date32 spans the whole representable range';
 DROP TABLE IF EXISTS t_preimage_date32;

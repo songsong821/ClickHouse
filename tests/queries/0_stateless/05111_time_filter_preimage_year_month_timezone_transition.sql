@@ -5,9 +5,10 @@
 -- `toStartOfYear` / `toStartOfMonth` preimages already do, or the rows in the transition hour are misclassified.
 
 SET session_timezone = 'UTC';
--- The optimization pass and `EXPLAIN QUERY TREE` exist only in the analyzer; the old-analyzer CI run turns it off.
-SET enable_analyzer = 1;
 SET optimize_time_filter_with_preimage = 1;
+-- The analyzer is not pinned session-wide on purpose: the result checks then cover the old AST
+-- optimizer too on the CI run that turns the analyzer off. Only the `EXPLAIN QUERY TREE` checks,
+-- which exist in the analyzer alone, pin it per query.
 
 DROP TABLE IF EXISTS t_preimage_transition;
 CREATE TABLE t_preimage_transition
@@ -63,9 +64,9 @@ SELECT count() FROM t_preimage_transition WHERE toYYYYMM(managua64) = 199212;
 SELECT count() FROM t_preimage_transition WHERE toYYYYMM(managua64) = 199301;
 
 SELECT 'the rewrite still applies and carries the real local boundary';
-SELECT count() FROM (EXPLAIN QUERY TREE SELECT count() FROM t_preimage_transition WHERE toYear(lima) = 1993) WHERE explain LIKE '%1994-01-01 01:00:00%';
-SELECT count() FROM (EXPLAIN QUERY TREE SELECT count() FROM t_preimage_transition WHERE toYYYYMM(managua64) = 199212) WHERE explain LIKE '%1993-01-01 01:00:00%';
-SELECT count() FROM (EXPLAIN QUERY TREE SELECT count() FROM t_preimage_transition WHERE toYear(lima) = 1993) WHERE explain LIKE '%function_name: toYear%';
+SELECT count() FROM (EXPLAIN QUERY TREE SELECT count() FROM t_preimage_transition WHERE toYear(lima) = 1993) WHERE explain LIKE '%1994-01-01 01:00:00%' SETTINGS enable_analyzer = 1;
+SELECT count() FROM (EXPLAIN QUERY TREE SELECT count() FROM t_preimage_transition WHERE toYYYYMM(managua64) = 199212) WHERE explain LIKE '%1993-01-01 01:00:00%' SETTINGS enable_analyzer = 1;
+SELECT count() FROM (EXPLAIN QUERY TREE SELECT count() FROM t_preimage_transition WHERE toYear(lima) = 1993) WHERE explain LIKE '%function_name: toYear%' SETTINGS enable_analyzer = 1;
 
 SELECT 'an implicit time zone is parsed in the session time zone';
 DROP TABLE IF EXISTS t_preimage_implicit;
