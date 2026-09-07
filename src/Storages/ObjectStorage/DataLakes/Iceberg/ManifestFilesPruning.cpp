@@ -250,54 +250,88 @@ PartitionTransformKind parsePartitionTransformKind(const String & transform_name
     return PartitionTransformKind::NotInvertible;
 }
 
-using ClosedInterval = std::pair<Int64, Int64>;
+/// Half-open: `[first, past_last)`. The transforms map a whole such interval to one partition value,
+/// and every step below stays half-open, so a value from corrupt metadata can only fail an overflow
+/// check and disable pruning, never wrap around.
+struct Interval
+{
+    Int64 first;
+    Int64 past_last;
+};
 
-/// `[a, b]` in one unit is `[a * factor, (b + 1) * factor - 1]` in a unit that many times finer.
-std::optional<ClosedInterval> refineInterval(ClosedInterval interval, Int64 factor)
+/// The value covers `[v, v + 1)` of its own unit.
+std::optional<Interval> unitInterval(Int64 value)
+{
+    Int64 past_last = 0;
+    if (common::addOverflow(value, Int64{1}, past_last))
+        return {};
+    return Interval{value, past_last};
+}
+
+/// `[a, b)` in one unit is `[a * factor, b * factor)` in a unit that many times finer.
+std::optional<Interval> refineInterval(Interval interval, Int64 factor)
 {
     Int64 first = 0;
     Int64 past_last = 0;
-    if (common::mulOverflow(interval.first, factor, first) || common::addOverflow(interval.second, Int64{1}, past_last)
-        || common::mulOverflow(past_last, factor, past_last))
+    if (common::mulOverflow(interval.first, factor, first) || common::mulOverflow(interval.past_last, factor, past_last))
         return {};
-    return ClosedInterval{first, past_last - 1};
+    return Interval{first, past_last};
 }
 
-std::optional<ClosedInterval> dayIntervalOfPartitionValue(PartitionTransformKind kind, Int64 value)
+/// The last value inside the interval. Key analysis looks at the two ends of a range and applies the
+/// filter's functions to them, so the last value inside bounds the file tighter than the excluded
+/// upper end: for a January partition it maps to January, while the excluded end maps to February.
+std::optional<Int64> lastValueOf(Interval interval)
 {
+    Int64 last = 0;
+    if (common::subOverflow(interval.past_last, Int64{1}, last))
+        return {};
+    return last;
+}
+
+std::optional<Interval> dayIntervalOfPartitionValue(PartitionTransformKind kind, Int64 value)
+{
+    auto own_unit = unitInterval(value);
+    if (!own_unit)
+        return {};
+
+    if (kind == PartitionTransformKind::Day)
+        return own_unit;
+
     const auto & utc = DateLUT::instance("UTC");
     const auto epoch = ExtendedDayNum(0);
 
-    switch (kind)
+    if (kind == PartitionTransformKind::Month)
     {
-        case PartitionTransformKind::Day:
-            return ClosedInterval{value, value};
-        case PartitionTransformKind::Month:
-        {
-            const auto first = utc.addMonths(epoch, value);
-            if (utc.toMonthNumSinceEpoch(first) != value)
-                return {};
-            return ClosedInterval{Int64{first}, Int64{utc.addMonths(epoch, value + 1)} - 1};
-        }
-        case PartitionTransformKind::Year:
-        {
-            const auto first = utc.addYears(epoch, value);
-            if (utc.toYearSinceEpoch(first) != value)
-                return {};
-            return ClosedInterval{Int64{first}, Int64{utc.addYears(epoch, value + 1)} - 1};
-        }
-        default:
+        const auto first = utc.addMonths(epoch, own_unit->first);
+        if (utc.toMonthNumSinceEpoch(first) != own_unit->first)
             return {};
+        return Interval{Int64{first}, Int64{utc.addMonths(epoch, own_unit->past_last)}};
     }
+
+    if (kind == PartitionTransformKind::Year)
+    {
+        const auto first = utc.addYears(epoch, own_unit->first);
+        if (utc.toYearSinceEpoch(first) != own_unit->first)
+            return {};
+        return Interval{Int64{first}, Int64{utc.addYears(epoch, own_unit->past_last)}};
+    }
+
+    return {};
 }
 
-std::optional<ClosedInterval> secondIntervalOfPartitionValue(PartitionTransformKind kind, Int64 value)
+std::optional<Interval> secondIntervalOfPartitionValue(PartitionTransformKind kind, Int64 value)
 {
     static constexpr Int64 seconds_per_hour = 3600;
     static constexpr Int64 seconds_per_day = 86400;
 
     if (kind == PartitionTransformKind::Hour)
-        return refineInterval({value, value}, seconds_per_hour);
+    {
+        auto hours = unitInterval(value);
+        if (!hours)
+            return {};
+        return refineInterval(*hours, seconds_per_hour);
+    }
 
     auto days = dayIntervalOfPartitionValue(kind, value);
     if (!days)
@@ -329,9 +363,10 @@ std::optional<Range> rangeOfPartitionValue(const String & transform_name, const 
     if (which.isDateOrDate32())
     {
         auto days = dayIntervalOfPartitionValue(kind, value);
-        if (!days)
+        auto last = days ? lastValueOf(*days) : std::nullopt;
+        if (!last)
             return {};
-        return Range(days->first, true, days->second, true);
+        return Range(days->first, true, *last, true);
     }
 
     if (!which.isDateTime() && !which.isDateTime64())
@@ -342,13 +377,19 @@ std::optional<Range> rangeOfPartitionValue(const String & transform_name, const 
         return {};
 
     if (which.isDateTime())
-        return Range(seconds->first, true, seconds->second, true);
+    {
+        auto last = lastValueOf(*seconds);
+        if (!last)
+            return {};
+        return Range(seconds->first, true, *last, true);
+    }
 
     const UInt32 scale = getDecimalScale(source_type);
     auto ticks = refineInterval(*seconds, DecimalUtils::scaleMultiplier<Int64>(scale));
-    if (!ticks)
+    auto last = ticks ? lastValueOf(*ticks) : std::nullopt;
+    if (!last)
         return {};
-    return Range(DecimalField<Decimal64>(ticks->first, scale), true, DecimalField<Decimal64>(ticks->second, scale), true);
+    return Range(DecimalField<Decimal64>(ticks->first, scale), true, DecimalField<Decimal64>(*last, scale), true);
 }
 
 }
@@ -356,9 +397,10 @@ std::optional<Range> rangeOfPartitionValue(const String & transform_name, const 
 PruningReturnStatus ManifestFilesPruner::canBePruned(
     const ProcessedManifestFileEntryPtr & entry, const std::unordered_map<Int32, DB::Range> & entry_hyperrectangles) const
 {
+    const auto & partition_value = entry->parsed_entry->partition_key_value;
+
     if (partition_key_condition.has_value())
     {
-        const auto & partition_value = entry->parsed_entry->partition_key_value;
         std::vector<FieldRef> index_value(partition_value.begin(), partition_value.end());
         for (size_t i = 0; i < index_value.size(); ++i)
         {
@@ -384,7 +426,6 @@ PruningReturnStatus ManifestFilesPruner::canBePruned(
 
     if (partition_key_condition.has_value() && entry->common_partition_specification)
     {
-        const auto & partition_value = entry->parsed_entry->partition_key_value;
         for (const auto & partition_field : *entry->common_partition_specification)
         {
             auto key_condition_it = min_max_key_conditions.find(partition_field.source_id);
