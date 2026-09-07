@@ -617,6 +617,28 @@ StoragePtr StorageView::getUnderlyingMergeTreeStorageForParallelReplicas(const C
     auto metadata_snapshot = getInMemoryMetadataPtr(context, false);
     auto inner_query_ast = metadata_snapshot->getSelectQuery().inner_query;
 
+    /// Query-based parallel replicas over a view (`parallel_replicas_allow_view_over_mergetree`)
+    /// do not read the view: the callers of this function take the storage it returns and read
+    /// that storage with parallel replicas, under the *outer* query's context and identity. The
+    /// view's filtering - its own row policies, the definer's row policies on the inner table,
+    /// the definer profile's filters - is not part of that read, and the announcement and the
+    /// per-replica reads see every row of the inner table. For a security barrier view whose
+    /// filtering must be trusted this is the same disclosure the rest of the barrier closes, so
+    /// fail closed here as well: the view is then read through `readImpl`, which builds the
+    /// filtering subplan and seals it.
+    ///
+    /// A view that provably hides nothing keeps the optimization - there is nothing below it that
+    /// the invoker could not read directly.
+    if (isSecurityBarrier(*metadata_snapshot, context))
+    {
+        auto view_id = getStorageID();
+        auto view_row_policy_filter = context->getRowPolicyFilter(
+            view_id.getDatabaseName(), view_id.getTableName(), RowPolicyFilterType::SELECT_FILTER);
+        const bool has_row_policy = view_row_policy_filter && !view_row_policy_filter->isAlwaysTrue();
+        if (has_row_policy || canHideRows(inner_query_ast, metadata_snapshot->getSQLSecurityOverriddenContext(context)))
+            return nullptr;
+    }
+
     QueryTreeNodePtr inner_query_tree;
     try
     {
