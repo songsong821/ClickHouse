@@ -128,13 +128,25 @@ probe()
 # `min_by` is an alias of `argMin`, `array_agg` of `groupArray`, `medianTDigest` of the
 # approximate `quantileTDigest`, `anova` of `analysisOfVariance`, and `array_concat_agg` of
 # `groupArrayArray` - which is itself `groupArray` plus an `Array` combinator, so the
-# expansion has to be stripped in turn, i.e. the alias lookup has to happen at every
-# combinator-stripping stage rather than once on the original name.
+# expansion has to be stripped in turn.
 probe "min_by" "min_by(v, v), min_by(v + 1, v), min_by(v * 2, v)"
 probe "array_agg" "array_agg(v), array_agg(v + 1), array_agg(v * 2)"
 probe "array_concat_agg" "array_concat_agg([v]), array_concat_agg([v + 1]), array_concat_agg([v * 2])"
 probe "medianTDigest" "medianTDigest(v), medianTDigest(v + 1), medianTDigest(v * 2)"
 probe "anova" "anova(v, (v % 3)::UInt8), anova(v + 1, (v % 3)::UInt8), anova(v * 2, (v % 3)::UInt8)"
+
+# One spelling that carries a combinator on top of the alias, which is what forces the alias
+# lookup to run at every combinator-stripping stage rather than once on the original name:
+# `min_byOrNull` is not a registered name at all (`system.functions` knows `min_by`, not
+# `min_byOrNull`), so the factory can only recognise it once the `OrNull` suffix has come off.
+# All the probes above use the raw alias spelling and would stay green under a checker that
+# resolved the alias exactly once, up front - including `array_concat_agg`, which only proves
+# that the *expansion* is stripped afterwards. Measured: with the resolution moved to a single
+# up-front lookup, every probe above stays green while this one turns checkable.
+# `*OrNull` rather than `*If` because the fuzzer mutates an `If` combinator's extra condition
+# argument into something that no longer type-checks often enough to lose the regression
+# roughly half the time; `*OrNull` takes no extra argument and caught it in 7 of 8 runs.
+probe "min_byOrNull" "min_byOrNull(v, v), min_byOrNull(v + 1, v), min_byOrNull(v * 2, v)"
 
 # Positive controls: an alias whose canonical name is safe must still be checked. Without
 # them every probe above would be satisfied just as well by a checker that rejected all
@@ -172,8 +184,11 @@ positive_control()
 
 # `BIT_AND` / `BIT_OR` / `BIT_XOR` are aliases of `groupBitAnd` / `groupBitOr` / `groupBitXor`,
 # which are associative and commutative over integers, are therefore absent from the backstop
-# set, and must stay checkable through their alias spelling too.
-positive_control "safe aliases" "BIT_AND(v), BIT_OR(v), BIT_XOR(v)"
+# set, and must stay checkable through their alias spelling too. One of them carries the same
+# `OrNull` combinator as the probe above so that probe cannot pass vacuously: it proves a query
+# whose aggregate is a combinator-suffixed alias spelling is checkable in principle, i.e. that
+# the zero delta there is the gate rejecting `argMin` and not the oracle declining the shape.
+positive_control "safe aliases" "BIT_AND(v), BIT_OROrNull(v), BIT_XOR(v)"
 
 # And one alias whose canonical name is a `quantile*`: `medianDeterministic` resolves to
 # `quantileDeterministic`, which is NOT on the backstop list because
