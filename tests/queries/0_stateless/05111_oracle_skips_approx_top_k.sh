@@ -57,6 +57,14 @@ run_fuzzed()
 # assertion into a false failure, while losing all three occurrences in one round is
 # vanishingly unlikely. Aliases are not swapped at all (the swap list matches on the
 # canonical prefix), so for them the repetition is merely harmless.
+#
+# Three rounds, not more. Rounds buy only insurance against a round in which the mutation
+# happens to make the query ineligible for an unrelated reason and the probe passes
+# vacuously; that risk falls off geometrically, so three is already plenty. They do not add
+# detection power - a missing denylist entry moves the counter on the very first round - and
+# each extra round costs real time and one more chance of the false failure above. Keep this
+# number small: at eight rounds the whole test took ~204s under `amd_asan_ubsan` and tripped
+# the 180s per-test limit.
 probe()
 {
     local label="$1"
@@ -65,7 +73,7 @@ probe()
     local after
 
     before=$(get_counter)
-    for _ in $(seq 1 8)
+    for _ in $(seq 1 3)
     do
         run_fuzzed "SELECT $aggregates FROM oracle_approx_top WHERE v > 5;"
     done
@@ -100,10 +108,13 @@ probe "anova" "anova(v, (v % 3)::UInt8), anova(v + 1, (v % 3)::UInt8), anova(v *
 # checked. This proves the counter is live under these settings, so every probe above is
 # the gate rejecting one unsafe spelling and not the oracle ignoring this query shape
 # altogether. Retried until the counter moves, because a single mutation can occasionally
-# break oracle eligibility for an unrelated reason (see 04658).
+# break oracle eligibility for an unrelated reason (see 04658). The retry budget is bounded
+# well below the point where the loop alone could exhaust the 180s per-test limit: it
+# normally succeeds on the first round, and if it genuinely never fires it is far better to
+# report that below than to be killed as a timeout.
 before=$(get_counter)
 after=$before
-for _ in $(seq 1 100)
+for _ in $(seq 1 40)
 do
     run_fuzzed "SELECT count(), min(v), max(v) FROM oracle_approx_top WHERE v > 5;"
     after=$(get_counter)
