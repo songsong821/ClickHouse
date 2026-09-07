@@ -15,11 +15,6 @@
 #include <Processors/QueryPlan/Optimizations/Optimizations.h>
 #include <Processors/QueryPlan/Optimizations/RuntimeDataflowStatistics.h>
 #include <Processors/QueryPlan/Optimizations/Utils.h>
-#include <IO/WriteBufferFromString.h>
-#include <IO/Operators.h>
-#include <functional>
-#include <Processors/QueryPlan/SourceStepWithFilter.h>
-#include <Common/SipHash.h>
 #include <Common/Exception.h>
 #include <Common/Logger.h>
 #include <Common/logger_useful.h>
@@ -164,27 +159,6 @@ QueryPlan::Node * findTopNodeOfReplicasPlan(QueryPlan::Node * plan_with_parallel
 /// to estimate whether parallel replicas will be beneficial for the query or not. For that, we need to estimate how much data
 /// replicas will send to the initiator. To do that, we found the node that will be at the top of replicas plan (e.g. Aggregating step in the example above),
 /// and ask it collect statistics on the number of bytes it'd send to the initiator if we executed the query with parallel replicas.
-/// The subtree hash of a node cannot express every correspondence between the two plans. An
-/// `Aggregating` on the replicas side emits partial states for the initiator to merge while the
-/// single-node plan aggregates to final values, so the two steps serialize differently and never hash
-/// equal - even though they are the same aggregation over the same rows. What does agree is their
-/// input, once the cache key ignores branch-local naming. So when the node itself does not match, look
-/// for one of the same kind over an identically-hashing input.
-std::optional<std::vector<UInt64>> childHashes(
-    const QueryPlan::Node & node, const std::unordered_map<const QueryPlan::Node *, UInt64> & hashes)
-{
-    std::vector<UInt64> result;
-    result.reserve(node.children.size());
-    for (const auto * child : node.children)
-    {
-        auto it = hashes.find(child);
-        if (it == hashes.end())
-            return {};
-        result.push_back(it->second);
-    }
-    return result;
-}
-
 std::pair<const QueryPlan::Node *, size_t> findCorrespondingNodeInSingleNodePlan(
     const QueryPlan::Node & final_node_in_replica_plan,
     QueryPlan::Node & parallel_replicas_plan_root,
@@ -212,44 +186,7 @@ std::pair<const QueryPlan::Node *, size_t> findCorrespondingNodeInSingleNodePlan
                 return std::make_pair(nopr_node, nopr_hash);
             }
         }
-        /// No exact match. Take a node of the same kind over the same input, and only when it is the
-        /// single such candidate, so that a wrong node is never instrumented.
-        const auto wanted_inputs = childHashes(final_node_in_replica_plan, pr_node_hashes);
-        const auto & wanted_kind = final_node_in_replica_plan.step->getName();
-        const QueryPlan::Node * candidate = nullptr;
-        size_t candidate_hash = 0;
-        size_t matches = 0;
-        if (wanted_inputs && !wanted_inputs->empty())
-        {
-            for (const auto & [nopr_node, nopr_hash] : nopr_node_hashes)
-            {
-                if (nopr_node->step->getName() != wanted_kind)
-                    continue;
-                if (!nopr_node->step->supportsDataflowStatisticsCollection())
-                    continue;
-                if (childHashes(*nopr_node, nopr_node_hashes) != wanted_inputs)
-                    continue;
-                ++matches;
-                candidate = nopr_node;
-                candidate_hash = nopr_hash;
-            }
-        }
-
-        if (matches == 1)
-        {
-            LOG_DEBUG(
-                getLogger("optimizeTree"),
-                "No node hashes equal to the top of the replicas plan ({}); matched the single-node node of the "
-                "same kind over the same input",
-                wanted_kind);
-            return std::make_pair(candidate, candidate_hash);
-        }
-
-        LOG_DEBUG(
-            getLogger("optimizeTree"),
-            "Cannot find step with matching hash in single-node plan ({} candidates of kind {} over the same input)",
-            matches,
-            wanted_kind);
+        LOG_DEBUG(getLogger("optimizeTree"), "Cannot find step with matching hash in single-node plan");
         return std::make_pair(nullptr, 0);
     }
     else
