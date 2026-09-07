@@ -433,8 +433,10 @@ WhatIfCandidateResult evaluateProjection(
     {
         if (!projection->sample_block.findColumnOrSubcolumnByName(column_name) && !projection->metadata->virtuals.has(column_name))
         {
-            result.not_applicable_reason
-                = fmt::format("Projection does not contain column {} required by the query", backQuoteIfNeed(column_name));
+            result.not_applicable_reason = fmt::format(
+                "Projection does not contain column {} required by the query, so it could only filter the base table's "
+                "parts, which EXPLAIN WHATIF does not estimate yet",
+                backQuoteIfNeed(column_name));
             return result;
         }
     }
@@ -491,9 +493,8 @@ WhatIfCandidateResult evaluateProjection(
         result.empirical_status = WhatIfCandidateResult::Disabled;
     }
 
+    /// projection marks live in the projection's own granularity, so the base table's count is not one
     result.estimate_source = WhatIfCandidateResult::ApplicabilityOnly;
-    result.estimated_marks = analysis.selected_marks;
-    result.skip_ratio = 0.0;
     return result;
 }
 

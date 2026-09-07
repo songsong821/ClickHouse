@@ -24,8 +24,8 @@ struct WhatIfCandidateResult
     Status status = NotApplicable;
     String not_applicable_reason;
 
-    /// Meaningful only when status == Applicable
-    UInt64 estimated_marks = 0;
+    /// Meaningful only when status == Applicable, unset when the tier could not produce a number
+    std::optional<UInt64> estimated_marks;
     /// signed for projections, negative means more marks than the base table
     double skip_ratio = 0.0;
 

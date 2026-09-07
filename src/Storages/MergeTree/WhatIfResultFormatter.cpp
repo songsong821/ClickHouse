@@ -34,21 +34,23 @@ void WhatIfResult::format(WriteBuffer & out) const
         }
 
         writeCString("  status:       applicable\n", out);
-        writeString(fmt::format("  marks:        {}\n", idx.estimated_marks), out);
+        if (idx.estimated_marks)
+            writeString(fmt::format("  marks:        {}\n", *idx.estimated_marks), out);
         if (idx.estimated_rows)
             writeString(fmt::format("  rows:         {}\n", *idx.estimated_rows), out);
 
         /// projection bytes are measured, a projection granule is not a base granule, so never scale them
         if (idx.estimated_bytes)
             writeString(fmt::format("  est_bytes:    {}\n", ReadableSize(*idx.estimated_bytes)), out);
-        else if (idx.kind == WhatIfCandidateResult::Index && baseline_marks > 0 && baseline_est_bytes > 0)
+        else if (idx.kind == WhatIfCandidateResult::Index && idx.estimated_marks && baseline_marks > 0 && baseline_est_bytes > 0)
         {
             UInt64 hypo_bytes = static_cast<UInt64>(
-                static_cast<double>(baseline_est_bytes) * static_cast<double>(idx.estimated_marks) / static_cast<double>(baseline_marks));
+                static_cast<double>(baseline_est_bytes) * static_cast<double>(*idx.estimated_marks) / static_cast<double>(baseline_marks));
             writeString(fmt::format("  est_bytes:    {}\n", ReadableSize(hypo_bytes)), out);
         }
 
-        writeString(fmt::format("  skip_ratio:   {:.1f}%\n", idx.skip_ratio * 100.0), out);
+        if (idx.estimated_marks)
+            writeString(fmt::format("  skip_ratio:   {:.1f}%\n", idx.skip_ratio * 100.0), out);
         if (!idx.verdict.empty())
             writeString(fmt::format("  verdict:      {}\n", idx.verdict), out);
         writeCString("\n", out);

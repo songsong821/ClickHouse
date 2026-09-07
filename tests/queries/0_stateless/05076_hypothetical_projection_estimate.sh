@@ -104,11 +104,21 @@ $CLICKHOUSE_CLIENT -q "
 $CLICKHOUSE_CLIENT -q "EXPLAIN indexes = 1 SELECT count() FROM t_real WHERE b = 42 SETTINGS ${PIN}, use_primary_key = 0" \
     | grep -oE 'ReadFromMergeTree \(p_b\)' || echo "real: read from the base table"
 
-echo "--- empirical = 0 scans nothing ---"
+echo "--- empirical = 0 scans nothing, and reports no marks it does not have ---"
 $CLICKHOUSE_CLIENT -q "
     CREATE HYPOTHETICAL PROJECTION p_b ON t_est (SELECT a, b, v ORDER BY b);
     EXPLAIN WHATIF empirical = 0 SELECT count() FROM t_est WHERE b = 42 SETTINGS ${PIN};
-" | grep -E '^\s+(status|source|empirical_status):' | awk '{$1=$1; print}'
+" | sed -n '/^With/,$p' | grep -E '^\s+(status|source|empirical_status):|marks:' | awk '{$1=$1; print}'
+
+echo "--- a forced projection must not fail the statement before the candidate is seen ---"
+$CLICKHOUSE_CLIENT -q "
+    CREATE HYPOTHETICAL PROJECTION p_b ON t_est (SELECT a, b, v ORDER BY b);
+    EXPLAIN WHATIF SELECT count() FROM t_est WHERE b = 42 SETTINGS ${PIN}, force_optimize_projection = 1;
+" 2>&1 | grep -E '^\s+(status|verdict):|Code:' | awk '{$1=$1; print}'
+
+# a projection sort key has no direction, so the synthetic part is sorted the only way one can be
+echo "--- a descending projection key does not parse ---"
+$CLICKHOUSE_CLIENT -q "CREATE HYPOTHETICAL PROJECTION p_desc ON t_est (SELECT a, b, v ORDER BY b DESC);" 2>&1 | grep -m1 -oE 'SYNTAX_ERROR'
 
 echo "--- the scan honours max_rows_to_read ---"
 $CLICKHOUSE_CLIENT -q "
