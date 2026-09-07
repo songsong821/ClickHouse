@@ -152,6 +152,25 @@ static bool subtreeHasUnshippableRead(const QueryPlan::Node * node)
     return false;
 }
 
+/// The broadcast side of a shipped join is executed by every replica as part of the fragment, so a
+/// security barrier in it would cross to the replicas even though `collectReadsToDistribute` refuses
+/// to distribute anything below one. The fragment is deserialized and executed there under the
+/// connection's identity, and the definer is neither the connecting nor the initial user - the very
+/// reason the barrier keeps a `SQL SECURITY DEFINER` / `NONE` view's inner query on the initiator.
+/// Fail closed: not lifting the split keeps the join (and the view read inside it) local, while the
+/// coordinated read below the join is still distributed.
+static bool subtreeHasSecurityBarrier(const QueryPlan::Node * node)
+{
+    if (!node)
+        return false;
+    if (node->step->isSecurityBarrier())
+        return true;
+    for (const auto * child : node->children)
+        if (subtreeHasSecurityBarrier(child))
+            return true;
+    return false;
+}
+
 /// A fragment is cloned and then serialized, so every step in it must be serializable. Checking that
 /// generically (instead of enumerating step types) keeps new non-serializable steps out automatically:
 /// a prepared-lookup join (JoinStepLogicalLookup) and correlated-subquery decorrelation (which buffers a
@@ -254,6 +273,11 @@ public:
         /// the marker was planted, or by a nested lift.
         const auto broadcast_side = coordinated_side == JoinSide::Left ? JoinSide::Right : JoinSide::Left;
         if (subtreeHasUnshippableRead(node->children[static_cast<size_t>(broadcast_side)]))
+            return;
+
+        /// See `subtreeHasSecurityBarrier`: a protected view on the broadcast side would be shipped
+        /// and executed on every replica once the split is lifted above the join.
+        if (subtreeHasSecurityBarrier(node->children[static_cast<size_t>(broadcast_side)]))
             return;
 
         auto & join_node = nodes.emplace_back();
