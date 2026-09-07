@@ -19,7 +19,8 @@ select splitByRegexp(']', 'a]b]c');
 select splitByRegexp('{', 'a{b{c');
 select splitByRegexp('}', 'a}b}c');
 select splitByRegexp('|', 'a|b|c');
-select splitByRegexp('\\', 'a\\b\\c');
+-- A lone backslash is not a valid regexp (`trailing \`), like the patterns rejected above.
+select splitByRegexp('\\', 'a\\b\\c'); -- { serverError CANNOT_COMPILE_REGEXP }
 
 SELECT 'AST Fuzzer failure';
 SELECT splitByRegexp(materialize(1), NULL, 3) -- { serverError ILLEGAL_COLUMN }
