@@ -7,36 +7,36 @@
       "versionId": "6b659816bd63442be260ef7cbeb6670c3540f9a97a0f4d909f5ea5d10189d7f2",
       "translations": {
         "es": {
-          "updatedAt": "2026-09-07T08:29:52.684Z",
+          "updatedAt": "2026-09-07T08:43:08.233Z",
           "fileName": "docs.json"
         },
         "ja": {
-          "updatedAt": "2026-09-07T08:29:52.936Z",
+          "updatedAt": "2026-09-07T08:43:08.418Z",
           "fileName": "docs.json"
         },
         "fr": {
-          "updatedAt": "2026-09-07T08:29:54.156Z",
+          "updatedAt": "2026-09-07T08:43:09.701Z",
           "fileName": "docs.json",
           "postProcessHash": "2cd43b34a2c6166b3bd37f7e8dc4eff2f34bfe31efb97a24235168a15aa803ba"
         },
         "ru": {
-          "updatedAt": "2026-09-07T08:29:53.548Z",
+          "updatedAt": "2026-09-07T08:43:09.055Z",
           "fileName": "docs.json"
         },
         "pt-BR": {
-          "updatedAt": "2026-09-07T08:29:53.353Z",
+          "updatedAt": "2026-09-07T08:43:08.861Z",
           "fileName": "docs.json"
         },
         "zh": {
-          "updatedAt": "2026-09-07T08:29:53.753Z",
+          "updatedAt": "2026-09-07T08:43:09.278Z",
           "fileName": "docs.json"
         },
         "ko": {
-          "updatedAt": "2026-09-07T08:29:53.150Z",
+          "updatedAt": "2026-09-07T08:43:08.647Z",
           "fileName": "docs.json"
         },
         "ar": {
-          "updatedAt": "2026-09-07T08:29:53.948Z",
+          "updatedAt": "2026-09-07T08:43:09.498Z",
           "fileName": "docs.json"
         }
       },
@@ -17887,47 +17887,47 @@
     },
     {
       "fileId": "f088a79135bbdf724a772a6fad0fdd341568c6b582fee5962234a61e25ac8130",
-      "versionId": "01090646906f0a1f54843e5efaf0c70135803dc614c2c2b3587fbe3cfea502e0",
+      "versionId": "78b6bb859dea5a69e83f914b86a1ab0e58e3f069caa8ed33d7cc4261f8eadf34",
       "translations": {
-        "fr": {
-          "updatedAt": "2026-09-06T11:15:02.421Z",
-          "fileName": "fr/reference/settings/beta-and-experimental-features.mdx",
-          "postProcessHash": "331b50bdc379cd0a9a7ea95abab2d6b13321b6137e1757a26b026bbb03d6ad90"
-        },
-        "ar": {
-          "updatedAt": "2026-09-06T11:15:02.422Z",
-          "fileName": "ar/reference/settings/beta-and-experimental-features.mdx",
-          "postProcessHash": "1c59c8e5f11ce5cc53f3fbfcb28128474e025ff7b7c8fb70aab1a15d50447e62"
-        },
-        "pt-BR": {
-          "updatedAt": "2026-09-06T11:15:02.425Z",
-          "fileName": "pt-BR/reference/settings/beta-and-experimental-features.mdx",
-          "postProcessHash": "598ebff025255976bab6ec6028a1f6153a2d38ac3264a6ec4e25d83c8a1247b8"
-        },
-        "ru": {
-          "updatedAt": "2026-09-06T11:15:02.436Z",
-          "fileName": "ru/reference/settings/beta-and-experimental-features.mdx",
-          "postProcessHash": "8a9a83a5edfb3714a0327c9a28449fdea5875ea5b32f0c2805a0369677945129"
-        },
-        "zh": {
-          "updatedAt": "2026-09-06T11:15:02.466Z",
-          "fileName": "zh/reference/settings/beta-and-experimental-features.mdx",
-          "postProcessHash": "c52c2749813a0c8aae30643acdb35cc836add86f6181d2db2b0493b9e3ea552d"
+        "ko": {
+          "updatedAt": "2026-09-07T08:43:15.368Z",
+          "fileName": "ko/reference/settings/beta-and-experimental-features.mdx",
+          "postProcessHash": "40104aad8ac90defde0a46d90dc11b6e41e3181100ea4f24977bf138467f840d"
         },
         "ja": {
-          "updatedAt": "2026-09-06T11:15:02.521Z",
+          "updatedAt": "2026-09-07T08:43:15.369Z",
           "fileName": "ja/reference/settings/beta-and-experimental-features.mdx",
-          "postProcessHash": "e983a8a29633e807fb2d5e649d2ba62ba6a723dd255c828bc75a303051b9dfe2"
+          "postProcessHash": "d0b1e18f9ab9a3985debf7a01da99e8cf3bb7761294a831a685ceae290999237"
+        },
+        "ar": {
+          "updatedAt": "2026-09-07T08:43:15.370Z",
+          "fileName": "ar/reference/settings/beta-and-experimental-features.mdx",
+          "postProcessHash": "d3431c72023cf32a93583153820f3f89a3b74501870c4465376f498bf4ce5e35"
+        },
+        "pt-BR": {
+          "updatedAt": "2026-09-07T08:43:15.371Z",
+          "fileName": "pt-BR/reference/settings/beta-and-experimental-features.mdx",
+          "postProcessHash": "c0744ca4d8c1d0a2bafd4746fe85a0733e8e1c4762c61541c2767076d58bfc55"
+        },
+        "ru": {
+          "updatedAt": "2026-09-07T08:43:15.372Z",
+          "fileName": "ru/reference/settings/beta-and-experimental-features.mdx",
+          "postProcessHash": "a283a2010332bcfc778b11765602d38baf2f1c29b34a15ce7dc731f081a7859a"
         },
         "es": {
-          "updatedAt": "2026-09-06T11:15:02.523Z",
+          "updatedAt": "2026-09-07T08:43:15.373Z",
           "fileName": "es/reference/settings/beta-and-experimental-features.mdx",
-          "postProcessHash": "5d7035babfeffff1235e6628788d4d1794093a86b3ebacd48aa6184e3e4899e1"
+          "postProcessHash": "be2e6391b99763f10bd07ec330afc3e05b7062a502e800141bfc05b2427806a4"
         },
-        "ko": {
-          "updatedAt": "2026-09-06T11:15:02.525Z",
-          "fileName": "ko/reference/settings/beta-and-experimental-features.mdx",
-          "postProcessHash": "e184814d58b288e5836623c03f6d081d676576cd00236abea0dde7484aaa2e1c"
+        "fr": {
+          "updatedAt": "2026-09-07T08:43:15.374Z",
+          "fileName": "fr/reference/settings/beta-and-experimental-features.mdx",
+          "postProcessHash": "3eebdc86399dbd30f3f3bae87908e1e4c0efea005960835851112dc6e580bd28"
+        },
+        "zh": {
+          "updatedAt": "2026-09-07T08:43:15.375Z",
+          "fileName": "zh/reference/settings/beta-and-experimental-features.mdx",
+          "postProcessHash": "1168ca2eda106194b2ff85a46628f0aec4832d0a05a6d98df0dbf27a592532ee"
         }
       },
       "fileName": "reference/settings/beta-and-experimental-features.mdx"

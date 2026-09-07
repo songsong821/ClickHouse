@@ -8,11 +8,11 @@ doc_type: 'reference'
 
 Como ClickHouse es de código abierto, recibe muchas contribuciones no solo de empleados de ClickHouse, sino también de la comunidad. Estas contribuciones suelen desarrollarse a ritmos distintos; algunas funcionalidades pueden requerir una larga fase de prototipado o más tiempo para recibir suficientes comentarios de la comunidad e iterar antes de considerarse de disponibilidad general (GA).
 
-Dado que no siempre está claro cuándo una funcionalidad pasa a considerarse de disponibilidad general, las distinguimos en dos categorías: **Beta** y **Experimental**.
+Dado que no siempre está claro cuándo una funcionalidad pasa a considerarse de disponibilidad general, las distinguimos en tres categorías: **Beta**, **Experimental** y **Vista previa privada**.
 
-Las **funciones beta** cuentan con soporte oficial del equipo de ClickHouse. Las **características experimentales** son prototipos tempranos impulsados por el equipo de ClickHouse o por la comunidad y no cuentan con soporte oficial.
+Las **funciones beta** cuentan con soporte oficial del equipo de ClickHouse. Las **características experimentales** son prototipos tempranos impulsados por el equipo de ClickHouse o por la comunidad y no cuentan con soporte oficial. Las funcionalidades en **vista previa privada** avanzan por un camino claro hacia la disponibilidad general, pero aún tienen una aplicabilidad limitada y no se recomiendan para uso en producción.
 
-Las secciones siguientes describen explícitamente las características de las **funciones beta** y **características experimentales**:
+Las secciones siguientes describen explícitamente las características de las funcionalidades **Beta**, **Experimental** y en **vista previa privada**:
 
 ## Funciones Beta {#beta-features}
 
@@ -38,6 +38,14 @@ Nota: asegúrate de usar una versión actual de la configuración de [compatibil
 * No pueden habilitarse en ClickHouse Cloud
 
 Tenga en cuenta: no se permite habilitar características experimentales adicionales en ClickHouse Cloud aparte de las que se indican arriba como Beta.
+
+## Características en vista previa privada {#private-preview-features}
+
+* Con una hoja de ruta clara hacia la disponibilidad general (GA)
+* Su aplicabilidad todavía es limitada
+* No se recomiendan para uso en producción
+* Su funcionalidad puede cambiar en el futuro
+* Deben habilitarse explícitamente
 
 {/* El contenido interno de las etiquetas siguientes se sustituye en tiempo de compilación por una tabla generada a partir del código fuente
      Por favor, no modifiques ni elimines las etiquetas

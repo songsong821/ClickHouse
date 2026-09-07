@@ -8,11 +8,11 @@ doc_type: 'reference'
 
 ClickHouse étant open-source, il bénéficie de nombreuses contributions, provenant non seulement des employés de ClickHouse, mais aussi de la communauté. Ces contributions n’avancent pas toujours au même rythme ; certaines fonctionnalités peuvent nécessiter une longue phase de prototypage ou davantage de temps pour recueillir suffisamment de retours de la communauté et être itérées avant d’être considérées comme généralement disponibles (GA).
 
-Comme il peut être difficile de déterminer à quel moment une fonctionnalité devient généralement disponible, nous distinguons deux catégories : **Bêta** et **Expérimentales**.
+Comme il peut être difficile de déterminer à quel moment une fonctionnalité devient généralement disponible, nous distinguons trois catégories : **Bêta**, **Expérimentales** et **Private preview**.
 
-Les fonctionnalités **Bêta** sont officiellement prises en charge par l’équipe ClickHouse. Les fonctionnalités **Expérimentales** sont des prototypes précoces, portés soit par l’équipe ClickHouse, soit par la communauté, et ne sont pas officiellement prises en charge.
+Les fonctionnalités **Bêta** sont officiellement prises en charge par l’équipe ClickHouse. Les fonctionnalités **Expérimentales** sont des prototypes précoces, portés soit par l’équipe ClickHouse, soit par la communauté, et ne sont pas officiellement prises en charge. Les fonctionnalités en **Private preview** suivent une trajectoire claire vers la disponibilité générale, mais leur applicabilité reste limitée et elles ne sont pas recommandées pour une utilisation en production.
 
-Les sections ci-dessous décrivent explicitement les propriétés des fonctionnalités **Bêta** et **Expérimentales** :
+Les sections ci-dessous décrivent explicitement les propriétés des fonctionnalités **Bêta**, **Expérimentales** et en **Private preview** :
 
 ## Fonctionnalités bêta {#beta-features}
 
@@ -33,11 +33,19 @@ Remarque : assurez-vous d’utiliser une version récente du paramètre ClickHo
 * Peuvent introduire des modifications incompatibles avec les versions précédentes
 * Le fonctionnement de la fonctionnalité peut évoluer
 * Doivent être activées explicitement
-* L’équipe ClickHouse **ne prend pas en charge** les fonctionnalités expérimentales
+* L&#39;équipe ClickHouse **ne prend pas en charge** les fonctionnalités expérimentales
 * Peuvent manquer de fonctionnalités importantes et de documentation
 * Ne peuvent pas être activées dans le cloud
 
-Veuillez noter : aucune fonctionnalité expérimentale supplémentaire ne peut être activée dans ClickHouse Cloud en dehors de celles répertoriées ci-dessus comme Beta.
+Veuillez noter : aucune fonctionnalité expérimentale supplémentaire ne peut être activée dans ClickHouse Cloud en dehors de celles répertoriées ci-dessus comme bêta.
+
+## Fonctionnalités en private preview {#private-preview-features}
+
+* En bonne voie vers la disponibilité générale (GA)
+* L’applicabilité est encore limitée
+* Non recommandées pour un usage en production
+* Le fonctionnement peut évoluer à l’avenir
+* Doivent être activées explicitement
 
 {/* Le contenu interne des balises ci-dessous est remplacé à la compilation par un tableau généré depuis le code source
      Veuillez ne pas modifier ni supprimer les balises

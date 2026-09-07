@@ -8,11 +8,11 @@ doc_type: 'reference'
 
 Como o ClickHouse é open-source, ele recebe muitas contribuições não apenas de funcionários da ClickHouse, mas também da comunidade. Essas contribuições geralmente são desenvolvidas em ritmos diferentes; determinados recursos podem exigir uma longa fase de prototipagem ou mais tempo para receber feedback suficiente da comunidade e passar por iterações antes de serem considerados geralmente disponíveis (GA).
 
-Como há incerteza sobre quando os recursos são classificados como geralmente disponíveis, nós os dividimos em duas categorias: **Beta** e **Experimental**.
+Como há incerteza sobre quando os recursos são classificados como geralmente disponíveis, nós os dividimos em três categorias: **Beta**, **Experimental** e **Private preview**.
 
-Os recursos **Beta** têm suporte oficial da equipe do ClickHouse. Os recursos **Experimental** são protótipos iniciais desenvolvidos pela equipe do ClickHouse ou pela comunidade e não têm suporte oficial.
+Os recursos **Beta** têm suporte oficial da equipe do ClickHouse. Os recursos **Experimental** são protótipos iniciais desenvolvidos pela equipe do ClickHouse ou pela comunidade e não têm suporte oficial. Os recursos em **Private preview** estão em um caminho claro rumo à disponibilidade geral, mas ainda têm aplicabilidade limitada e não são recomendados para uso em produção.
 
-As seções abaixo descrevem explicitamente as propriedades dos recursos **Beta** e **Experimental**:
+As seções abaixo descrevem explicitamente as propriedades dos recursos **Beta**, **Experimental** e **Private preview**:
 
 ## Recursos beta {#beta-features}
 
@@ -38,6 +38,14 @@ Observação: certifique-se de usar uma versão atual da configuração [compati
 * Não podem ser habilitados na nuvem
 
 Observe: não é permitido habilitar recursos experimentais adicionais no ClickHouse Cloud além daqueles listados acima como Beta.
+
+## Recursos em private preview {#private-preview-features}
+
+* Estão em um caminho claro para disponibilidade geral (GA)
+* A aplicabilidade ainda é limitada
+* Não recomendados para uso em produção
+* A funcionalidade pode mudar no futuro
+* Precisam ser habilitados explicitamente
 
 {/* O conteúdo interno das tags abaixo é substituído durante a compilação por uma tabela gerada a partir do código-fonte
      Não modifique nem remova as tags
