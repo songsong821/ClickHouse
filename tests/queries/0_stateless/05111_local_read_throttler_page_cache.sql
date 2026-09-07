@@ -22,10 +22,10 @@ SETTINGS local_filesystem_read_method = 'pread_threadpool', min_bytes_to_use_dir
 
 SYSTEM FLUSH LOGS query_log;
 
--- The throttler must have accounted no more than what was actually read from the device.
+-- The throttler must have accounted exactly the bytes that were read from the device.
 SELECT
     ProfileEvents['ThreadPoolReaderPageCacheHitBytes'] > 0 AS served_from_page_cache,
-    ProfileEvents['QueryLocalReadThrottlerBytes'] <= ProfileEvents['ThreadPoolReaderPageCacheMissBytes'] AS throttled_only_device_reads
+    ProfileEvents['QueryLocalReadThrottlerBytes'] = ProfileEvents['ThreadPoolReaderPageCacheMissBytes'] AS throttled_exactly_the_device_reads
 FROM system.query_log
 WHERE current_database = currentDatabase() AND type = 'QueryFinish'
     AND log_comment = '05111_local_read_throttler_page_cache';
