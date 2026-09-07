@@ -1158,4 +1158,28 @@ bool settingCanAffectQueryRows(std::string_view setting_name)
     return true;
 }
 
+void updateHashWithRowAffectingSettings(SipHash & hash, const Settings & settings)
+{
+    /// `changedToFlatMap` returns the changed settings in declaration order, which shifts whenever a
+    /// setting is added in the middle of `Settings.cpp`. A refresh watermark outlives an upgrade, so
+    /// the fold is sorted by name here: the hash then depends only on which settings are set to what,
+    /// not on the order they were applied in nor on the version that computed it.
+    const FlatStringMap changed = settings.changedToFlatMap();
+    std::vector<std::pair<std::string_view, std::string_view>> row_affecting;
+    row_affecting.reserve(changed.size());
+    changed.forEach([&](std::string_view name, std::string_view value)
+    {
+        if (settingCanAffectQueryRows(name))
+            row_affecting.emplace_back(name, value);
+    });
+    /// The views point into `changed.data`, which outlives this loop.
+    std::sort(row_affecting.begin(), row_affecting.end());
+
+    for (const auto & [name, value] : row_affecting)
+    {
+        hash.update(name);
+        hash.update(value);
+    }
+}
+
 }

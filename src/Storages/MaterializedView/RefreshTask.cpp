@@ -176,17 +176,7 @@ UInt128 computeViewDefinitionHash(const StorageInMemoryMetadata & metadata, cons
     /// Only the settings that can affect the produced rows: per-attempt diagnostics such as
     /// `log_comment` and a definer profile's operational settings must not move the hash, or a
     /// watermark written by one attempt would be ignored by the next one.
-    /// `changedToMap` is ordered by name, so the hash does not depend on the order in which the
-    /// settings were applied. Settings left at their default value are equal on every replica and
-    /// attempt, so leaving them out changes nothing: a profile update that resets a setting back to
-    /// its default removes it from the map and still moves the hash.
-    for (const auto & [name, value] : refresh_context->getSettingsRef().changedToMap())
-    {
-        if (!settingCanAffectQueryRows(name))
-            continue;
-        hash.update(name);
-        hash.update(value);
-    }
+    updateHashWithRowAffectingSettings(hash, refresh_context->getSettingsRef());
     return hash.get128();
 }
 

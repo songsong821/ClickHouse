@@ -23,6 +23,7 @@ namespace DB
 
 class ClientInfo;
 class ASTSQLSecurity;
+struct Settings;
 
 /// Common metadata for all storages. Contains all possible parts of CREATE
 /// query from all storages, but only some subset used.
@@ -392,5 +393,11 @@ void updateHashWithEffectiveSQLSecurity(SipHash & hash, const StorageInMemoryMet
 /// consistency user more often than needed, while dropping a result-affecting one would make a
 /// stale hash look current.
 bool settingCanAffectQueryRows(std::string_view setting_name);
+
+/// Fold the settings of `settings` that pass `settingCanAffectQueryRows` into `hash`, in a
+/// deterministic order. Settings left at their default value are equal on every replica and every
+/// refresh attempt, so only the changed ones take part: a profile update that resets a setting back
+/// to its default drops it from the fold and still moves the hash.
+void updateHashWithRowAffectingSettings(SipHash & hash, const Settings & settings);
 
 }

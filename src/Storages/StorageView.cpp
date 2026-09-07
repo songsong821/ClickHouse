@@ -696,16 +696,8 @@ std::optional<UInt128> StorageView::getModificationHash(const StorageSnapshotPtr
         /// The effective reader's settings can change the rows this view returns (for example,
         /// a definer's read limits), so a settings-profile update must invalidate consistency users.
         /// Purely operational settings are left out: a definer's profile carries them without
-        /// changing a single row. `changedToMap` is ordered by name, so the hash does not depend on
-        /// the order in which the settings were applied, and settings left at their default value
-        /// are equal everywhere.
-        for (const auto & [name, value] : effective_context->getSettingsRef().changedToMap())
-        {
-            if (!settingCanAffectQueryRows(name))
-                continue;
-            hash.update(name);
-            hash.update(value);
-        }
+        /// changing a single row.
+        updateHashWithRowAffectingSettings(hash, effective_context->getSettingsRef());
         IASTHash view_query_hash = inner_query->getTreeHash(/*ignore_aliases*/ false);
         hash.update(view_query_hash.low64);
         hash.update(view_query_hash.high64);
