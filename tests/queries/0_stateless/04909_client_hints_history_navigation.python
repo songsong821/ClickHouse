@@ -14,8 +14,11 @@ TIMEOUT_SECONDS = 30
 # than the inter-keystroke drain on slow (sanitizer) builds.
 FINAL_WAIT_SECONDS = 20
 
-# How long to wait for the client to print the next `:) ` prompt after a committed query.
-PROMPT_WAIT_SECONDS = 30
+# How long to wait for the client to print the next `:) ` prompt after a committed query. This is
+# the time a query of this test may take, and it is generous because the query does not have to be
+# fast for the test to mean anything: in an MSan build a trivial `SELECT` that fails to resolve an
+# identifier has been seen taking 36 seconds.
+PROMPT_WAIT_SECONDS = 120
 
 # Idle window after every keystroke, long enough for `replxx` to repaint the line.
 DRAIN_IDLE_SECONDS = 0.4
@@ -134,6 +137,16 @@ def run_case(program, argv, name, keystrokes, check, state=None):
                 )
                 output += extra
                 since_last_keystroke += extra
+                # `read_until` returns on its deadline as well as on a match, and going on from a
+                # deadline would write the next keys into a terminal that is still running the
+                # previous query: the driver echoes them instead of `replxx` interpreting them, so
+                # a bracketed paste ends up in the output verbatim and the case fails on its
+                # content, saying nothing about the prompt that never came. Stop here instead.
+                if ":)" not in since_last_keystroke:
+                    print(f"{name}: FAIL")
+                    report_failure(name, shell_pid, output, debug_log_fd)
+                    state.value = 1
+                    return
                 continue
             os.write(master, keys)
             since_last_keystroke = drain(master, debug_log_fd, DRAIN_IDLE_SECONDS)
