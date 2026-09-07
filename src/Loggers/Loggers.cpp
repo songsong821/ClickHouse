@@ -52,24 +52,27 @@ namespace ErrorCodes
 }
 
 
+/// Both take and return `fs::path` rather than a string: the configured log path is converted
+/// once by the caller with `pathFromString`, and it stays a path through templating, directory
+/// creation and canonicalization, so no step re-enters `std::filesystem` through the narrow
+/// constructor - which on Windows would decode the UTF-8 path through the active code page.
 // TODO: move to libcommon
-static std::string createDirectory(const std::string & file)
+static void createDirectory(const fs::path & file)
 {
-    auto path = fs::path(file).parent_path();
+    const auto path = file.parent_path();
     if (path.empty())
-        return "";
+        return;
     fs::create_directories(path);
-    return pathToGenericString(path);
 }
 
-static std::string renderFileNameTemplate(time_t now, const std::string & file_path)
+static fs::path renderFileNameTemplate(time_t now, const fs::path & file_path)
 {
-    fs::path path{file_path};
+    fs::path path = file_path;
     std::tm buf{};
     localtime_r(&now, &buf); /// NOLINT(cert-err33-c)
     std::ostringstream ss; // STYLE_CHECK_ALLOW_STD_STRING_STREAM
     ss << std::put_time(&buf, pathToGenericString(path.filename()).c_str());
-    return pathToGenericString(path.replace_filename(ss.str()));
+    return path.replace_filename(pathFromString(ss.str()));
 }
 
 Poco::AutoPtr<OwnPatternFormatter> getFormatForChannel(Poco::Util::AbstractConfiguration & config, const std::string & channel, bool color)
@@ -136,14 +139,14 @@ void Loggers::buildLoggers(Poco::Util::AbstractConfiguration & config, Poco::Log
     const auto log_path_prop = config.getString("logger.log", "");
     if (!log_path_prop.empty())
     {
-        const auto log_path = renderFileNameTemplate(now, log_path_prop);
+        const auto log_path = renderFileNameTemplate(now, pathFromString(log_path_prop));
         createDirectory(log_path);
 
         std::string ext;
         if (config.getRawString("logger.stream_compress", "false") == "true")
             ext = ".lz4";
 
-        std::cerr << "Logging " << log_level_string << " to " << log_path << ext << std::endl;
+        std::cerr << "Logging " << log_level_string << " to " << pathToGenericString(log_path) << ext << std::endl;
 
         auto log_level = Poco::Logger::parseLevel(log_level_string);
         max_log_level = std::max(log_level, max_log_level);
@@ -169,7 +172,7 @@ void Loggers::buildLoggers(Poco::Util::AbstractConfiguration & config, Poco::Log
     const auto errorlog_path_prop = config.getString("logger.errorlog", "");
     if (!errorlog_path_prop.empty())
     {
-        const auto errorlog_path = renderFileNameTemplate(now, errorlog_path_prop);
+        const auto errorlog_path = renderFileNameTemplate(now, pathFromString(errorlog_path_prop));
         createDirectory(errorlog_path);
 
         // NOTE: we don't use notice & critical in the code, so in practice error log collects fatal & error & warning.
@@ -181,7 +184,7 @@ void Loggers::buildLoggers(Poco::Util::AbstractConfiguration & config, Poco::Log
         if (config.getRawString("logger.stream_compress", "false") == "true")
             ext = ".lz4";
 
-        std::cerr << "Logging errors to " << errorlog_path << ext << std::endl;
+        std::cerr << "Logging errors to " << pathToGenericString(errorlog_path) << ext << std::endl;
 
         error_log_file = new Poco::FileChannel;
         error_log_file->setProperty(Poco::FileChannel::PROP_PATH, pathToGenericString(fs::weakly_canonical(errorlog_path)));

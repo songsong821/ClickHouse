@@ -12129,10 +12129,12 @@ PartitionCommandsResultInfo MergeTreeData::freezePartitionsByMatcher(
 {
     auto settings = getSettings();
 
-    String clickhouse_path = pathToGenericString(fs::canonical(local_context->getPath()));
-    String default_shadow_path = pathToGenericString(fs::path(clickhouse_path) / "shadow/");
+    /// `getPath` returns a UTF-8 string, so it has to enter `std::filesystem` through
+    /// `pathFromString`; the derived paths stay `fs::path` until `Increment` asks for a string.
+    const fs::path clickhouse_path = fs::canonical(pathFromString(local_context->getPath()));
+    const fs::path default_shadow_path = clickhouse_path / "shadow/";
     fs::create_directories(default_shadow_path);
-    auto increment = Increment(pathToGenericString(fs::path(default_shadow_path) / "increment.txt")).get(true);
+    auto increment = Increment(pathToGenericString(default_shadow_path / "increment.txt")).get(true);
 
     const String shadow_path = "shadow/";
 

@@ -31,10 +31,11 @@ Poco::URI getUriAfterRedirect(const Poco::URI & prev_uri, Poco::Net::HTTPRespons
         return location_uri;
     /// Location header contains relative path. So we need to concatenate it
     /// with path from the original URI and normalize it.
-    auto path = std::filesystem::weakly_canonical(std::filesystem::path(prev_uri.getPath()) / location);
+    /// A URL path is UTF-8 and `/`-separated by definition, so it has to enter and leave
+    /// `std::filesystem` explicitly: the narrow `fs::path` constructor would decode both operands
+    /// through the active code page on Windows, and `operator/` would put `\` into the result.
+    auto path = std::filesystem::weakly_canonical(pathFromString(prev_uri.getPath()) / pathFromString(location));
     location_uri = prev_uri;
-    /// A URL path is `/`-separated by definition, so read the normalized path back generically -
-    /// on Windows `operator/` would otherwise have put `\` into it.
     location_uri.setPath(pathToGenericString(path));
     return location_uri;
 }
