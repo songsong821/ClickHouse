@@ -4,6 +4,8 @@
 -- matching and once for the output column. A non-deterministic expression then draws independently
 -- in the two places, and the returned rows violate the query's own `JOIN ON` condition.
 
+SET query_plan_optimize_join_order_limit = 64;
+SET query_plan_optimize_join_order_randomize = 0;
 SET enable_analyzer = 1;
 
 DROP TABLE IF EXISTS t_merge_expr_1;
