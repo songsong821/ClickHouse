@@ -104,7 +104,7 @@ probe "array_concat_agg" "array_concat_agg([v]), array_concat_agg([v + 1]), arra
 probe "medianTDigest" "medianTDigest(v), medianTDigest(v + 1), medianTDigest(v * 2)"
 probe "anova" "anova(v, (v % 3)::UInt8), anova(v + 1, (v % 3)::UInt8), anova(v * 2, (v % 3)::UInt8)"
 
-# Positive control: the same query shape over exact, merge-order-independent aggregates IS
+# Positive controls: the same query shape over exact, merge-order-independent aggregates IS
 # checked. This proves the counter is live under these settings, so every probe above is
 # the gate rejecting one unsafe spelling and not the oracle ignoring this query shape
 # altogether. Retried until the counter moves, because a single mutation can occasionally
@@ -112,23 +112,41 @@ probe "anova" "anova(v, (v % 3)::UInt8), anova(v + 1, (v % 3)::UInt8), anova(v *
 # well below the point where the loop alone could exhaust the 180s per-test limit: it
 # normally succeeds on the first round, and if it genuinely never fires it is far better to
 # report that below than to be killed as a timeout.
-before=$(get_counter)
-after=$before
-for _ in $(seq 1 40)
-do
-    run_fuzzed "SELECT count(), min(v), max(v) FROM oracle_approx_top WHERE v > 5;"
-    after=$(get_counter)
+positive_control()
+{
+    local label="$1"
+    local aggregates="$2"
+    local before
+    local after
+
+    before=$(get_counter)
+    after=$before
+    for _ in $(seq 1 40)
+    do
+        run_fuzzed "SELECT $aggregates FROM oracle_approx_top WHERE v > 5;"
+        after=$(get_counter)
+        if [[ "$after" -gt "$before" ]]
+        then
+            break
+        fi
+    done
+
     if [[ "$after" -gt "$before" ]]
     then
-        break
+        echo "$label checked"
+    else
+        echo "$label never checked: counter stayed at $after"
     fi
-done
+}
 
-if [[ "$after" -gt "$before" ]]
-then
-    echo "exact aggregates checked"
-else
-    echo "exact aggregates never checked: counter stayed at $after"
-fi
+positive_control "exact aggregates" "count(), min(v), max(v)"
+
+# The second control is about the alias path specifically: resolving through the factory must
+# reject only the aliases whose canonical name is unsafe, not every alias. `BIT_AND` / `BIT_OR`
+# / `BIT_XOR` are aliases of `groupBitAnd` / `groupBitOr` / `groupBitXor`, which are
+# associative and commutative over integers, are therefore absent from the backstop set, and
+# must stay checkable through their alias spelling too. Without this control every alias probe
+# above would be satisfied just as well by a checker that rejected all aliases outright.
+positive_control "safe aliases" "BIT_AND(v), BIT_OR(v), BIT_XOR(v)"
 
 $CLICKHOUSE_CLIENT --query "DROP TABLE oracle_approx_top"

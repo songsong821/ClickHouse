@@ -7,3 +7,4 @@ array_concat_agg not checked
 medianTDigest not checked
 anova not checked
 exact aggregates checked
+safe aliases checked
