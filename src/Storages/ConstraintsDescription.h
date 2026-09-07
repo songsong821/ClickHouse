@@ -66,6 +66,11 @@ public:
     /// the constraint actions are compiled, see `getExpressions`.
     static void validateNoSubqueries(const ASTs & constraints_, const ContextPtr & context);
 
+    /// Rejects a `CHECK` constraint whose expression changes the number of rows. Only for fresh DDL:
+    /// rejecting while loading stored metadata would fail the whole load rather than the one table.
+    static void assertConstraintPreservesRowCount(const ASTPtr & constraint);
+    void assertPreserveRowCount() const;
+
     struct AtomId
     {
         size_t group_id;
