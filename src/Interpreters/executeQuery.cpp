@@ -54,10 +54,9 @@
 #include <Parsers/queryNormalization.h>
 #include <Common/quoteString.h>
 #include <Parsers/toOneLineQuery.h>
-#include <Parsers/Kusto/ParserKQLStatement.h>
+#include <Parsers/Kusto/parseKQLQuery.h>
 #include <Parsers/PRQL/ParserPRQLQuery.h>
 #include <Parsers/Polyglot/ParserPolyglotQuery.h>
-#include <Parsers/Kusto/parseKQLQuery.h>
 #include <Parsers/Prometheus/ParserPrometheusQuery.h>
 
 #include <Formats/FormatFactory.h>
@@ -168,8 +167,8 @@ namespace Setting
 {
     extern const SettingsBool allow_experimental_analyzer;
     extern const SettingsBool enable_json_ast_dialect;
-    extern const SettingsBool allow_experimental_kusto_dialect;
     extern const SettingsBool allow_experimental_polyglot_dialect;
+    extern const SettingsBool allow_experimental_kusto_dialect;
     extern const SettingsBool allow_experimental_prql_dialect;
     extern const SettingsBool allow_settings_after_format_in_insert;
     extern const SettingsBool ast_fuzzer_any_query;
@@ -593,16 +592,15 @@ QueryLogElement logQueryStart(
         else if (interpreter)
             interpreter->extendQueryLogElem(elem, query_ast, context, query_database, query_table);
 
-        if (settings[Setting::log_query_settings])
-            elem.query_settings = context->getSettingsRef().changedToMap();
-
         elem.log_comment = settings[Setting::log_comment];
         if (elem.log_comment.size() > settings[Setting::max_query_size])
             elem.log_comment.resize(settings[Setting::max_query_size]);
 
         if (elem.type >= settings[Setting::log_queries_min_type] && !settings[Setting::log_queries_min_query_duration_ms].totalMilliseconds())
         {
-            if (!settings[Setting::log_query_settings] && settings[Setting::log_query_settings].changed)
+            if (settings[Setting::log_query_settings])
+                elem.query_settings = settings.changedToFlatMap();
+            else if (settings[Setting::log_query_settings].changed)
                 LOG_TRACE(
                     getLogger("executeQuery"),
                     "Not adding query settings to 'system.query_log' since setting `log_query_settings` is false"
@@ -811,6 +809,11 @@ static void logQueryFinishImpl(
         if (log_queries && elem.type >= settings[Setting::log_queries_min_type]
             && static_cast<Int64>(elem.query_duration_ms) >= settings[Setting::log_queries_min_query_duration_ms].totalMilliseconds())
         {
+            /// Unset unless the QUERY_START row was logged and built them already. Settings cannot change
+            /// while the query runs, so building them here gives the same values.
+            if (settings[Setting::log_query_settings] && !elem.query_settings)
+                elem.query_settings = settings.changedToFlatMap();
+
             if (auto query_log = context->getQueryLog())
                 query_log->add([&](QueryLogElement & e) { e = elem; });
         }
@@ -948,6 +951,9 @@ void logQueryException(
     if (log_queries && elem.type >= settings[Setting::log_queries_min_type]
         && static_cast<Int64>(elem.query_duration_ms) >= settings[Setting::log_queries_min_query_duration_ms].totalMilliseconds())
     {
+        if (settings[Setting::log_query_settings] && !elem.query_settings)
+            elem.query_settings = settings.changedToFlatMap();
+
         if (auto query_log = context->getQueryLog())
             query_log->add([&](QueryLogElement & e) { e = elem; });
     }
@@ -1026,7 +1032,7 @@ void logExceptionBeforeStart(
         elem.tid = txn->tid;
 
     if (settings[Setting::log_query_settings])
-        elem.query_settings = settings.changedToMap();
+        elem.query_settings = settings.changedToFlatMap();
 
     if (settings[Setting::calculate_text_stack_trace])
         elem.stack_trace = getExceptionStackTraceString(std::current_exception());
@@ -2290,11 +2296,20 @@ static BlockIO executeQueryImpl(
         }
         else if (settings[Setting::dialect] == Dialect::kusto && !internal)
         {
+            const char * kql_pos = begin;
             if (!settings[Setting::allow_experimental_kusto_dialect])
-                throw Exception(ErrorCodes::SUPPORT_IS_DISABLED, "Support for Kusto Query Engine (KQL) is disabled (turn on setting 'allow_experimental_kusto_dialect')");
-            ParserKQLStatement parser(end, settings[Setting::allow_settings_after_format_in_insert]);
-            /// TODO: parser should fail early when max_query_size limit is reached.
-            out_ast = parseKQLQuery(parser, begin, end, "", max_query_size, settings[Setting::max_parser_depth], settings[Setting::max_parser_backtracks]);
+            {
+                /// A plain `SET` passes even when the gate is off, so a session that is
+                /// already in `dialect = 'kusto'` can run `SET dialect = 'clickhouse'`
+                /// (or turn the gate back on) instead of being stranded until reconnect.
+                out_ast = tryParseKQLSetStatement(
+                    kql_pos, end, max_query_size, settings[Setting::max_parser_depth], settings[Setting::max_parser_backtracks]);
+                if (!out_ast)
+                    throw Exception(ErrorCodes::SUPPORT_IS_DISABLED, "Support for the Kusto Query Language (KQL) is disabled (turn on setting 'allow_experimental_kusto_dialect')");
+            }
+            else
+                out_ast = parseKQLQuery(
+                    kql_pos, end, /*allow_multi_statements=*/false, max_query_size, settings[Setting::max_parser_depth], settings[Setting::max_parser_backtracks]);
         }
         else if (settings[Setting::dialect] == Dialect::prql && !internal)
         {
@@ -3493,12 +3508,20 @@ static void executeASTFuzzerQueries(const ASTPtr & ast, const ContextMutablePtr 
         ContextMutablePtr fuzz_session_context;
         ContextMutablePtr fuzz_context;
 
-        auto reset_transactions = [&]()
+        /// Everything this iteration owes once the query is over, on either outcome: the fuzzer state
+        /// it has to report the result to, and the transactions it has to release.
+        auto finish_iteration = [&](bool succeeded)
         {
             if (fuzz_context)
                 fuzz_context->setCurrentTransaction(NO_TRANSACTION_PTR);
             if (fuzz_session_context)
                 fuzz_session_context->setCurrentTransaction(NO_TRANSACTION_PTR);
+
+            if (!succeeded)
+            {
+                auto [fuzzer, lock] = getGlobalASTFuzzer();
+                fuzzer->notifyQueryFailed(fuzzed_ast);
+            }
         };
 
         try
@@ -3642,17 +3665,15 @@ static void executeASTFuzzerQueries(const ASTPtr & ast, const ContextMutablePtr 
                 }
             }
 
-            reset_transactions();
+            finish_iteration(/*succeeded=*/true);
             base_ast = fuzzed_ast;
         }
         catch (const Exception & e)
         {
-            reset_transactions();
+            finish_iteration(/*succeeded=*/false);
             if (e.code() == ErrorCodes::AST_FUZZER_ORACLE_MISMATCH)
                 throw; /// Oracle mismatch — abort the fuzzer to make it visible in CI
             LOG_TRACE(logger, "Fuzzed query failed: {}", getCurrentExceptionMessage(/*with_stacktrace=*/false));
-            auto [fuzzer, lock] = getGlobalASTFuzzer();
-            fuzzer->notifyQueryFailed(fuzzed_ast);
         }
     }
 }

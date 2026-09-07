@@ -51,6 +51,7 @@
 #include <DataTypes/DataTypeTuple.h>
 #include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypeMap.h>
+#include <DataTypes/DataTypeNullable.h>
 #include <DataTypes/getLeastSupertype.h>
 #include <DataTypes/validateGroupByKeyType.h>
 
@@ -60,6 +61,7 @@
 #include <Functions/UserDefined/UserDefinedSQLFunctionFactory.h>
 #include <Formats/FormatFactory.h>
 #include <Columns/IColumn.h>
+#include <Interpreters/JoinUtils.h>
 #include <Interpreters/convertColumnToType.h>
 #include <TableFunctions/TableFunctionFactory.h>
 #include <Storages/IStorage.h>
@@ -67,6 +69,8 @@
 #include <Storages/StorageView.h>
 #include <Storages/ColumnsDescription.h>
 
+#include <Access/Common/AccessFlags.h>
+#include <Access/ContextAccess.h>
 #include <Access/EnabledRowPolicies.h>
 
 #include <base/scope_guard.h>
@@ -3367,6 +3371,22 @@ ProjectionNames QueryAnalyzer::resolveExpressionNode(
                                 /*throw_on_mismatch=*/ true);
                         }
                     }
+                    else if (isTableExpressionNodeType(resolved_identifier_node->getNodeType()))
+                    {
+                        /// A table expression that also appears in an enclosing query's join tree must
+                        /// not be shared with this argument: later stages rewrite each argument instance
+                        /// in place (`createUniqueAliasesIfNecessary`, `GLOBAL IN` external tables,
+                        /// `rewrite_in_to_join`), and with a shared node those edits land in the join tree.
+                        for (const auto * scope_to_check = &scope; scope_to_check != nullptr;
+                             scope_to_check = scope_to_check->parent_scope)
+                        {
+                            if (scope_to_check->registered_table_expression_nodes.contains(resolved_identifier_node))
+                            {
+                                resolved_identifier_node = resolved_identifier_node->clone();
+                                break;
+                            }
+                        }
+                    }
                 }
             }
 
@@ -5724,6 +5744,30 @@ void QueryAnalyzer::resolveJoin(QueryTreeNodePtr & join_node, IdentifierResolveS
             auto expression_types = DataTypes{result_left_table_expression->getResultType(), result_right_table_expression->getResultType()};
             DataTypePtr common_type = tryGetLeastSupertype(expression_types);
 
+            /** There can be no type that is able to hold all the values of both keys, for example, for `UInt64` and `Int64`.
+              * The result of an INNER JOIN contains only the values that both of the keys have in common,
+              * and the type of these values is enough. See `JoinCommon::tryGetCommonSubtypeForJoinKeys`.
+              * For the other kinds of JOIN the result also contains the unmatched values, which may be out of this range.
+              * SEMI JOIN is fine as well: only the matched rows of the preserved side survive, and the result of USING
+              * takes the key of the preserved side. ANTI JOIN, on the contrary, keeps exactly the unmatched rows.
+              * For ASOF JOIN the last column in the USING list is compared by the order of the values, not by equality,
+              * so the fallback does not apply to it; the preceding columns are ordinary equality keys.
+              */
+            bool is_asof_inequality_key = join_node_typed.getStrictness() == JoinStrictness::Asof
+                && join_using_node == join_using_list.getNodes().back();
+            bool is_inner_or_semi = join_node_typed.getKind() == JoinKind::Inner
+                || join_node_typed.getStrictness() == JoinStrictness::Semi;
+            if (!common_type
+                && is_inner_or_semi
+                && !is_asof_inequality_key)
+            {
+                if (auto subtype = JoinCommon::tryGetCommonSubtypeForJoinKeys(expression_types[0], expression_types[1]))
+                {
+                    bool is_nullable = isNullableOrLowCardinalityNullable(expression_types[0]) || isNullableOrLowCardinalityNullable(expression_types[1]);
+                    common_type = is_nullable ? makeNullable(subtype) : subtype;
+                }
+            }
+
             if (!common_type)
                 throw Exception(ErrorCodes::NO_COMMON_TYPE,
                     "JOIN {} cannot infer common type for {} and {} in USING for identifier '{}'. In scope {}",
@@ -5768,10 +5812,27 @@ void QueryAnalyzer::inlineViewSubqueryIfNeeded(QueryTreeNodePtr & join_tree_node
     /// Get the view's inner query AST.
     const auto & storage_snapshot = table_node->getStorageSnapshot();
 
+    auto storage_id = storage->getStorageID();
+
+    /// Inlining replaces the view's TableNode with the view body, so the SELECT check the planner
+    /// performs for a TableNode never runs for the view, and for a SQL SECURITY DEFINER view the
+    /// body is subsequently resolved and planned under the definer's identity - meaning the caller
+    /// is never checked against the view or against the tables behind it. Only inline when the
+    /// caller may already read the whole view, so that inlining cannot change the access decision;
+    /// otherwise leave the TableNode in place and let the planner apply its normal column-aware check.
+    /// Use getAll() rather than getOrdinary(): a view can expose ALIAS (and MATERIALIZED) columns,
+    /// which the planner's per-column SELECT check treats as separate privileges, so they must be
+    /// covered here too - otherwise a caller lacking SELECT on an ALIAS column would still inline.
+    if (!scope.context->getAccess()->isGranted(
+            AccessType::SELECT,
+            storage_id.getDatabaseName(),
+            storage_id.getTableName(),
+            storage_snapshot->metadata->getColumns().getAll().getNames()))
+        return;
+
     auto view_context = StorageView::getViewSubqueryContext(scope.context, storage_snapshot);
 
     /// Check for row policies on the view itself.
-    auto storage_id = storage->getStorageID();
     auto row_policy_filter = scope.context->getRowPolicyFilter(
         storage_id.getDatabaseName(), storage_id.getTableName(), RowPolicyFilterType::SELECT_FILTER);
     bool has_row_policy = row_policy_filter && !row_policy_filter->isAlwaysTrue();
@@ -6532,6 +6593,19 @@ void QueryAnalyzer::resolveQuery(const QueryTreeNodePtr & query_node, Identifier
             throw Exception(ErrorCodes::EMPTY_LIST_OF_COLUMNS_QUERIED,
                 "Empty list of columns in projection. In scope {}",
                 scope.scope_node->formatASTForErrorMessage());
+    }
+    else if (query_node_typed.isGroupByAll())
+    {
+        /// GROUP BY ALL keys must be registered as nullable_group_by_keys before the projection is resolved: expand
+        /// them from a throwaway resolution, then restore the unresolved projection so it is resolved once below,
+        /// after registration. Re-resolving in place would keep the subqueries, which resolveQuery skips as resolved.
+        auto unresolved_projection = query_node_typed.getProjectionNode()->clone();
+        auto saved_subquery_counter = subquery_counter;
+        resolveProjectionExpressionNodeList(query_node_typed.getProjectionNode(), scope);
+        expandGroupByAll(query_node_typed);
+        query_node_typed.getProjectionNode() = std::move(unresolved_projection);
+        /// The discarded resolution must not consume _subquery_N projection names.
+        subquery_counter = saved_subquery_counter;
     }
 
     if (auto & prewhere_node = query_node_typed.getPrewhere())
