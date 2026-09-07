@@ -650,9 +650,10 @@ StorageInMemoryMetadata ReplicatedMergeTreeTableMetadata::Diff::getNewMetadata(c
     }
 
     /// An implicit index of an expression alias contains values of the alias expression rather
-    /// than those of the physical column. A metadata-only ALTER that transitions into or out of
-    /// such an alias leaves existing part files stale, so do not recreate the identically named
-    /// index on a replica either. This mirrors the local ALTER path in `AlterCommand`.
+    /// than those of the physical column. A metadata-only ALTER that redefines such a column -
+    /// including a change of the type alone, which keeps it an expression alias - leaves the
+    /// existing part files stale, so do not recreate the identically named index on a replica
+    /// either. This mirrors the local ALTER path in `AlterCommand`.
     const auto is_expression_alias = [](const ColumnDescription & column)
     {
         return column.default_desc.kind == ColumnDefaultKind::Alias
@@ -662,8 +663,17 @@ StorageInMemoryMetadata ReplicatedMergeTreeTableMetadata::Diff::getNewMetadata(c
     std::unordered_set<String> stale_implicit_index_columns;
     for (const auto & column : new_metadata.columns)
     {
-        if (old_metadata.columns.has(column.name)
-            && is_expression_alias(old_metadata.columns.get(column.name)) != is_expression_alias(column))
+        if (!old_metadata.columns.has(column.name))
+            continue;
+
+        const auto & old_column = old_metadata.columns.get(column.name);
+
+        /// A column that keeps its definition keeps its index files valid, so the index policy
+        /// decides alone. Only a redefinition of the column can orphan them, and only for an
+        /// expression alias on either side of it: the files then hold values of a different
+        /// expression than the ones the index would be recreated for.
+        const bool redefined = !old_column.type->equals(*column.type) || !(old_column.default_desc == column.default_desc);
+        if (redefined && (is_expression_alias(old_column) || is_expression_alias(column)))
             stale_implicit_index_columns.insert(column.name);
     }
 
