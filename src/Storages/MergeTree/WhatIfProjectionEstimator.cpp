@@ -374,6 +374,9 @@ std::optional<ProjectionDescription> refreshHypotheticalProjection(
     const ContextPtr & context,
     String & reason)
 {
+    /// the privilege CREATE needed, re-checked so a stored definition cannot outlive it
+    context->checkAccess(AccessType::ALTER_ADD_PROJECTION, data.getStorageID());
+
     try
     {
         checkHypotheticalProjectionIsAddable(data, metadata, stored.definition_ast, /* if_not_exists */ false, context);

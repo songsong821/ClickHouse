@@ -4,3 +4,5 @@ projections:	1
 --- after the table is renamed out of reach ---
 indexes:	0
 projections:	0
+--- once ALTER ADD PROJECTION is revoked a stored definition cannot probe the table ---
+ACCESS_DENIED
