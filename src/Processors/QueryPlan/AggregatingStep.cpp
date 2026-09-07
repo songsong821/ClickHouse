@@ -1180,6 +1180,19 @@ void AggregatingStep::serialize(Serialization & ctx) const
     /// the hash table statistics cache key, and they need no throwing gate either: towards an older
     /// peer the byte is simply left off the wire and the peer falls back to the header-based
     /// constness check, which is exactly the behavior before these bits existed.
+    ///
+    /// Keeping them out of the key does mean that a gradual and a strict run of the same query share
+    /// one `AggregationEntry`, and the two see different per-stream hash table sizes. That is by
+    /// design and not specific to these bits: the key describes the query, not the pipeline it is
+    /// executed with, so `max_threads`, `enable_adaptive_aggregator` and the gradual-resize
+    /// thresholds themselves (they live in `BuildQueryPipelineSettings`, not in the step) are all
+    /// outside it already. The entry only carries a preallocation hint, which
+    /// `getSizeHint` rescales by the *current* run's number of tables and `update` re-learns as soon
+    /// as the observed sizes move (`AggregationEntry::shouldBeUpdated`), so a stale hint costs at
+    /// most one rehash and can never change a result. Salting the key with the mode instead would
+    /// make it depend on the negotiated plan version - an initiator writing these bits and a replica
+    /// too old to read them would hash the same query differently, which is exactly the cross-node
+    /// key mismatch `for_cache_key` exists to avoid.
     if (ctx.version >= DBMS_MIN_QUERY_PLAN_SERIALIZATION_VERSION_WITH_SEMANTICALLY_CONSTANT_GROUP_BY_KEYS)
     {
         UInt8 extra_flags = 0;
