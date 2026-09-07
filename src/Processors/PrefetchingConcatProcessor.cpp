@@ -4,10 +4,11 @@
 namespace DB
 {
 
-PrefetchingConcatProcessor::PrefetchingConcatProcessor(SharedHeader header, size_t num_inputs, size_t max_buffered_chunks_, size_t max_prefetch_inputs_)
+PrefetchingConcatProcessor::PrefetchingConcatProcessor(
+    SharedHeader header, size_t num_inputs, size_t max_rows_to_buffer_, size_t max_bytes_to_buffer_)
     : IProcessor(InputPorts(num_inputs, header), OutputPorts{header})
-    , max_buffered_chunks(max_buffered_chunks_)
-    , max_prefetch_inputs(max_prefetch_inputs_)
+    , max_rows_to_buffer(max_rows_to_buffer_)
+    , max_bytes_to_buffer(max_bytes_to_buffer_)
     , buffers(num_inputs)
 {
 }
@@ -30,41 +31,37 @@ PrefetchingConcatProcessor::Status PrefetchingConcatProcessor::prepare()
     /// Pull available data from inputs into their buffers.
     /// This lets their upstream sources continue producing data in parallel.
     ///
-    /// A non-current input is only drained while its buffer is below `max_buffered_chunks`.
-    /// Once it reaches the cap we stop pulling, so the buffer honors the configured
-    /// backpressure bound even for a chunk still in flight on the port after a previous
-    /// `setNotNeeded` (ports hold one chunk, which would otherwise push the buffer one
-    /// past the limit). The current input is always drained because its chunks are
-    /// emitted immediately and never accumulate beyond a single buffered chunk.
+    /// The current input is always drained: its chunks are emitted immediately and never
+    /// accumulate beyond a single buffered chunk. A non-current input is drained only while
+    /// the shared budget has room; once it is spent, the chunk stays on the port and its
+    /// source stops, which is the same backpressure a full `BufferChunksTransform` applies
+    /// to the source behind a merge input.
     {
         size_t idx = 0;
         for (auto & input : inputs)
         {
-            if (input.hasData() && (idx == current_input_idx || buffers[idx].size() < max_buffered_chunks))
-                buffers[idx].push_back(input.pull());
+            if (input.hasData() && (idx == current_input_idx || hasBufferRoom()))
+            {
+                auto chunk = input.pull();
+                num_buffered_rows += chunk.getNumRows();
+                num_buffered_bytes += chunk.bytes();
+                buffers[idx].push_back(std::move(chunk));
+            }
             ++idx;
         }
     }
 
-    /// Mark a limited number of upcoming inputs as needed for prefetching.
-    /// Only prefetch the next few inputs (not all) to limit overhead:
-    /// running too many sources in parallel wastes CPU on decompression and
-    /// filtering for data that won't be consumed until much later.
+    /// Keep every upcoming input needed, so all of the part's sources can read and decompress
+    /// at the same time — the concurrency they had when each of them was a merge input of its
+    /// own. The buffer budget above and the single chunk a port holds are what bound the
+    /// memory here; a window on how many inputs may run would bound it too, but it would also
+    /// cap read parallelism at that window no matter how many threads the query was given.
     {
         size_t idx = 0;
         for (auto & input : inputs)
         {
-            if (idx != current_input_idx && !input.isFinished())
-            {
-                bool should_prefetch = idx > current_input_idx
-                    && idx <= current_input_idx + max_prefetch_inputs
-                    && buffers[idx].size() < max_buffered_chunks;
-
-                if (should_prefetch)
-                    input.setNeeded();
-                else
-                    input.setNotNeeded();
-            }
+            if (idx > current_input_idx && !input.isFinished())
+                input.setNeeded();
             ++idx;
         }
     }
@@ -89,8 +86,13 @@ PrefetchingConcatProcessor::Status PrefetchingConcatProcessor::prepare()
     /// Try to output from the current input's buffer.
     if (!buffers[current_input_idx].empty())
     {
-        output.push(std::move(buffers[current_input_idx].front()));
+        auto chunk = std::move(buffers[current_input_idx].front());
         buffers[current_input_idx].pop_front();
+
+        num_buffered_rows -= chunk.getNumRows();
+        num_buffered_bytes -= chunk.bytes();
+
+        output.push(std::move(chunk));
         return Status::PortFull;
     }
 

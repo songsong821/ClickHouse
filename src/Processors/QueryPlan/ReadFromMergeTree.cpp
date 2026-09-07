@@ -248,6 +248,7 @@ namespace Setting
     extern const SettingsUInt64 max_number_of_partitions_for_independent_distinct;
     extern const SettingsUInt64 max_number_of_partitions_for_independent_window;
     extern const SettingsInt64 max_partitions_to_read;
+    extern const SettingsUInt64 max_block_size;
     extern const SettingsUInt64 max_rows_to_read;
     extern const SettingsUInt64 max_rows_to_read_leaf;
     extern const SettingsMaxThreads max_final_threads;
@@ -275,8 +276,10 @@ namespace Setting
     extern const SettingsBool parallel_replicas_support_projection;
     extern const SettingsBool distributed_index_analysis;
     extern const SettingsBool distributed_index_analysis_for_non_shared_merge_tree;
+    extern const SettingsUInt64 prefer_external_sort_block_bytes;
     extern const SettingsUInt64 preferred_block_size_bytes;
     extern const SettingsUInt64 preferred_max_column_in_block_size_bytes;
+    extern const SettingsBool read_in_order_use_buffering;
     extern const SettingsUInt64 read_in_order_two_level_merge_threshold;
     extern const SettingsBool split_parts_ranges_into_intersecting_and_non_intersecting_final;
     extern const SettingsBool split_intersecting_parts_ranges_into_layers_final;
@@ -2145,6 +2148,21 @@ Pipe ReadFromMergeTree::spreadMarkRangesAmongStreamsWithOrder(
             (can_use_per_part_prefetching || (prefer_multiple_streams && num_streams > 1))
             && parts_with_ranges.size() <= num_streams;
 
+        /// Read-ahead budget shared by the streams of one part, see `PrefetchingConcatProcessor`.
+        /// It is the budget `SortingStep` gives to a single merge input through
+        /// `BufferChunksTransform`, and collapsing a part's streams into one merge input is
+        /// precisely what moves that budget from per-stream to per-part. Sizing the read-ahead
+        /// by the same settings, instead of by a fixed number of chunks, is what keeps all of
+        /// the part's streams reading concurrently: with a fixed window the read parallelism
+        /// would be pinned to the window no matter how many threads the query has, which costs
+        /// throughput whenever the sources are decompression- or latency-bound.
+        /// `read_in_order_use_buffering = 0` asks for no read-ahead at all; then the budget is
+        /// zero and every source stalls after the one chunk its port holds, as it does today
+        /// when the streams are separate merge inputs and buffering is off.
+        const bool use_read_ahead = settings[Setting::read_in_order_use_buffering];
+        const size_t prefetch_max_rows = use_read_ahead ? settings[Setting::max_block_size] : 0;
+        const size_t prefetch_max_bytes = use_read_ahead ? settings[Setting::prefer_external_sort_block_bytes] : 0;
+
         if (can_split_parts)
         {
             size_t streams_remaining = num_streams;
@@ -2244,7 +2262,8 @@ Pipe ReadFromMergeTree::spreadMarkRangesAmongStreamsWithOrder(
                     LOG_TRACE(log, "Using PrefetchingConcatProcessor for {} streams from part {}",
                         part_pipes.size(), part.data_part->name);
                     auto pipe = Pipe::unitePipes(std::move(part_pipes));
-                    pipe.addTransform(std::make_shared<PrefetchingConcatProcessor>(pipe.getSharedHeader(), pipe.numOutputPorts()));
+                    pipe.addTransform(std::make_shared<PrefetchingConcatProcessor>(
+                        pipe.getSharedHeader(), pipe.numOutputPorts(), prefetch_max_rows, prefetch_max_bytes));
                     pipes.emplace_back(std::move(pipe));
                 }
                 else
