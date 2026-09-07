@@ -226,18 +226,28 @@ Field decodePartitionDecimalByType(const String & bytes, const IDataType & type)
 namespace
 {
 
-std::optional<Int64> floorDivideChecked(Int64 numerator, Int64 denominator)
+enum class PartitionTransformKind : uint8_t
 {
-    if (denominator == 0)
-        return {};
-    Int64 quotient = numerator / denominator;
-    if (numerator % denominator != 0 && (numerator < 0) != (denominator < 0))
-    {
-        if (quotient == std::numeric_limits<Int64>::min())
-            return {};
-        --quotient;
-    }
-    return quotient;
+    Day,
+    Month,
+    Year,
+    Hour,
+    NotInvertible,
+};
+
+PartitionTransformKind parsePartitionTransformKind(const String & transform_name_src)
+{
+    const String transform_name = Poco::toLower(transform_name_src);
+
+    if (transform_name == "day" || transform_name == "days" || transform_name == "date" || transform_name == "dates")
+        return PartitionTransformKind::Day;
+    if (transform_name == "month" || transform_name == "months")
+        return PartitionTransformKind::Month;
+    if (transform_name == "year" || transform_name == "years")
+        return PartitionTransformKind::Year;
+    if (transform_name == "hour" || transform_name == "hours")
+        return PartitionTransformKind::Hour;
+    return PartitionTransformKind::NotInvertible;
 }
 
 std::optional<Int64> multiplyChecked(Int64 left, Int64 right)
@@ -256,50 +266,58 @@ std::optional<Int64> addChecked(Int64 left, Int64 right)
     return result;
 }
 
-std::optional<std::pair<Int64, Int64>> dayIntervalOfPartitionValue(const String & transform_name, Int64 value)
+std::optional<std::pair<Int64, Int64>> dayIntervalOfPartitionValue(PartitionTransformKind kind, Int64 value)
 {
-    if (transform_name == "day" || transform_name == "days" || transform_name == "date" || transform_name == "dates")
-        return std::pair{value, value};
-
     const auto & utc = DateLUT::instance("UTC");
+    const auto epoch = ExtendedDayNum(0);
 
-    auto day_num_of = [&](Int64 year, Int64 month) -> std::optional<Int64>
+    switch (kind)
     {
-        if (year < std::numeric_limits<Int16>::min() || year > std::numeric_limits<Int16>::max())
+        case PartitionTransformKind::Day:
+            return std::pair{value, value};
+        case PartitionTransformKind::Month:
+        {
+            const auto first = utc.addMonths(epoch, value);
+            if (utc.toMonthNumSinceEpoch(first) != value)
+                return {};
+            return std::pair{Int64{first}, Int64{utc.addMonths(epoch, value + 1)} - 1};
+        }
+        case PartitionTransformKind::Year:
+        {
+            const auto first = utc.addYears(epoch, value);
+            if (utc.toYearSinceEpoch(first) != value)
+                return {};
+            return std::pair{Int64{first}, Int64{utc.addYears(epoch, value + 1)} - 1};
+        }
+        default:
             return {};
-        auto day_num = utc.tryToMakeDayNum(static_cast<Int16>(year), static_cast<UInt8>(month), 1);
-        if (!day_num)
-            return {};
-        return static_cast<Int64>(day_num->toUnderType());
-    };
-
-    if (transform_name == "month" || transform_name == "months")
-    {
-        auto years = floorDivideChecked(value, 12);
-        if (!years)
-            return {};
-        Int64 year = 1970 + *years;
-        Int64 month = value - *years * 12 + 1;
-        auto first = day_num_of(year, month);
-        auto next = month == 12 ? day_num_of(year + 1, 1) : day_num_of(year, month + 1);
-        if (!first || !next)
-            return {};
-        return std::pair{*first, *next - 1};
     }
-
-    if (transform_name == "year" || transform_name == "years")
-    {
-        auto first = day_num_of(1970 + value, 1);
-        auto next = day_num_of(1970 + value + 1, 1);
-        if (!first || !next)
-            return {};
-        return std::pair{*first, *next - 1};
-    }
-
-    return {};
 }
 
-std::optional<Range> rangeOfPartitionValue(const String & transform_name_src, const Field & partition_value, const IDataType & source_type)
+std::optional<std::pair<Int64, Int64>> secondIntervalOfPartitionValue(PartitionTransformKind kind, Int64 value)
+{
+    if (kind == PartitionTransformKind::Hour)
+    {
+        auto first = multiplyChecked(value, 3600);
+        auto next = first ? addChecked(*first, 3600) : std::nullopt;
+        if (!next)
+            return {};
+        return std::pair{*first, *next - 1};
+    }
+
+    auto days = dayIntervalOfPartitionValue(kind, value);
+    if (!days)
+        return {};
+
+    auto first = multiplyChecked(days->first, 86400);
+    auto next_day = addChecked(days->second, 1);
+    auto next = first && next_day ? multiplyChecked(*next_day, 86400) : std::nullopt;
+    if (!next)
+        return {};
+    return std::pair{*first, *next - 1};
+}
+
+std::optional<Range> rangeOfPartitionValue(const String & transform_name, const Field & partition_value, const IDataType & source_type)
 {
     if (partition_value.isNull())
         return {};
@@ -317,12 +335,12 @@ std::optional<Range> rangeOfPartitionValue(const String & transform_name_src, co
     else
         return {};
 
-    const String transform_name = Poco::toLower(transform_name_src);
+    const PartitionTransformKind kind = parsePartitionTransformKind(transform_name);
     const WhichDataType which(source_type);
 
     if (which.isDateOrDate32())
     {
-        auto days = dayIntervalOfPartitionValue(transform_name, value);
+        auto days = dayIntervalOfPartitionValue(kind, value);
         if (!days)
             return {};
         return Range(days->first, true, days->second, true);
@@ -331,25 +349,8 @@ std::optional<Range> rangeOfPartitionValue(const String & transform_name_src, co
     if (!which.isDateTime() && !which.isDateTime64())
         return {};
 
-    std::optional<std::pair<Int64, Int64>> seconds;
-    if (transform_name == "hour" || transform_name == "hours")
-    {
-        auto first = multiplyChecked(value, 3600);
-        auto next = first ? addChecked(*first, 3600) : std::nullopt;
-        if (!next)
-            return {};
-        seconds = std::pair{*first, *next - 1};
-    }
-    else if (auto days = dayIntervalOfPartitionValue(transform_name, value))
-    {
-        auto first = multiplyChecked(days->first, 86400);
-        auto next_day = addChecked(days->second, 1);
-        auto next = first && next_day ? multiplyChecked(*next_day, 86400) : std::nullopt;
-        if (!next)
-            return {};
-        seconds = std::pair{*first, *next - 1};
-    }
-    else
+    auto seconds = secondIntervalOfPartitionValue(kind, value);
+    if (!seconds)
         return {};
 
     if (which.isDateTime())
@@ -362,8 +363,7 @@ std::optional<Range> rangeOfPartitionValue(const String & transform_name_src, co
     next = next ? multiplyChecked(*next, ticks_per_second) : std::nullopt;
     if (!first || !next)
         return {};
-    return Range(
-        DecimalField<Decimal64>(*first, scale), true, DecimalField<Decimal64>(*next - 1, scale), true);
+    return Range(DecimalField<Decimal64>(*first, scale), true, DecimalField<Decimal64>(*next - 1, scale), true);
 }
 
 }
