@@ -64,12 +64,12 @@ run_fuzzed()
 # detection power - a missing denylist entry moves the counter on the very first round - and
 # each extra round costs real time and one more chance of the false failure above. Keep this
 # number small: at eight rounds the whole test took ~204s under `amd_asan_ubsan` and tripped
-# the 180s per-test limit.
+# the 180s per-test limit. The rounds are now batched into one client invocation, so raising
+# them is cheaper than it was - that is not a reason to raise them.
 probe()
 {
     local label="$1"
     local aggregates="$2"
-    local before
     local after
 
     # A zero delta on its own does not prove the oracle gate rejected the spelling: it holds
@@ -86,20 +86,29 @@ probe()
         return
     fi
 
-    before=$(get_counter)
-    for _ in $(seq 1 3)
-    do
-        run_fuzzed "SELECT $aggregates FROM oracle_approx_top WHERE v > 5;"
-    done
+    # The three rounds travel in ONE client invocation, and the counter is read once per
+    # probe rather than twice: `ast_fuzzer_runs` applies per statement, and the counter is
+    # server-global and this test is `no-parallel`, so the previous probe's reading is this
+    # probe's baseline. Same three independent fuzz rounds, three fewer process startups per
+    # probe. That matters: on the private `s3 storage, meta in keeper` shard every client
+    # startup costs ~2.7s, and at ~60 invocations that shard reached ~163s against the same
+    # 180s limit - close enough that runs were landing at 186s.
+    local query="SELECT $aggregates FROM oracle_approx_top WHERE v > 5;"
+    run_fuzzed "$query $query $query"
     after=$(get_counter)
 
-    if [[ "$after" -eq "$before" ]]
+    if [[ "$after" -eq "$counter" ]]
     then
         echo "$label not checked"
     else
-        echo "$label checked $((after - before)) times"
+        echo "$label checked $((after - counter)) times"
     fi
+
+    counter=$after
 }
+
+# Baseline for the first probe; each probe leaves its own reading behind for the next one.
+counter=$(get_counter)
 
 probe "approx_top_k" "approx_top_k(v), approx_top_k(v + 1), approx_top_k(v * 2)"
 probe "approx_top_sum" "approx_top_sum(v, 1), approx_top_sum(v + 1, 1), approx_top_sum(v * 2, 1)"
