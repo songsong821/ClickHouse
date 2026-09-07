@@ -1480,12 +1480,6 @@ bool CachedOnDiskReadBufferFromFile::nextImplStep()
                 state->buf->set(nullptr, 0);
         });
 
-        /// Park the CPU lease across the blocking read — a local cache-file read (SSD) or a remote
-        /// fetch (S3 / distributed cache) — so the slot is released while this thread waits on I/O
-        /// and another thread can use the CPU. Covers local disk too (all read types); a
-        /// page-cache hit parks only briefly, cheap relative to the read it guards.
-        CPULeaseParkGuard cpu_park;
-
         size = readFromFileSegment(
             file_segment,
             file_offset_of_buffer_end,
@@ -1534,6 +1528,12 @@ size_t CachedOnDiskReadBufferFromFile::readFromFileSegment(
 
     const auto & current_read_range = file_segment.range();
     chassert(current_read_range.contains(offset));
+
+    /// Park the CPU lease for the whole blocking read (predownload + the cache-file or remote
+    /// fetch) so the slot is freed while this thread waits on I/O. Placed here so every caller
+    /// (nextImplStep and the positioned readBigAt) is covered; a cache hit parks only briefly.
+    /// No-op when the thread holds no CPU lease.
+    CPULeaseParkGuard cpu_park;
 
     size_t size = 0;
     if (state.bytes_to_predownload)

@@ -185,7 +185,7 @@ bool CPULeaseAllocation::RequestChain::enqueue(ResourceCost cost, ResourceCost r
     }
 }
 
-void CPULeaseAllocation::RequestChain::cancel(std::unique_lock<std::mutex> & lock)
+bool CPULeaseAllocation::RequestChain::cancel(std::unique_lock<std::mutex> & lock)
 {
     if (enqueued)
     {
@@ -200,7 +200,9 @@ void CPULeaseAllocation::RequestChain::cancel(std::unique_lock<std::mutex> & loc
         }
         else
             enqueued = false;
+        return canceled;
     }
+    return false;
 }
 
 void CPULeaseAllocation::RequestChain::scheduled()
@@ -478,6 +480,19 @@ bool CPULeaseAllocation::parkLease(Lease & lease)
     acquired_increment.sub(1); // no longer an acquired running slot (mirrors renew() preemption)
 
     setParked(thread_num);
+
+    // Parking dropped this query's slot demand by one. If a resource request is still pending for a
+    // slot we no longer need (we already hold at least the reduced demand), cancel it -- an
+    // idle-bound thread should not keep asking for a slot. A concurrent grant may race the cancel;
+    // the give-back loop below then reclaims any slot that lands as a result.
+    if (requests.hasEnqueued() && allocated >= effectiveMaxSlots())
+    {
+        if (requests.cancel(lock)) // removed before the scheduler processed it -> unwind schedule()
+        {
+            scheduled_increment.sub();
+            wait_timer.reset();
+        }
+    }
 
     // Active clockless give-back: parking dropped this query's slot demand by one
     // (effectiveMaxSlots() shrank), so if we still hold more quanta than that, finish one now to

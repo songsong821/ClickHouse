@@ -347,7 +347,10 @@ private:
         void finish();
         void granted();
         bool enqueue(ResourceCost cost, ResourceCost requested_ns_);
-        void cancel(std::unique_lock<std::mutex> & lock);
+        /// Returns true iff the pending request was removed before the scheduler processed it
+        /// (so the caller must unwind schedule()'s bookkeeping); false if nothing was enqueued or
+        /// the scheduler granted/failed it first (in which case that path already unwound it).
+        bool cancel(std::unique_lock<std::mutex> & lock);
         void scheduled();
         ResourceCost getMaxConsumed() const { return tail->max_consumed; }
         bool hasEnqueued() const { return enqueued; }
