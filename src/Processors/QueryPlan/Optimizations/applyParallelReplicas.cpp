@@ -174,13 +174,18 @@ static bool subtreeIsShippable(const QueryPlan::Node * node)
     return false;
 }
 
-/// True if the DAG references an `IN`/`NOT IN` subquery set whose query plan is gone. Such a
-/// `FutureSetFromSubquery` cannot be shipped: `serializeSets` serializes the subquery plan (an `IN` set is
-/// never serialized as data), so a null plan would throw `Cannot serialize FutureSetFromSubquery with no
-/// query plan`. The common case keeps its plan (`FutureSetFromSubquery::buildOrderedSetInplace` builds
-/// non-destructively under plan-based parallel replicas); a null plan only remains for a subquery whose
-/// source is non-clonable and took the destructive in-place build (dictionary / system-table subquery,
-/// nested `IN`, or a `GLOBAL IN` external table).
+/// True if the DAG references an `IN`/`NOT IN` subquery set which cannot be shipped. This path always
+/// ships such a set as its subquery plan, never as data: `serializeSets` takes the `SubqueryPlan` branch
+/// unless `sets_must_be_ready` is set, which only `QueryPlan::serializeForDistributedTask` (the worker-task
+/// path) does - `ensureSerialized` here goes through `QueryPlan::serialize`. So the set is unshippable when
+/// that plan is missing, or is present but holds a step which cannot be serialized:
+/// - missing: the subquery source is non-clonable and took the destructive in-place build (dictionary /
+///   system-table subquery, nested `IN`, or a `GLOBAL IN` external table), which throws
+///   `Cannot serialize FutureSetFromSubquery with no query plan`;
+/// - unserializable: the source is clonable, so `FutureSetFromSubquery::buildOrderedSetInplace` keeps the
+///   plan, but a step in it has no `serialize` (e.g. `numbers()` -> `ReadFromSystemNumbers`, which declares
+///   `clone` but not `isSerializable`), which throws `Method serialize is not implemented`.
+/// Cloneable is not serializable, so the plan has to be checked, not just its presence.
 static bool dagReferencesUnshippableSubquerySet(const ActionsDAG & dag)
 {
     for (const auto & node : dag.getNodes())
@@ -191,9 +196,23 @@ static bool dagReferencesUnshippableSubquerySet(const ActionsDAG & dag)
         if (!column_set)
             continue;
         const auto future_set = column_set->getData();
-        if (const auto * from_subquery = typeid_cast<const FutureSetFromSubquery *>(future_set.get());
-            from_subquery && from_subquery->getQueryPlan() == nullptr)
+        const auto * from_subquery = typeid_cast<const FutureSetFromSubquery *>(future_set.get());
+        if (!from_subquery)
+            continue;
+
+        const auto * subquery_plan = from_subquery->getQueryPlan();
+        if (!subquery_plan)
             return true;
+
+        if (const auto * offending = findNonSerializableStep(subquery_plan->getRootNode()))
+        {
+            LOG_DEBUG(
+                getLogger("ApplyParallelReplicas"),
+                "Keeping the plan fragment local: step '{}' of an IN-subquery set is not serializable for "
+                "remote execution",
+                offending->step->getName());
+            return true;
+        }
     }
     return false;
 }
