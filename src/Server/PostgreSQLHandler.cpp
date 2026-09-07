@@ -1286,6 +1286,7 @@ void PostgreSQLHandler::processSyncQuery()
         /// (see `attachBindQuery`), so resetting the single bind slot is
         /// equivalent — the next Parse/Bind/Execute pair starts from a clean state.
         prepared_statements_manager.resetBindQuery();
+        ignore_until_sync = false;
     }
     catch (const Exception & e)
     {
