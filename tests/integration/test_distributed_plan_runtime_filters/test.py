@@ -4,9 +4,10 @@ Shuffle joins ship partials through the merge tree (build -> `rf_merge_*` -> pro
 equals the same query with `make_distributed_plan` off. Per-task `RuntimeFilterState*`
 ProfileEvents (`system.query_log`; workers share the initiator `initial_query_id`) pin stream
 and byte counts: `2 * N` states for `N` build and `N` probe tasks (all-to-all was `N * N`).
-A send is counted where the state is serialized, so send counts are exact; through the merge
-tree every state also arrives, while the root's broadcast to the probe tasks is best-effort, so
-its arrivals are bounded rather than pinned. A receiver consumes at most
+A send is counted where the state is serialized, but the root skips serializing when every probe
+task has already closed its receive branch, so send counts are bounded rather than exact. Through
+the merge tree every state normally arrives, while the root's broadcast to the probe tasks is
+best-effort by design, so its arrivals are only bounded. A receiver consumes at most
 `RUNTIME_FILTER_MERGE_FAN_IN` (16) states, including through a
 2-level tree (`N = 32` -> 2 first-level merges -> root). Peak merge-task memory compared
 across `N = 2 / 8 / 32` with equal bloom sizes. Persisted exchanges, cancellation, and LIMIT
@@ -230,7 +231,10 @@ def _check_topology(tasks, buckets, levels):
     # Inside the tree every state arrives, and this is the assertion that pins the topology
     # exactly: a merge task publishes nothing unless all of its inputs did
     # (`MergeRuntimeFiltersTransform::finalize`), so every one of the `tree_edges` must land.
-    # Unlike the send count above, no destination can disappear on this leg.
+    # This is a timing property rather than an invariant: a merge task is itself a destination and
+    # closes its inputs when its own output closes. It holds wherever a counter assertion runs,
+    # because whenever the root's broadcast sends are counted at all, `finalize` has already proved
+    # the tree leg complete. Losses on this leg were only seen under `KILL QUERY`.
     assert merge_received == tree_edges, (merge_received, tree_edges, tasks)
 
     # The root's broadcast to the probe tasks is best-effort by design: a probe task cancels its
@@ -467,7 +471,9 @@ def test_result_equality_nested_joins(started_cluster):
     # vacuously and the test would pass with no filter transported at all.
     trees = {t["task"].rsplit("_", 1)[0] for t in tasks if t["task"].startswith("rf_merge_")}
     assert len(trees) == 2, tasks
-    assert sum(t["states_sent"] for t in tasks) == 2 * (4 + 4), tasks
+    # Bounded for the same reason as in `_check_topology`: the root may skip a broadcast whose
+    # destinations have all finished. The two trees above are what pins the shape.
+    assert sum(t["states_sent"] for t in tasks) <= 2 * (4 + 4), tasks
 
 
 def test_early_close_stays_correct(started_cluster):

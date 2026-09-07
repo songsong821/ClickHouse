@@ -2,6 +2,6 @@
 10000
 -- tree delivery, persisted exchange
 10000
--- merge stage ran and the union was registered on the probe tasks
+-- merge stage ran and the partials went through the tree
 04516_tree_persisted	1	1
 04516_tree_streaming	1	1
