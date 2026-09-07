@@ -235,7 +235,8 @@ inline FieldIntervalPtr makeDateOrDateTimePreimageForDayRange(
 /// same civil-string round trip, but the representable range depends on the scale: the optimizer
 /// renders the endpoints as untyped literals that the comparison re-parses against the column type,
 /// and a whole-second endpoint the scaled `Int64` tick count cannot hold throws `DECIMAL_OVERFLOW`
-/// on that re-parse (`toYear(x) = 2262` on a `DateTime64(9)` column), so decline it.
+/// on that re-parse (`toYear(x) = 2262` on a `DateTime64(9)` column), so decline it. The extended
+/// calendar reaches back to year `0000`, which the text parser does not round-trip either, see below.
 inline FieldIntervalPtr makeDateTime64PreimageForDayRange(
     const DataTypeDateTime64 & type, ExtendedDayNum start_day, ExtendedDayNum end_day)
 {
@@ -255,6 +256,16 @@ inline FieldIntervalPtr makeDateTime64PreimageForDayRange(
     const auto start_surrogate = makeUTCCivilTimeSurrogate(parse_time_zone, source_start);
     const auto end_surrogate = makeUTCCivilTimeSurrogate(parse_time_zone, source_end);
     if (!start_surrogate || !end_surrogate)
+        return nullptr;
+
+    /// A surrogate is rendered as a civil string, and `readDateTime64Text` maps every literal whose
+    /// year component is `0000` to the Unix epoch instead of year zero, so a year-zero boundary comes
+    /// back as 1970 and the rewrite would compare against the wrong instant. `Date` and `DateTime`
+    /// cannot reach year zero, `Date32` is parsed by a day-number parser that has no such case, so
+    /// only `DateTime64` needs the guard: `toYear(x) = 0` and `toYYYYMM(x) = 1`.
+    const auto & utc_time_zone = DateLUT::instance("UTC");
+    if (utc_time_zone.toDateTimeComponents(*start_surrogate).date.year == 0
+        || utc_time_zone.toDateTimeComponents(*end_surrogate).date.year == 0)
         return nullptr;
 
     return std::make_shared<FieldInterval>(
