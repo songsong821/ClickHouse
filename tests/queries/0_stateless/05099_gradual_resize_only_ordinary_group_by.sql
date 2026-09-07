@@ -68,6 +68,11 @@ FROM
 -- 2. Lazy `FINAL`. Its pipeline is not visible in `EXPLAIN PIPELINE`: the deduplicating
 -- aggregation is built by the source at run time, hence the introspection through
 -- `processors_profile_log`.
+-- The optimization itself is planned only for the new analyzer
+-- (`QueryPlanOptimizationSettings::optimize_lazy_final` is conjoined with `allow_experimental_analyzer`),
+-- so this half of the test asks for it explicitly instead of following the lane default.
+SET enable_analyzer = 1;
+
 CREATE TABLE test_gradual_resize_lazy_final (k UInt64, ver UInt64, v UInt64)
 ENGINE = ReplacingMergeTree(ver) ORDER BY k SETTINGS index_granularity = 256;
 SYSTEM STOP MERGES test_gradual_resize_lazy_final;
