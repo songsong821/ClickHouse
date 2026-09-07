@@ -37,8 +37,13 @@ ALTER TABLE t_compact_readonly_dependency UPDATE a = a + 1 WHERE 1 SETTINGS muta
 -- `b` must keep its stored value, not fall back to the type default.
 SELECT id, a, b FROM t_compact_readonly_dependency ORDER BY id;
 SELECT count(), countIf(b = 0) FROM t_compact_readonly_dependency;
+-- Virtual columns are excluded: the runner randomizes `enable_block_number_column` and
+-- `enable_block_offset_column`, which add `_block_number` / `_block_offset` to the part. They are
+-- irrelevant here, and the assertion is that the mutation kept `a`, `b` and `id` - not that the part
+-- has exactly three columns.
 SELECT arraySort(groupArray(column)) FROM system.parts_columns
-WHERE database = currentDatabase() AND table = 't_compact_readonly_dependency' AND active;
+WHERE database = currentDatabase() AND table = 't_compact_readonly_dependency' AND active
+    AND NOT startsWith(column, '_');
 CHECK TABLE t_compact_readonly_dependency SETTINGS check_query_single_value_result = 1;
 
 DROP TABLE t_compact_readonly_dependency;
