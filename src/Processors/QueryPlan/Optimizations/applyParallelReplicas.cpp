@@ -182,10 +182,13 @@ static bool subtreeIsShippable(const QueryPlan::Node * node)
 /// - missing: the subquery source is non-clonable and took the destructive in-place build (dictionary /
 ///   system-table subquery, nested `IN`, or a `GLOBAL IN` external table), which throws
 ///   `Cannot serialize FutureSetFromSubquery with no query plan`;
-/// - unserializable: the source is clonable, so `FutureSetFromSubquery::buildOrderedSetInplace` keeps the
-///   plan, but a step in it has no `serialize` (e.g. `numbers()` -> `ReadFromSystemNumbers`, which declares
-///   `clone` but not `isSerializable`), which throws `Method serialize is not implemented`.
-/// Cloneable is not serializable, so the plan has to be checked, not just its presence.
+/// - unserializable: the plan is still there - either `FutureSetFromSubquery::buildOrderedSetInplace` kept
+///   it by cloning a clonable source, or no in-place build was attempted at all (only an `IN` over the
+///   primary key runs one) - but a step in it has no `serialize`. `generateRandom()` is such a source: it is
+///   read through `ReadFromStorageStep`, whose `isSerializable` accepts only `system.one`, and shipping it
+///   throws `Method serialize is not implemented`. It must never be shipped anyway - it is
+///   non-deterministic, so every replica would build a different set.
+/// A present plan says nothing about serializability, so the plan itself has to be checked.
 static bool dagReferencesUnshippableSubquerySet(const ActionsDAG & dag)
 {
     for (const auto & node : dag.getNodes())
@@ -536,10 +539,10 @@ public:
         // build plan fragment
         auto [plan_fragment, context] = buildPlanFragment(current_node);
 
-        /// The fragment is serialized and shipped to the replicas. If it references an `IN (subquery)` set
-        /// whose plan is gone (a non-clonable subquery source, or a `GLOBAL IN` external table), it cannot be
-        /// serialized (an `IN` set is only ever shipped as its subquery plan). Keep such a fragment local:
-        /// leaving the split marker unconverted makes it a pass-through, so the read runs single-node.
+        /// The fragment is serialized and shipped to the replicas. An `IN` set is only ever shipped as its
+        /// subquery plan, so a referenced set whose plan is missing or unserializable makes the whole
+        /// fragment unserializable. Keep it local: leaving the split marker unconverted makes it a
+        /// pass-through, so the read runs single-node.
         if (fragmentHasUnshippableSubquerySet(plan_fragment->getRootNode()))
             return;
 
