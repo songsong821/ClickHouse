@@ -828,7 +828,7 @@ void HashJoin::dropRightBlocksKeptForAnotherAlgorithm()
     {
         for (auto & stored_columns : worker.columns)
         {
-            data->allocated_size -= stored_columns.allocatedBytes();
+            data->subBytes(data->allocated_size, stored_columns.allocatedBytes());
             /// No cell refers to the block, but null the index entry anyway, so that a stale
             /// reference trips the chassert in `StoredColumnsIndex::at` rather than reading freed
             /// memory.
