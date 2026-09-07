@@ -2360,7 +2360,7 @@ bool StorageReplicatedMergeTree::checkPartChecksumsAndAddCommitOps(
     else
     {
         LOG_WARNING(log, "checkPartAndAddToZooKeeper: node {} already exists. Will not commit any nodes.",
-                    (fs::path(replica_path) / "parts" / part_name).string());
+                    zkutil::joinZooKeeperPath(replica_path, "parts", part_name));
     }
     return part_found;
 }
