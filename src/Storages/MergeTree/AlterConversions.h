@@ -48,16 +48,20 @@ public:
     /// `name` is the name the column has in the part, not in the current metadata.
     bool isColumnDropped(const std::string & name, bool share_nested_offsets = true) const;
 
-    /// Whether the pending rename of `new_name` still has to be applied when reading a part whose
-    /// columns are given by `part_has_column`. It does not when the part already stores the new name
-    /// and no other pending rename takes that name as its source: such a part was written after the
-    /// rename was carried out (a merge does that while keeping the sources' data version, which is
-    /// what decides pendingness), so mapping back would look for a file that is not there. The
-    /// second condition matters because a freed name can be handed to another column, as in
-    /// `RENAME A TO C, RENAME B TO A`, where a part's `A` holds what is now `C`.
+    /// The same as `isColumnRenamed` above, asked of a part whose columns are given by
+    /// `part_has_column`: a rename the part already stores the result of does not have to be applied
+    /// to it. That is the case when the part holds the new name and no other pending rename takes
+    /// that name as its source. Such a part was written after the rename was carried out (a merge
+    /// does that while keeping the sources' data version, which is what decides pendingness), so
+    /// mapping back would look for a file that is not there. The second condition matters because a
+    /// freed name can be handed to another column, as in `RENAME A TO C, RENAME B TO A`, where a
+    /// part's `A` holds what is now `C`.
     template <typename HasColumn>
-    bool needApplyRename(const std::string & new_name, HasColumn && part_has_column) const
+    bool isColumnRenamed(const std::string & new_name, HasColumn && part_has_column) const
     {
+        if (!isColumnRenamed(new_name))
+            return false;
+
         if (part_has_column(getColumnOldName(new_name)))
             return true;
 

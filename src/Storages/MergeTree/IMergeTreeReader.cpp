@@ -357,11 +357,8 @@ std::pair<String, String> IMergeTreeReader::getStorageAndSubcolumnNameInPart(con
     auto name_in_storage = required_column.getNameInStorage();
     auto subcolumn_name = required_column.getSubcolumnName();
 
-    if (alter_conversions->isColumnRenamed(name_in_storage)
-        && alter_conversions->needApplyRename(name_in_storage, [&](const auto & name) { return part_columns.has(name); }))
-    {
+    if (alter_conversions->isColumnRenamed(name_in_storage, [&](const auto & name) { return part_columns.has(name); }))
         name_in_storage = alter_conversions->getColumnOldName(name_in_storage);
-    }
 
     /// A special case when we read subcolumn of shared offsets of Nested.
     /// E.g. instead of requested column "n.arr1.size0" we must read column "n.size0" from disk.
