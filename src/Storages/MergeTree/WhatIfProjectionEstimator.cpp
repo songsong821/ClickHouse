@@ -372,6 +372,7 @@ WhatIfCandidateResult evaluateProjection(
     const auto & data = read_step->getMergeTreeData();
 
     WhatIfCandidateResult result;
+    result.kind = WhatIfCandidateResult::Projection;
     result.name = stored_projection.name;
     result.type = stored_projection.type == ProjectionDescription::Type::Aggregate ? "projection (aggregate)" : "projection (normal)";
     result.status = WhatIfCandidateResult::NotApplicable;

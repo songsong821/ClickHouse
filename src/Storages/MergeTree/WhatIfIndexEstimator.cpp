@@ -32,6 +32,8 @@
 #include <Common/quoteString.h>
 #include <Core/Settings.h>
 
+#include <optional>
+
 namespace DB
 {
 
@@ -41,6 +43,7 @@ namespace Setting
     extern const SettingsBool use_skip_indexes;
     extern const SettingsBool use_skip_indexes_if_final;
     extern const SettingsBool use_skip_indexes_for_disjunctions;
+    extern const SettingsBool optimize_read_in_order;
     extern const SettingsString ignore_data_skipping_indices;
     extern const SettingsString force_data_skipping_indices;
 }
@@ -164,7 +167,7 @@ WhatIfResult buildResultWithoutScan(
 
 /// Drop the inner-SELECT settings we pin for a deterministic local baseline
 /// `force_data_skipping_indices` is collected into `removed_force` so we can re-check it later
-void stripWhatIfControlledSettings(IAST * node, std::vector<String> & removed_force)
+void stripWhatIfControlledSettings(IAST * node, std::vector<String> & removed_force, std::optional<bool> & removed_read_in_order)
 {
     if (!node)
         return;
@@ -181,6 +184,12 @@ void stripWhatIfControlledSettings(IAST * node, std::vector<String> & removed_fo
                         removed_force.push_back(change.value.template safeGet<String>());
                         return true;
                     }
+                    /// pinned for planning below, the value still decides the ORDER BY tie-break
+                    if (change.name == "optimize_read_in_order")
+                    {
+                        removed_read_in_order = change.value.template safeGet<UInt64>() != 0;
+                        return true;
+                    }
                     /// keep the estimate local, use_skip_indexes_on_data_read: avoid over-reporting marks
                     return change.name == "enable_parallel_replicas"
                         || change.name == "allow_experimental_parallel_reading_from_replicas"
@@ -190,7 +199,7 @@ void stripWhatIfControlledSettings(IAST * node, std::vector<String> & removed_fo
     }
 
     for (const auto & child : node->children)
-        stripWhatIfControlledSettings(child.get(), removed_force);
+        stripWhatIfControlledSettings(child.get(), removed_force, removed_read_in_order);
 }
 
 /// Check applicability, then try empirical → statistical → applicability_only
@@ -356,12 +365,17 @@ WhatIfResult estimateHypotheticalIndexes(
     auto local_context = Context::createCopy(context);
     local_context->setSetting("enable_parallel_replicas", Field{UInt64{0}});
     local_context->setSetting("use_skip_indexes_on_data_read", Field{UInt64{0}});
+    /// read-in-order is applied to the plan after the projection passes have run, and it rewrites the
+    /// sort above the read, so keep it out of the baseline and decide the tie-break from the setting
+    local_context->setSetting("optimize_read_in_order", Field{UInt64{0}});
     /// Grab the forced index names, drop them for baseline planning, re-check them at the end
     local_context->resetSettingsToDefaultValue({"force_data_skipping_indices"});
 
     auto select_query_copy = select_query->clone();
     std::vector<String> forced_strings;
-    stripWhatIfControlledSettings(select_query_copy.get(), forced_strings);
+    std::optional<bool> inner_read_in_order;
+    stripWhatIfControlledSettings(select_query_copy.get(), forced_strings, inner_read_in_order);
+    const bool wants_read_in_order = inner_read_in_order.value_or(context->getSettingsRef()[Setting::optimize_read_in_order]);
 
     if (forced_strings.empty() && context->getSettingsRef()[Setting::force_data_skipping_indices].changed)
         forced_strings.push_back(context->getSettingsRef()[Setting::force_data_skipping_indices]);
@@ -591,8 +605,11 @@ WhatIfResult estimateHypotheticalIndexes(
         result.candidates.push_back(std::move(combined));
     }
 
-    /// the ORDER BY tie-break exists only when the planner would really read in order
-    const auto [outer_sorting, subtree_above_reading] = optimization_settings.read_in_order
+    /// the tie-break follows the planner's own gate, evaluated with the read-in-order setting the
+    /// user asked for rather than the one pinned for the baseline plan
+    auto gate_context = Context::createCopy(plan_context);
+    gate_context->setSetting("optimize_read_in_order", Field{UInt64{wants_read_in_order}});
+    const auto [outer_sorting, subtree_above_reading] = QueryPlanOptimizationSettings(gate_context).read_in_order
         ? findOuterSorting(plan.getRootNode(), read_step)
         : std::pair<const SortingStep *, const QueryPlan::Node *>{};
     for (const auto & projection : store.getProjectionsForTable(data.getStorageID()))

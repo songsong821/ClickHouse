@@ -13,6 +13,9 @@ class WriteBuffer;
 /// One hypothetical object evaluated against the baseline read
 struct WhatIfCandidateResult
 {
+    enum Kind { Index, Projection };
+    Kind kind = Index;
+
     String name;
     /// Index type: `minmax`, `set`, ...
     String type;

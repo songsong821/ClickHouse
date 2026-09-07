@@ -38,10 +38,10 @@ void WhatIfResult::format(WriteBuffer & out) const
         if (idx.estimated_rows)
             writeString(fmt::format("  rows:         {}\n", *idx.estimated_rows), out);
 
-        /// projection bytes are measured, a projection granule is not a base granule
+        /// projection bytes are measured, a projection granule is not a base granule, so never scale them
         if (idx.estimated_bytes)
             writeString(fmt::format("  est_bytes:    {}\n", ReadableSize(*idx.estimated_bytes)), out);
-        else if (baseline_marks > 0 && baseline_est_bytes > 0)
+        else if (idx.kind == WhatIfCandidateResult::Index && baseline_marks > 0 && baseline_est_bytes > 0)
         {
             UInt64 hypo_bytes = static_cast<UInt64>(
                 static_cast<double>(baseline_est_bytes) * static_cast<double>(idx.estimated_marks) / static_cast<double>(baseline_marks));

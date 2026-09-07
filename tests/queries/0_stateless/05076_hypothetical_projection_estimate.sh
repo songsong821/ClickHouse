@@ -80,6 +80,9 @@ done
 echo "--- the INDEX form, which the optimizer serves the read from ---"
 compare p_idx "INDEX b TYPE basic" "SELECT count() FROM TABLE WHERE b = 42"
 
+echo "--- an ORDER BY the table's own key must not hide the projection ---"
+compare p_b "(SELECT a, b, v ORDER BY b)" "SELECT a, b, v FROM TABLE WHERE b = 42 ORDER BY a"
+
 echo "--- not applicable cases ---"
 $CLICKHOUSE_CLIENT -q "
     CREATE HYPOTHETICAL PROJECTION p_key ON t_est (SELECT a, b, v ORDER BY b);
