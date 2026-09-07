@@ -8,9 +8,10 @@ namespace DB
 /// Thread-local access to the CPU lease of the currently-running executor worker thread.
 ///
 /// A worker thread publishes its lease for the duration of its execution loop (see
-/// `CurrentCPULeaseScope`), so code deep inside a processor's `work()` (blocking I/O) or the
-/// executor's idle wait can PARK the lease — releasing the CPU slot while the thread is not using
-/// CPU — through `CPULeaseParkGuard`, without threading the lease pointer through every call.
+/// `WorkloadResources` in the pipeline executor), so code deep inside a processor's `work()`
+/// (blocking I/O) or the executor's idle wait can PARK the lease — releasing the CPU slot while
+/// the thread is not using CPU — through `CPULeaseParkGuard`, without threading the lease pointer
+/// through every call.
 /// Everything here is a no-op when the current thread has no CPU lease (e.g. the concurrency
 /// control path, non-preemptive slots, or a thread that is not an executor worker).
 
