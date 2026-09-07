@@ -204,6 +204,10 @@ $CLICKHOUSE_CLIENT --query "SYSTEM FLUSH LOGS query_log;"
 
 SMALL_CACHE_MEMORY=$(read_metric 'memory_growth_small_cache' 'memory_usage')
 LARGE_CACHE_MEMORY=$(read_metric 'memory_growth_large_cache' 'memory_usage')
+# Both measured scans must have been served from the cache. If the first one had missed, the
+# ratio below would compare a read from disk against a read from the cache, and would say
+# nothing about the memory of a query being independent of the data retained in the cache.
+SMALL_CACHE_HITS=$(read_metric 'memory_growth_small_cache' "ProfileEvents['ColumnsCacheHits']")
 LARGE_CACHE_HITS=$(read_metric 'memory_growth_large_cache' "ProfileEvents['ColumnsCacheHits']")
 
 # The retained data must never exceed the configured cache size - that is what makes
@@ -220,9 +224,10 @@ if ! [[ "$SMALL_CACHE_MEMORY" =~ ^[0-9]+$ ]] || [[ "$SMALL_CACHE_MEMORY" -le 0 ]
     || ! [[ "$LARGE_CACHE_BYTES" =~ ^[0-9]+$ ]]
 then
     echo "FAIL: missing growth measurements (small: '$SMALL_CACHE_MEMORY'/'$SMALL_CACHE_BYTES', large: '$LARGE_CACHE_MEMORY'/'$LARGE_CACHE_BYTES')"
-elif ! [[ "$LARGE_CACHE_HITS" =~ ^[0-9]+$ ]] || [[ "$LARGE_CACHE_HITS" -le 0 ]]
+elif ! [[ "$SMALL_CACHE_HITS" =~ ^[0-9]+$ ]] || [[ "$SMALL_CACHE_HITS" -le 0 ]] \
+    || ! [[ "$LARGE_CACHE_HITS" =~ ^[0-9]+$ ]] || [[ "$LARGE_CACHE_HITS" -le 0 ]]
 then
-    echo "FAIL: the measured query did not read from the cache (hits: '$LARGE_CACHE_HITS')"
+    echo "FAIL: a measured query did not read from the cache (hits: '$SMALL_CACHE_HITS' with the small cache, '$LARGE_CACHE_HITS' with the large one)"
 elif [[ "$CACHE_SIZE_RESPECTED" != "1" ]]
 then
     echo "FAIL: retained cache data exceeds columns_cache_size"
