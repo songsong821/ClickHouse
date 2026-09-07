@@ -1024,27 +1024,17 @@ ReturnType parseDateTimeBestEffortImpl(
             static_cast<UInt16>(month),
             static_cast<UInt16>(day_of_month));
 
-    /// For usual DateTime check if value is within supported range
-    if constexpr (!is_64)
-    {
-        if (*res_maybe < 0 || *res_maybe > UINT32_MAX)
-            return on_error(ErrorCodes::VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE, "Value {} is out of bounds of type DateTime", *res_maybe);
-    }
-
     res = *res_maybe;
 
     if (has_time_zone_offset)
-    {
         adjust_time_zone();
 
-        /// After timezone adjustment, the value may have shifted outside the valid range.
-        /// For example, "2106-02-07 06:28:15-01:00" is within range before adjustment,
-        /// but after converting to UTC it exceeds UINT32_MAX.
-        if constexpr (!is_64)
-        {
-            if (res < 0 || static_cast<uint64_t>(res) > UINT32_MAX)
-                return on_error(ErrorCodes::VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE, "Value {} is out of bounds of type DateTime", res);
-        }
+    /// Only the adjusted value has to be in range: "2106-02-07 07:28:15+01:00" is past the maximum before the
+    /// offset is applied and is exactly the maximum after it, and the same holds at the lower bound.
+    if constexpr (!is_64)
+    {
+        if (res < 0 || res > UINT32_MAX)
+            return on_error(ErrorCodes::VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE, "Value {} is out of bounds of type DateTime", res);
     }
 
     return ReturnType(true);

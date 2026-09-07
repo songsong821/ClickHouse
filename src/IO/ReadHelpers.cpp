@@ -2602,7 +2602,9 @@ constexpr Int128 datetime64_min_seconds = Int128(DATE_LUT_MIN_EXTEND_DAY_NUM) * 
 bool datetime64TicksInRange(DateTime64::NativeType ticks, UInt32 scale)
 {
     const Int128 multiplier = DecimalUtils::scaleMultiplier<Int128>(scale);
-    return Int128(ticks) <= datetime64_max_seconds * multiplier && Int128(ticks) >= datetime64_min_seconds * multiplier;
+    /// The last second is representable up to its last tick, while the first one starts exactly on the second
+    return Int128(ticks) <= datetime64_max_seconds * multiplier + multiplier - 1
+        && Int128(ticks) >= datetime64_min_seconds * multiplier;
 }
 
 /// Scale `value` by the pending decimal places to `DateTime64` ticks and store it; false on overflow. Bound

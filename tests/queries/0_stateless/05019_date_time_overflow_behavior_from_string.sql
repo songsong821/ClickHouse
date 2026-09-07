@@ -79,3 +79,13 @@ SELECT * FROM format(JSONEachRow, 'v DateTime64(3)', '{"v":-99999999999999}'); -
 SELECT * FROM format(Values, 'v DateTime64(3)', '(99999999999999)'); -- { serverError VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE }
 SELECT * FROM format(JSONEachRow, 'v DateTime64(3)', '{"v":253402300799}');
 SELECT * FROM format(JSONEachRow, 'v DateTime64(3)', '{"v":1700000000}');
+
+SELECT 'throw, the last second keeps its fractional ticks';
+SELECT * FROM format(JSONEachRow, 'v DateTime64(3)', '{"v":253402300799.5}');
+SELECT * FROM format(JSONEachRow, 'v DateTime64(3)', '{"v":253402300799.999}');
+SELECT * FROM format(Values, 'v DateTime64(3)', '(253402300799.5)');
+
+SELECT 'throw, the range is checked after the timezone offset is applied';
+SELECT parseDateTimeBestEffort('2106-02-07 07:28:15+01:00', 'UTC'), parseDateTimeBestEffort('1969-12-31 23:00:00-01:00', 'UTC');
+SELECT parseDateTimeBestEffortOrNull('2106-02-07 07:28:15+01:00', 'UTC'), toDateTime('2106-02-07 07:28:15+01:00', 'UTC');
+SELECT parseDateTimeBestEffort('2106-02-07 08:28:15+01:00', 'UTC'); -- { serverError VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE }

@@ -28,3 +28,10 @@ throw, an unquoted numeric token is checked too
 throw, a DateTime64 numeric token is checked against the calendar range
 9999-12-31 23:59:59.000
 2023-11-14 22:13:20.000
+throw, the last second keeps its fractional ticks
+9999-12-31 23:59:59.500
+9999-12-31 23:59:59.999
+9999-12-31 23:59:59.500
+throw, the range is checked after the timezone offset is applied
+2106-02-07 06:28:15	1970-01-01 00:00:00
+2106-02-07 06:28:15	2106-02-07 06:28:15
