@@ -142,6 +142,11 @@ private:
     size_t cache_row_end_max = 0;
     /// One column per result column: the rows read so far; nullptr for columns that are not read.
     MutableColumns cache_accumulated_columns;
+    /// The size the accumulated columns of the range are expected to reach, estimated from the
+    /// size of a row of every column as it is first copied. A range that cannot stay resident in
+    /// the cache is dropped as soon as this estimate says so, before its rows are copied and
+    /// before memory is reserved for them.
+    size_t cache_estimated_range_bytes = 0;
     /// Invalidation generation captured when the read of the range started.
     /// Passed to ColumnsCache::set so a deferred write is dropped if the table was
     /// invalidated (e.g. RENAME COLUMN), or the whole cache dropped by `SYSTEM DROP

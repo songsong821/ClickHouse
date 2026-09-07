@@ -268,6 +268,7 @@ size_t MergeTreeReaderWide::readRows(
                 cache_row_end_max = row_end_max;
                 cache_accumulated_columns.clear();
                 cache_accumulated_columns.resize(num_columns);
+                cache_estimated_range_bytes = 0;
             }
 
             for (size_t pos = 0; pos < num_columns; ++pos)
@@ -365,6 +366,7 @@ void MergeTreeReaderWide::resetColumnsCacheState()
 {
     cache_write_pending = false;
     cache_accumulated_columns.clear();
+    cache_estimated_range_bytes = 0;
 
     cache_serving = false;
     cache_serving_columns.clear();
@@ -552,10 +554,14 @@ bool MergeTreeReaderWide::canContinueColumnsCacheWrite() const
 
     /// A range whose columns together outweigh the whole cache cannot stay resident, so stop
     /// copying its rows instead of holding them until the end of the range.
+    /// The memory the accumulated copy holds, not the size of the rows in it, is what has to
+    /// stay within the cache: `allocatedBytes` also counts what was reserved for the rest of
+    /// the range, so a range that turns out to be larger than its first blocks suggested is
+    /// stopped when its memory grows past the cache, not when its rows do.
     size_t accumulated_bytes = 0;
     for (const auto & column : cache_accumulated_columns)
         if (column)
-            accumulated_bytes += column->byteSize();
+            accumulated_bytes += column->allocatedBytes();
 
     return accumulated_bytes <= columns_cache->maxSizeInBytes();
 }
@@ -568,17 +574,41 @@ void MergeTreeReaderWide::accumulateRowsForColumnsCache(size_t pos, const IColum
     if (partially_read_columns.contains(columns_to_read[pos].name))
         return;
 
-    auto & accumulated = cache_accumulated_columns[pos];
-    if (!accumulated)
+    if (!cache_accumulated_columns[pos])
     {
-        accumulated = column.cloneEmpty();
-        accumulated->reserve(cache_row_end_max - cache_row_begin);
+        /// The rows of the whole range are reserved at once, so that the copy does not grow
+        /// block by block, but only after the size of the range is known to fit in the cache:
+        /// the range of a task can be far larger than the cache, and reserving for it blindly
+        /// would spike the memory of the query - by the whole range for a fixed-width column -
+        /// however early the accumulation is stopped afterwards. The rows read so far give the
+        /// size of a row of this column, and a range whose columns together outweigh the cache
+        /// can never become an entry, so it is dropped here instead of after being copied.
+        const size_t range_rows = cache_row_end_max - cache_row_begin;
+        const size_t bytes_per_row = std::max<size_t>(1, column.byteSize() / std::max<size_t>(1, column.size()));
+        cache_estimated_range_bytes += bytes_per_row * range_rows;
+
+        const size_t max_cache_bytes = columns_cache->maxSizeInBytes();
+        if (cache_estimated_range_bytes > max_cache_bytes)
+        {
+            LOG_TEST(log, "Not caching the range [{}, {}): its estimated size {} outweighs the cache ({})",
+                cache_row_begin, cache_row_end_max, cache_estimated_range_bytes, max_cache_bytes);
+
+            resetColumnsCacheState();
+            return;
+        }
+
+        auto accumulated = column.cloneEmpty();
+        /// The estimate above bounds the reservation by the size of the cache, unless the size of
+        /// a row was underestimated; cap the rows as well, so that a column whose rows are
+        /// heavier than its first block suggested cannot reserve more than the cache holds.
+        accumulated->reserve(std::min(range_rows, std::max(rows, max_cache_bytes / bytes_per_row)));
+        cache_accumulated_columns[pos] = std::move(accumulated);
     }
 
     /// This copy is the one the cache entry is made of: the accumulated column is moved into
     /// the entry when the range is complete, and the result column stays uniquely owned by the
     /// read in progress.
-    accumulated->insertRangeFrom(column, offset, rows);
+    cache_accumulated_columns[pos]->insertRangeFrom(column, offset, rows);
 }
 
 void MergeTreeReaderWide::writeToColumnsCacheIfRangeComplete()
@@ -654,6 +684,7 @@ void MergeTreeReaderWide::writeToColumnsCacheIfRangeComplete()
 
     cache_write_pending = false;
     cache_accumulated_columns.clear();
+    cache_estimated_range_bytes = 0;
 }
 
 void MergeTreeReaderWide::addStreams(
