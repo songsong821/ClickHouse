@@ -143,7 +143,11 @@ const std::unordered_set<String> non_deterministic_functions = {
     "quantileExactExclusive", "quantileExactInclusive",
     "quantilesExactExclusive", "quantilesExactInclusive",
     "quantileInterpolatedWeighted", "quantilesInterpolatedWeighted",
-    "quantileExactWeightedInterpolated", "quantilesExactWeightedInterpolated",
+    /// `quantilePrometheusHistogram` accumulates the cumulative bucket value per
+    /// bucket bound, and that value may be a `Float64` — so the per-bucket sums
+    /// are order-dependent, unlike the `UInt64`-weighted
+    /// `quantileExactWeightedInterpolated`, which stays exact and is therefore
+    /// deliberately NOT listed here.
     "quantilePrometheusHistogram", "quantilesPrometheusHistogram",
     /// Order-dependent or floating-point aggregates whose State/Merge path
     /// can differ from direct computation. `sum` / `sumWithOverflow` are
