@@ -7,36 +7,36 @@
       "versionId": "6b659816bd63442be260ef7cbeb6670c3540f9a97a0f4d909f5ea5d10189d7f2",
       "translations": {
         "es": {
-          "updatedAt": "2026-09-06T13:22:03.652Z",
+          "updatedAt": "2026-09-07T01:02:58.708Z",
           "fileName": "docs.json"
         },
         "ja": {
-          "updatedAt": "2026-09-06T13:22:03.832Z",
+          "updatedAt": "2026-09-07T01:02:58.900Z",
           "fileName": "docs.json"
         },
         "fr": {
-          "updatedAt": "2026-09-06T13:22:05.095Z",
+          "updatedAt": "2026-09-07T01:03:00.013Z",
           "fileName": "docs.json",
           "postProcessHash": "2cd43b34a2c6166b3bd37f7e8dc4eff2f34bfe31efb97a24235168a15aa803ba"
         },
         "ru": {
-          "updatedAt": "2026-09-06T13:22:04.503Z",
+          "updatedAt": "2026-09-07T01:02:59.452Z",
           "fileName": "docs.json"
         },
         "pt-BR": {
-          "updatedAt": "2026-09-06T13:22:04.293Z",
+          "updatedAt": "2026-09-07T01:02:59.276Z",
           "fileName": "docs.json"
         },
         "zh": {
-          "updatedAt": "2026-09-06T13:22:04.709Z",
+          "updatedAt": "2026-09-07T01:02:59.641Z",
           "fileName": "docs.json"
         },
         "ko": {
-          "updatedAt": "2026-09-06T13:22:04.060Z",
+          "updatedAt": "2026-09-07T01:02:59.079Z",
           "fileName": "docs.json"
         },
         "ar": {
-          "updatedAt": "2026-09-06T13:22:04.884Z",
+          "updatedAt": "2026-09-07T01:02:59.828Z",
           "fileName": "docs.json"
         }
       },
@@ -32994,47 +32994,47 @@
     },
     {
       "fileId": "e1f06990d3d098e54da23644f10831286a3eac12225cd435dc6592ef386653cc",
-      "versionId": "abe3a375b06a67cf02bc23363e57a8c6edd83c7f3401c55b8f9760d33a6ffcf3",
+      "versionId": "6608d004857e40674f11150b44075ff85366befbef42f69bc5de118dabdebd19",
       "translations": {
         "es": {
-          "updatedAt": "2026-08-29T01:49:28.059Z",
+          "updatedAt": "2026-09-07T01:03:05.389Z",
           "fileName": "es/concepts/features/tools-and-utilities/clickhouse-local.mdx",
-          "postProcessHash": "a6f25366a18e453bf61bb316951226d21d661c1111925d35b02bc21306e1ef51"
-        },
-        "zh": {
-          "updatedAt": "2026-08-29T01:49:28.060Z",
-          "fileName": "zh/concepts/features/tools-and-utilities/clickhouse-local.mdx",
-          "postProcessHash": "2e868e59df4dc9fad89c7f84774ad367cfb65c89a28feb6a79f600eddc67ab1c"
+          "postProcessHash": "62f7e17d26ca3fd5106784bb139b76944ddbbffe60002722f95de9b5ecfb435e"
         },
         "pt-BR": {
-          "updatedAt": "2026-08-29T01:49:28.061Z",
+          "updatedAt": "2026-09-07T01:03:05.390Z",
           "fileName": "pt-BR/concepts/features/tools-and-utilities/clickhouse-local.mdx",
-          "postProcessHash": "4626c9bd76294fca2325fb90da976c044a3485569778bdd890f95d52ad06752a"
-        },
-        "fr": {
-          "updatedAt": "2026-08-29T01:49:28.064Z",
-          "fileName": "fr/concepts/features/tools-and-utilities/clickhouse-local.mdx",
-          "postProcessHash": "0d8c06649629e74ea20ea5e35c2e926e253f1f1fc0c33c4c217d767dab7a52aa"
-        },
-        "ru": {
-          "updatedAt": "2026-08-29T01:49:28.069Z",
-          "fileName": "ru/concepts/features/tools-and-utilities/clickhouse-local.mdx",
-          "postProcessHash": "4302c224afd3732c6b0be6e949a2b5368c2b7cc8217079262204fe67dc2e3555"
+          "postProcessHash": "15081dedbaaa56cf872c91b678b64e67cc41e3166632f318429c631d7787182a"
         },
         "ko": {
-          "updatedAt": "2026-08-29T01:49:28.071Z",
+          "updatedAt": "2026-09-07T01:03:05.391Z",
           "fileName": "ko/concepts/features/tools-and-utilities/clickhouse-local.mdx",
-          "postProcessHash": "373d18073fd1a9f91b34f0da233565ded073a5cedb41ce443337879ea2de63f7"
+          "postProcessHash": "2088763b37d63a054456e1f6b3c877ab5d413a2a8a8ed977dabf3674861c7b25"
         },
         "ja": {
-          "updatedAt": "2026-08-29T01:49:28.072Z",
+          "updatedAt": "2026-09-07T01:03:05.392Z",
           "fileName": "ja/concepts/features/tools-and-utilities/clickhouse-local.mdx",
-          "postProcessHash": "83b208b62a55b496113697cb9eea0267214bcdde8b1c9331c49f45d85368bef8"
+          "postProcessHash": "8c64dddf085debb06b5ea89daac398983117865e3e14bd24ab9b94834c9a6f19"
+        },
+        "fr": {
+          "updatedAt": "2026-09-07T01:03:05.392Z",
+          "fileName": "fr/concepts/features/tools-and-utilities/clickhouse-local.mdx",
+          "postProcessHash": "6fbc93e36305910fe74dd53da54acf7a1b48a1846aa3ab1733d44dd746954b72"
+        },
+        "ru": {
+          "updatedAt": "2026-09-07T01:03:05.393Z",
+          "fileName": "ru/concepts/features/tools-and-utilities/clickhouse-local.mdx",
+          "postProcessHash": "ee5cb4bd5223534dfe2b51ffd2dd96a5d872d80bad82f22492b76d87cb87ebde"
+        },
+        "zh": {
+          "updatedAt": "2026-09-07T01:03:05.394Z",
+          "fileName": "zh/concepts/features/tools-and-utilities/clickhouse-local.mdx",
+          "postProcessHash": "6091f77e1dea23f58261fc7446e4e48e4f905419881d6b1186c61bf32a322b1e"
         },
         "ar": {
-          "updatedAt": "2026-08-29T01:49:28.073Z",
+          "updatedAt": "2026-09-07T01:03:05.395Z",
           "fileName": "ar/concepts/features/tools-and-utilities/clickhouse-local.mdx",
-          "postProcessHash": "9c337590a69759539dd83e347d140ef1ca3f92e4b42e41863ae2ee57e98d9d60"
+          "postProcessHash": "863fea23bab2818b44e7da4fd824213ce64de24c32e05880e6ab2218735bbc6c"
         }
       },
       "fileName": "concepts/features/tools-and-utilities/clickhouse-local.mdx"
