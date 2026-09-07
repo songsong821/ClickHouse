@@ -304,7 +304,7 @@ void registerStatementHypotheticalProjection(StatementFactory & factory)
         .description = R"DOCS_MD(
 Hypothetical projections are virtual, session-scoped projections that you can attach to a `MergeTree` family table without actually building or storing them. They exist only inside the current session and are listed by [`EXPLAIN WHATIF`](/reference/statements/explain#explain-whatif).
 
-`EXPLAIN WHATIF` estimates normal (sorted) hypothetical projections: how many marks, rows and bytes the projection read would touch for a query, and whether the optimizer would choose it over the base table. Aggregate projections and projections with a `WHERE` clause are listed but not estimated yet. The session's hypothetical projections are also visible in [`system.hypothetical_projections`](/reference/system-tables/hypothetical_projections).
+`EXPLAIN WHATIF` estimates normal (sorted) hypothetical projections: how many marks and rows the projection read would touch for a query, and whether the optimizer would choose it over the base table. Aggregate projections and projections with a `WHERE` clause are listed but not estimated yet. The session's hypothetical projections are also visible in [`system.hypothetical_projections`](/reference/system-tables/hypothetical_projections).
 
 ## CREATE HYPOTHETICAL PROJECTION {#create-hypothetical-projection}
 
