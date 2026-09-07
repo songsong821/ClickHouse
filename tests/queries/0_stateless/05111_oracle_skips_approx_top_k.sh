@@ -72,6 +72,20 @@ probe()
     local before
     local after
 
+    # A zero delta on its own does not prove the oracle gate rejected the spelling: it holds
+    # just as well when the query never reached `QueryOracleChecker` at all. If, say,
+    # `approx_top_count` or `anova` stopped resolving as an aggregate, the query would fail
+    # before the gate and the probe would still print `not checked`. So first run the very
+    # same query with no fuzzer and no oracle and require it to succeed - that separates
+    # "unsafe spelling was skipped" from "this spelling is broken". A `FORMAT Null` is fine
+    # here precisely because the oracle is off in this run, so it cannot make the check below
+    # vacuous, and the counter cannot move.
+    if ! $CLICKHOUSE_CLIENT --query "SELECT $aggregates FROM oracle_approx_top WHERE v > 5 FORMAT Null"
+    then
+        echo "$label is not a valid query"
+        return
+    fi
+
     before=$(get_counter)
     for _ in $(seq 1 3)
     do
