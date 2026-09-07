@@ -138,7 +138,9 @@ bool AsynchronousReadBufferFromFileDescriptor::nextImpl()
     size_t bytes_read = result.size - result.offset;
     file_offset_of_buffer_end = result.file_offset_of_buffer_end;
 
-    if (throttler)
+    /// The local read throttler exists to keep the load on the block device within the configured
+    /// budget, so the data that was copied from the OS page cache must not consume its tokens.
+    if (throttler && !result.from_os_page_cache)
         throttler->throttle(result.size);
 
     if (bytes_read)
