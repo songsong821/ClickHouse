@@ -128,7 +128,7 @@ private:
     void addBlockToJoinImpl(Block block);
 
     /// Split the bucket held in memory in two, half of it onto disk. Caller holds `hash_join_mutex`.
-    void repartitionCurrentBucket(size_t bucket_index, size_t prev_keys_num, Block leftover);
+    void repartitionCurrentBucket(size_t prev_keys_num, Block leftover);
     bool canForceRepartition() const;
     bool forcedSpillPending() const;
 

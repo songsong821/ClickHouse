@@ -327,8 +327,8 @@ GraceHashJoin::GraceHashJoin(
             "join_algorithm = 'grace_hash' is external from the first block and needs a spill threshold, but neither "
             "max_bytes_before_external_join nor max_bytes_ratio_before_external_join resolved to a non-zero value. Set "
             "max_bytes_before_external_join, or set max_bytes_ratio_before_external_join on a server that has memory limits "
-            "configured (the ratio is ignored without them). To keep the join in memory instead, use join_algorithm = 'hash' "
-            "with both of them at 0");
+            "configured (the ratio is ignored without them). Leaving join_algorithm at its default lets ClickHouse "
+            "pick an algorithm that fits the settings you have");
 }
 
 void GraceHashJoin::initBuckets()
@@ -390,7 +390,7 @@ bool GraceHashJoin::checkSizeLimits() const
 bool GraceHashJoin::forcedSpillPending() const
 {
     /// A spill the scheduler asked for is a hint, so it must never fail the query on the bucket limit.
-    /// Left armed when the split is impossible: a bucket too small to split may still grow.
+    /// The request is kept for later rather than cleared: a bucket too small to split may still grow.
     return force_spill && canForceRepartition();
 }
 
@@ -894,8 +894,9 @@ bool GraceHashJoin::canForceRepartition() const
 
 /// Split the bucket held in memory: `rehashBuckets` doubles the bucket count, so about half of its rows
 /// move to the new bucket on disk. Caller holds `hash_join_mutex`; `leftover` is not in the table yet.
-void GraceHashJoin::repartitionCurrentBucket(size_t bucket_index, size_t prev_keys_num, Block leftover)
+void GraceHashJoin::repartitionCurrentBucket(size_t prev_keys_num, Block leftover)
 {
+    const size_t bucket_index = current_bucket->idx;
     // Must use the latest buckets snapshot in case that it has been rehashed by other threads.
     Buckets buckets_snapshot = rehashBuckets();
     force_spill = false;
@@ -957,11 +958,9 @@ void GraceHashJoin::addBlockToJoinImpl(Block block)
     {
         /// No rows for this bucket, but the scheduler asked us to spill: split what is in memory anyway,
         /// otherwise the request is dropped and it frees nothing.
-        {
-            std::lock_guard lock(hash_join_mutex);
-            if (forcedSpillPending())
-                repartitionCurrentBucket(bucket_index, hash_join->getTotalRowCount(), {});
-        }
+        std::lock_guard lock(hash_join_mutex);
+        if (forcedSpillPending())
+            repartitionCurrentBucket(hash_join->getTotalRowCount(), {});
         return;
     }
 
@@ -1014,7 +1013,7 @@ void GraceHashJoin::addBlockToJoinImpl(Block block)
             current_block = {};
         /// else: we did not add the block, so we must include it when re-scattering after rehash.
 
-        repartitionCurrentBucket(bucket_index, prev_keys_num, std::move(current_block));
+        repartitionCurrentBucket(prev_keys_num, std::move(current_block));
 
         /// One split per block, so a bucket can end the build phase above the threshold - a single huge block,
         /// or one whose rows nearly all belong here. The threshold says when to start spilling, it is not a
@@ -1042,7 +1041,7 @@ void GraceHashJoin::onBuildPhaseFinish()
 
     /// The last spill the scheduler asked for may have arrived after the final block for this bucket.
     if (current_bucket && forcedSpillPending())
-        repartitionCurrentBucket(current_bucket->idx, hash_join->getTotalRowCount(), {});
+        repartitionCurrentBucket(hash_join->getTotalRowCount(), {});
 
     hash_join->onBuildPhaseFinish();
 }

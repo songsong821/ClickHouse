@@ -306,7 +306,8 @@ size_t SpillingHashJoin::getSpillableBytes() const
     switch (state.load(std::memory_order_acquire))
     {
         case State::COLLECTING:
-            /// Switching to GraceHashJoin puts everything collected so far on disk.
+            /// Switching to GraceHashJoin puts what was collected on disk, except the one bucket it keeps
+            /// in memory. An upper bound is fine here, the scheduler only ranks candidates by it.
             return concurrent_join ? concurrent_join->getTotalByteCount() : hash_join->getTotalByteCount();
         case State::GRACE_HASH_JOIN:
             return chosen_join->getSpillableBytes();
