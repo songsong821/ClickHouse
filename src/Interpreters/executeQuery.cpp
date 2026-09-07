@@ -3294,6 +3294,16 @@ static void reattachTablesUsedInQuery(const ASTPtr & query, ContextMutablePtr co
             auto internal_context = Context::createCopy(context);
             internal_context->makeQueryContext();
             internal_context->setCurrentQueryId({});
+            /// Run the pair with the server's default settings rather than the outer query's. Copying the
+            /// context copies the settings too, and a setting that only describes how the outer statement
+            /// reads its data can still make the `ATTACH` back fail while the `DETACH` succeeds — which
+            /// leaves the table detached, because the recovery `ATTACH` below would inherit the same
+            /// setting and fail the same way. `04757_distributed_cache_client_id_validation` hit exactly
+            /// that: it reads with a deliberately invalid `distributed_cache_client_id`, the value the
+            /// query is testing the rejection of, and the internal `ATTACH` inherited it and was rejected
+            /// while constructing the table's cache client. The user is kept, so the pair still runs under
+            /// the authorization the preflight above checked; only the settings are reset.
+            internal_context->setSettings(context->getGlobalContext()->getSettingsRef());
             internal_context->setProcessListElement(context->getProcessListElementSafe());
             return internal_context;
         };
