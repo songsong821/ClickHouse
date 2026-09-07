@@ -562,9 +562,14 @@ void CPULeaseAllocation::unparkLease(Lease & lease)
             // unpark() runs from CPULeaseParkGuard's destructor and must not throw. Record the
             // failure -- SERVER_OVERLOADED if the workload queue is full, or INVALID_SCHEDULER_NODE
             // during queue teardown -- so the thread's next renew() surfaces it as a normal query
-            // error instead of hiding it and running on an unbacked borrow.
+            // error instead of hiding it and running on an unbacked borrow. schedule() threw before
+            // the request was enqueued, so failed() will never fire; wake any thread already blocked
+            // in waitForGrant() (the master path waits with no timeout and only re-checks `exception`
+            // on notification) so it observes the failure and stops instead of hanging.
             if (!exception)
                 exception = std::current_exception();
+            for (auto & cv : threads.wake)
+                cv.notify_one();
         }
     }
 }
