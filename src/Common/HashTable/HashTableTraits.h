@@ -37,8 +37,9 @@ struct HasConstructorOfNumberOfElements<HashSetTable<Ts...>> : std::true_type
 {
 };
 
-template <typename... Ts>
-struct HasConstructorOfNumberOfElements<TwoLevelHashSetTable<Ts...>> : std::true_type
+template <typename Key, typename TCell, typename Hash, typename Grower, typename Allocator, Int32 bits_for_bucket>
+struct HasConstructorOfNumberOfElements<TwoLevelHashSetTable<Key, TCell, Hash, Grower, Allocator, bits_for_bucket>>
+    : std::true_type
 {
 };
 
