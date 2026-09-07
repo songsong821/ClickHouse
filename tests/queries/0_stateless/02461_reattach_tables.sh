@@ -1060,11 +1060,26 @@ ${CLICKHOUSE_CLIENT} -q "INSERT INTO t_reattach_mut_kv VALUES (2, 20)"
 check_source_not_detached_for_failing_mutation "DELETE FROM t_reattach_mut_kv IN PARTITION ID 'all' WHERE a IN (SELECT a FROM t_reattach_mut_src)" "NOT_IMPLEMENTED"
 check_source_not_detached_for_failing_mutation "DELETE FROM t_reattach_mut_kv IN PARTITION ID 'all', ID 'other' WHERE a IN (SELECT a FROM t_reattach_mut_src)" "NOT_IMPLEMENTED"
 
+# The `ALTER` carrier reaches the same clause through `getPartitionAndPredicateExpressionForMutationCommand`,
+# which `MutationsInterpreter::prepare` calls before it resolves the commands' predicates and expressions:
+# a target outside the `MergeTree` family rejects the clause there with `NOT_IMPLEMENTED`, again before the
+# predicate's tables are read.
+check_source_not_detached_for_failing_mutation "ALTER TABLE t_reattach_mut_kv DELETE IN PARTITION ID 'all' WHERE a IN (SELECT a FROM t_reattach_mut_src)" "NOT_IMPLEMENTED"
+check_source_not_detached_for_failing_mutation "ALTER TABLE t_reattach_mut_kv UPDATE v = 1 IN PARTITION ID 'all', ID 'other' WHERE a IN (SELECT a FROM t_reattach_mut_src)" "NOT_IMPLEMENTED"
+
 # Without the clause the same target accepts the statement and its mutation does read the predicate's table,
 # so that source must still be randomized: the skip above is about the rejected shape only.
 check_if_detached "DELETE FROM t_reattach_mut_kv WHERE a IN (SELECT a FROM t_reattach_mut_src)" "t_reattach_mut_src"
 
 ${CLICKHOUSE_CLIENT} -q "DROP TABLE t_reattach_mut_kv"
+
+# That same resolution rejects a clause that does not match a `MergeTree` target's partition key
+# (`getPartitionIDFromQuery`), on the lightweight `DELETE` carrier as well as on the `ALTER` one, and a
+# rejection there also precedes the predicate's tables. A clause that does match is resolved fine, so the
+# statement goes on to read the source and must randomize it.
+check_source_not_detached_for_failing_mutation "DELETE FROM t_reattach_mut_mt IN PARTITION ID 'no_such' WHERE a IN (SELECT a FROM t_reattach_mut_src)" "INVALID_PARTITION_VALUE"
+check_source_not_detached_for_failing_mutation "ALTER TABLE t_reattach_mut_mt DELETE IN PARTITION tuple(1, 2, 3) WHERE a IN (SELECT a FROM t_reattach_mut_src)" "INVALID_PARTITION_VALUE"
+check_if_detached "ALTER TABLE t_reattach_mut_mt DELETE IN PARTITION ID 'all' WHERE a IN (SELECT a FROM t_reattach_mut_src) SETTINGS mutations_sync = 1" "t_reattach_mut_src"
 
 # A lightweight `UPDATE` throws on `enable_lightweight_update = 0` as the very first thing its interpreter
 # does, and SQL UDF substitution runs before the predicate's tables are read in both the `UPDATE` and the
@@ -1089,6 +1104,12 @@ check_source_not_detached_for_failing_mutation "ALTER TABLE t_reattach_mut_lw UP
 # and must randomize it — on the lightweight carrier and on the heavy `ALTER` one.
 check_if_detached "UPDATE t_reattach_mut_lw SET b = 1 WHERE a IN (SELECT a FROM t_reattach_mut_src)" "t_reattach_mut_src"
 check_if_detached "ALTER TABLE t_reattach_mut_lw UPDATE b = 1 WHERE a IN (SELECT a FROM t_reattach_mut_src) SETTINGS mutations_sync = 1" "t_reattach_mut_src"
+
+# The `UPDATE` carrier resolves an `IN PARTITION` clause against the target through the same
+# `getPartitionAndPredicateExpressionForMutationCommand`, so a clause that does not match the partition key
+# is rejected before the predicate's tables are read, while a matching one lets the statement reach them.
+check_source_not_detached_for_failing_mutation "UPDATE t_reattach_mut_lw SET b = 1 IN PARTITION ID 'no_such' WHERE a IN (SELECT a FROM t_reattach_mut_src)" "INVALID_PARTITION_VALUE"
+check_if_detached "UPDATE t_reattach_mut_lw SET b = 1 IN PARTITION ID 'all' WHERE a IN (SELECT a FROM t_reattach_mut_src)" "t_reattach_mut_src"
 
 ${CLICKHOUSE_CLIENT} -q "DROP TABLE IF EXISTS t_reattach_mut_lw"
 

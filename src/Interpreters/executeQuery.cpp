@@ -1889,6 +1889,49 @@ MutationCommands deleteQueryMutationCommands(const ASTDeleteQuery & delete_query
     return mutation_commands;
 }
 
+/// Whether the `IN PARTITION` clause a mutation carries can be rejected while it is resolved against the
+/// target. `MutationsInterpreter::prepare` resolves it through
+/// `getPartitionAndPredicateExpressionForMutationCommand` before it resolves the commands' predicates and
+/// expressions, so such a rejection lands before anything reads the tables those name: a target outside the
+/// `MergeTree` family rejects the clause outright with `NOT_IMPLEMENTED`, and a `MergeTree` one still
+/// rejects a clause that does not match its partition key (`getPartitionIDFromQuery`).
+bool mutationPartitionClauseCanBeRejected(
+    const StoragePtr & table, IAST * partition, IAST * partitions, const ContextPtr & context)
+{
+    if (!partition && !partitions)
+        return false;
+
+    /// The resolution also accepts `StorageFromMergeTreeDataPart`, an internal wrapper that a statement's
+    /// target never resolves to.
+    const auto * merge_tree_data = dynamic_cast<const MergeTreeData *>(table.get());
+    if (!merge_tree_data)
+        return true;
+
+    const auto partition_id_resolves = [&](IAST * partition_ast)
+    {
+        try
+        {
+            merge_tree_data->getPartitionIDFromQuery(ASTPtr(partition_ast), context);
+        }
+        catch (const Exception &)
+        {
+            return false;
+        }
+        return true;
+    };
+
+    /// The list form takes precedence, as in the resolution itself.
+    if (partitions)
+    {
+        for (const auto & child : partitions->children)
+            if (!partition_id_resolves(child.get()))
+                return true;
+        return false;
+    }
+
+    return !partition_id_resolves(partition);
+}
+
 /// Whether a `DELETE` statement stops on its own target before `MutationsInterpreter`'s validation reads
 /// the tables its predicate names, mirroring the fast-fail order of `InterpreterDeleteQuery::execute`.
 bool deleteQueryStopsBeforeSources(const ASTDeleteQuery & delete_query, const ContextPtr & context)
@@ -1980,6 +2023,11 @@ bool deleteQueryStopsBeforeSources(const ASTDeleteQuery & delete_query, const Co
             = settings[Setting::enable_lightweight_update] && bool(table->supportsLightweightUpdate());
 
         if (!supports_lightweight_update && lightweight_delete_mode == LightweightDeleteMode::LIGHTWEIGHT_UPDATE_FORCE)
+            return true;
+
+        /// Both rewrites below carry the `IN PARTITION` clause over into the statement they build, whose
+        /// `MutationsInterpreter` resolves it before it reads the predicate's tables.
+        if (mutationPartitionClauseCanBeRejected(table, delete_query.partition.get(), delete_query.partitions.get(), context))
             return true;
 
         /// Rewritten to a lightweight `UPDATE`, whose interpreter reads the predicate right after the
@@ -2169,6 +2217,9 @@ bool updateQueryStopsBeforeSources(const ASTUpdateQuery & update_query, const Co
     if (!table->supportsLightweightUpdate())
         return true;
 
+    if (mutationPartitionClauseCanBeRejected(table, update_query.partition.get(), update_query.partitions.get(), context))
+        return true;
+
     /// `updateLightweight` builds a `MutationsInterpreter`, whose `prepare` validates the updated columns
     /// against the target's metadata before it resolves the predicate's and the assignments' subqueries
     /// (see `updateColumnsCanBeRejected`).
@@ -2205,6 +2256,9 @@ bool alterQueryStopsBeforeSources(const ASTAlterQuery & alter, const ContextPtr 
     /// either carrier has nothing to guard.
     MutationCommands mutation_commands;
     PartitionCommands partition_commands;
+    /// The `IN PARTITION` clauses of the mutation commands, probed once the target is resolved. The
+    /// partition commands' own partitions go through `checkAlterPartitionIsPossible` below instead.
+    std::vector<std::pair<IAST *, IAST *>> mutation_partition_clauses;
     size_t partition_command_runs = 0;
     bool last_command_was_partition = false;
     bool has_plain_alter_or_execute = false;
@@ -2240,6 +2294,8 @@ bool alterQueryStopsBeforeSources(const ASTAlterQuery & alter, const ContextPtr 
                      settings[Setting::max_parser_backtracks]))
         {
             carries_sources |= mutation_command->type == MutationCommand::DELETE || mutation_command->type == MutationCommand::UPDATE;
+            if (command_ast->partition || command_ast->partitions)
+                mutation_partition_clauses.emplace_back(command_ast->partition, command_ast->partitions);
             mutation_commands.push_back(std::move(*mutation_command));
         }
         else
@@ -2290,6 +2346,12 @@ bool alterQueryStopsBeforeSources(const ASTAlterQuery & alter, const ContextPtr 
     {
         return true;
     }
+
+    /// Both the heavy and the lightweight route of a mutation command resolve its `IN PARTITION` clause
+    /// against the target before they read the command's own expressions.
+    for (const auto & [partition, partitions] : mutation_partition_clauses)
+        if (mutationPartitionClauseCanBeRejected(table, partition, partitions, context))
+            return true;
 
     /// A pure-update statement can be diverted to a lightweight update before the mutation checks
     /// (see `tryRewriteToLightweightUpdate`), succeeding or failing on its own gates.
