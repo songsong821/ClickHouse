@@ -28,6 +28,7 @@
 #include <Storages/ObjectStorage/DataLakes/Iceberg/StatelessMetadataFileGetter.h>
 #include <Storages/ObjectStorage/DataLakes/Iceberg/PersistentTableComponents.h>
 #include <base/getThreadId.h>
+#include <base/sleep.h> /// TEMP DONT MERGE: for the artificial Iceberg slowdown below.
 #include <base/types.h>
 #include <boost/algorithm/string/trim.hpp>
 #include <Poco/Dynamic/Var.h>
@@ -553,6 +554,12 @@ Poco::JSON::Object::Ptr getMetadataJSONObject(
             IcebergMetadataFilesCache::getKey(*table_uuid, metadata_file_path), create_fn);
     else
         metadata_json_str = create_fn();
+
+    /// TEMP DONT MERGE: artificial per-query delay to validate the Iceberg perf suites detect a
+    /// regression. `getMetadataJSONObject` is hit once per query on every read and write path
+    /// (SELECT via `IcebergMetadata::getState`, INSERT/mutation/OPTIMIZE via the sink), and this
+    /// sleep is after the metadata cache lookup, so it fires even with a warm cache. Remove before merge.
+    sleepForMilliseconds(100);
 
     Poco::JSON::Parser parser; /// For some reason base/base/JSON.h can not parse this json file
     Poco::Dynamic::Var json = parser.parse(metadata_json_str);

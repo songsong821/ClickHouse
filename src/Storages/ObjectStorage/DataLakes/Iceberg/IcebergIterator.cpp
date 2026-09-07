@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <base/scope_guard.h>
+#include <base/sleep.h> /// TEMP DONT MERGE: for the artificial per-data-file Iceberg slowdown below.
 #include <Formats/FormatFilterInfo.h>
 #include <Formats/FormatParserSharedResources.h>
 #include <Processors/Formats/Impl/ParquetV3BlockInputFormat.h>
@@ -485,6 +486,11 @@ ObjectInfoPtr IcebergIterator::next(size_t)
     Iceberg::ProcessedManifestFileEntryPtr manifest_file_entry;
     if (data_files_stream->pop(manifest_file_entry))
     {
+        /// TEMP DONT MERGE: artificial per-data-file delay to validate the Iceberg perf suites.
+        /// Fires once for every data file handed to the scan, so scan-bound queries regress in
+        /// proportion to the number of files they touch. Remove before merge.
+        sleepForMilliseconds(10);
+
         IcebergDataObjectInfoPtr object_info
             = std::make_shared<IcebergDataObjectInfo>(
                 manifest_file_entry,
