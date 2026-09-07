@@ -11,14 +11,17 @@ SET enable_analyzer = 1;
 SET allow_experimental_analyzer = true;
 SELECT toUInt8(getSetting('enable_analyzer')), toUInt8(getSetting('allow_experimental_analyzer'));
 
--- Disabling it is refused, under either name and in every form.
+-- Disabling it is refused, under either name and in every form. A `SET` is refused by the server; a
+-- `SETTINGS` clause of a query is refused before the query is sent, because the client applies such a
+-- clause to its own session first (`InterpreterSetQuery::applySettingsFromQuery`) - hence
+-- `clientError` for those. Both raise `SETTING_CONSTRAINT_VIOLATION`.
 SET enable_analyzer = 0; -- { serverError SETTING_CONSTRAINT_VIOLATION }
 SET allow_experimental_analyzer = 0; -- { serverError SETTING_CONSTRAINT_VIOLATION }
 SET enable_analyzer = false; -- { serverError SETTING_CONSTRAINT_VIOLATION }
-SELECT 1 SETTINGS enable_analyzer = 0; -- { serverError SETTING_CONSTRAINT_VIOLATION }
-SELECT 1 SETTINGS allow_experimental_analyzer = 0; -- { serverError SETTING_CONSTRAINT_VIOLATION }
-INSERT INTO FUNCTION null('x UInt8') SETTINGS enable_analyzer = 0 SELECT 1; -- { serverError SETTING_CONSTRAINT_VIOLATION }
-CREATE VIEW v_05136 AS SELECT 1 SETTINGS enable_analyzer = 0; -- { serverError SETTING_CONSTRAINT_VIOLATION }
+SELECT 1 SETTINGS enable_analyzer = 0; -- { clientError SETTING_CONSTRAINT_VIOLATION }
+SELECT 1 SETTINGS allow_experimental_analyzer = 0; -- { clientError SETTING_CONSTRAINT_VIOLATION }
+INSERT INTO FUNCTION null('x UInt8') SETTINGS enable_analyzer = 0 SELECT 1; -- { clientError SETTING_CONSTRAINT_VIOLATION }
+CREATE VIEW v_05136 AS SELECT 1 SETTINGS enable_analyzer = 0; -- { clientError SETTING_CONSTRAINT_VIOLATION }
 
 -- A refused change leaves the setting alone.
 SELECT toUInt8(getSetting('enable_analyzer'));
