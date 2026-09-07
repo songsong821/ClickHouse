@@ -49,6 +49,9 @@ private:
     /// Write block of rows into .bin file and marks in .mrk files
     void writeDataBlock(const Block & block, const Granules & granules);
 
+    /// Write a stripe: the given granules of the block, column after column.
+    void writeStripe(const Block & block, const Granules & granules);
+
     /// Write block of rows into .bin file and marks in .mrk files, primary index in .idx file
     /// and skip indices in their corresponding files.
     void writeDataBlockPrimaryIndexAndSkipIndices(const Block & block, const Granules & granules);
@@ -70,10 +73,17 @@ private:
     public:
         void add(MutableColumns && columns);
         size_t size() const;
+        size_t bytes() const;
         Columns releaseColumns();
     private:
         MutableColumns accumulated_columns;
     };
+
+    /// The number of complete granules, starting from the current mark, that the first `rows` rows form.
+    size_t getNumCompleteGranules(size_t rows) const;
+
+    /// Whether the buffered rows should be written as a stripe now.
+    bool shouldWriteStripe(size_t rows, size_t bytes) const;
 
     ColumnsBuffer columns_buffer;
 
