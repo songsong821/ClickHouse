@@ -44,6 +44,11 @@ void MetadataOperationsHolder::prependOperation(MetadataOperationPtr && operatio
     operations.emplace_front(std::move(operation));
 }
 
+bool MetadataOperationsHolder::isPartiallyRolledBack() const
+{
+    return state == MetadataStorageTransactionState::PARTIALLY_ROLLED_BACK;
+}
+
 void MetadataOperationsHolder::addOperation(MetadataOperationPtr && operation)
 {
     if (state != MetadataStorageTransactionState::PREPARING)

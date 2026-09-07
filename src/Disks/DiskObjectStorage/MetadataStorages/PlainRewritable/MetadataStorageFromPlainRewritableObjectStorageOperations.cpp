@@ -40,6 +40,7 @@ namespace FailPoints
 {
     extern const char plain_object_storage_write_fail_on_directory_create[];
     extern const char plain_object_storage_write_fail_on_directory_move[];
+    extern const char plain_object_storage_fail_on_directory_move_undo[];
     extern const char plain_object_storage_copy_fail_on_file_move[];
     extern const char plain_object_storage_copy_temp_source_file_fail_on_file_move[];
     extern const char plain_object_storage_copy_temp_target_file_fail_on_file_move[];
@@ -256,6 +257,17 @@ void MetadataStorageFromPlainObjectStorageMoveDirectoryOperation::undo()
 
         if (!changed_paths.contains(sub_path_from))
             continue;
+
+        /// Injected only here, unlike plain_object_storage_write_fail_on_directory_move, which
+        /// sits in rewriteSingleDirectory and therefore fires on the forward pass first. Failing
+        /// the undo is the only way to reach the state where object storage kept the new path
+        /// while the transaction reported failure.
+        fiu_do_on(FailPoints::plain_object_storage_fail_on_directory_move_undo,
+        {
+            throw Exception(
+                ErrorCodes::FAULT_INJECTED,
+                "Injecting fault when reversing the move from '{}' to '{}'", sub_path_to, sub_path_from);
+        });
 
         auto write_buf = createWriteBuf(remote_info.value(), /*expected_content*/std::nullopt);
         rewriteSingleDirectory(sub_path_to, sub_path_from, *write_buf);

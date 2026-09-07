@@ -404,6 +404,7 @@ void MetadataStorageFromPlainRewritableObjectStorageTransaction::commit(const Tr
     /// 0. Add preconditions for transaction commit.
     operations.prependOperation(std::make_unique<MetadataStorageFromPlainObjectStorageValidatePreconditionsOperation>(uncommitted_state.getTxPreconditions(), commit_snapshot));
 
+    try
     {
         std::unique_lock lock(metadata_storage.metadata_mutex);
 
@@ -415,6 +416,38 @@ void MetadataStorageFromPlainRewritableObjectStorageTransaction::commit(const Tr
 
         /// 3. Exchange metadata with updated fs.
         metadata_storage.fs.applySnapshot(commit_snapshot);
+    }
+    catch (...)
+    {
+        /// A commit that fails normally changes nothing: the snapshot is published only once every
+        /// operation has succeeded, and rolling back restores what object storage held before.
+        /// A rollback that stops halfway is different - the operations it never reached keep the
+        /// writes they already made, so object storage now describes a filesystem this process
+        /// does not have, and the disagreement survives until something rebuilds the filesystem.
+        /// Serving a filesystem that is known to be wrong is worse than listing the disk again.
+        /// The lock above is released while unwinding, so reloading here cannot deadlock.
+        if (operations.isPartiallyRolledBack())
+        {
+            LOG_ERROR(
+                getLogger("MetadataStorageFromPlainRewritableObjectStorage"),
+                "Rolling back the metadata transaction did not complete, so object storage may no "
+                "longer agree with the in-memory filesystem. Reloading it from object storage.");
+
+            try
+            {
+                metadata_storage.dropCache();
+            }
+            catch (...)
+            {
+                /// Reported separately: the caller has to see the error that failed the
+                /// transaction, not the one that failed the recovery.
+                tryLogCurrentException(
+                    getLogger("MetadataStorageFromPlainRewritableObjectStorage"),
+                    "Could not reload the filesystem after a partial rollback");
+            }
+        }
+
+        throw;
     }
 
     operations.finalize();

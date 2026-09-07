@@ -14,6 +14,8 @@
 #include <Common/thread_local_rng.h>
 #include <Common/FailPoint.h>
 
+#include <base/scope_guard.h>
+
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
@@ -2233,4 +2235,54 @@ TEST_F(MetadataPlainRewritableDiskTest, ConcurrentCreateDirectory)
     metadata = restartMetadataStorage("ConcurrentCreateDirectory");
     EXPECT_TRUE(metadata->existsDirectory("A"));
     EXPECT_EQ(generateObjectKeyPrefixForDirectoryPath(metadata, "A/"), remote_prefix);
+}
+
+/// Reversing a directory move is not atomic: it rewrites one `prefix.path` marker per directory,
+/// and each of those is a separate object storage write. When one of them fails the rollback
+/// stops there, so the markers it never reached keep describing the move, while the in-memory
+/// filesystem still describes the state before it - a failed transaction never publishes its
+/// snapshot. The two only have to agree again the next time the filesystem is rebuilt from object
+/// storage, which for a MergeTree part means a directory turning up under a name the server never
+/// committed.
+TEST_F(MetadataPlainRewritableDiskTest, MoveUndoFailureDoesNotOutliveTheTransaction)
+{
+    auto metadata = getMetadataStorage("MoveUndoFailure");
+    auto object_storage = getObjectStorage("MoveUndoFailure");
+
+    {
+        auto tx = metadata->createTransaction();
+        tx->createDirectory("A");
+        tx->createDirectory("A/B");
+        tx->commit(DB::NoCommitOptions{});
+    }
+
+    const auto a_path = createMetadataObjectPath(metadata, "A");
+    const auto ab_path = createMetadataObjectPath(metadata, "A/B");
+
+    {
+        FailPointInjection::enableFailPoint("plain_object_storage_fail_on_directory_move_undo");
+        SCOPE_EXIT(FailPointInjection::disableFailPoint("plain_object_storage_fail_on_directory_move_undo"));
+
+        /// The move executes and rewrites both markers; the failing file move is what makes the
+        /// transaction roll back afterwards, and the rollback is what cannot finish.
+        auto tx = metadata->createTransaction();
+        tx->moveDirectory("A", "MOVED");
+        tx->moveFile("non-existing", "other-place");
+        EXPECT_ANY_THROW(tx->commit(DB::NoCommitOptions{}));
+    }
+
+    /// The rollback never restored them, so object storage still describes the moved tree.
+    EXPECT_EQ(readObject(object_storage, a_path), "MOVED/");
+    EXPECT_EQ(readObject(object_storage, ab_path), "MOVED/B/");
+
+    /// Whichever state object storage was left in, the live filesystem has to describe the same
+    /// one. Reloading must not change what this disk reports.
+    const bool exists_a = metadata->existsDirectory("A");
+    const bool exists_moved = metadata->existsDirectory("MOVED");
+
+    metadata = restartMetadataStorage("MoveUndoFailure");
+    EXPECT_EQ(metadata->existsDirectory("A"), exists_a);
+    EXPECT_EQ(metadata->existsDirectory("A/B"), exists_a);
+    EXPECT_EQ(metadata->existsDirectory("MOVED"), exists_moved);
+    EXPECT_EQ(metadata->existsDirectory("MOVED/B"), exists_moved);
 }

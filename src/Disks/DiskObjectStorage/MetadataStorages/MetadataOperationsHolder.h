@@ -24,6 +24,10 @@ public:
     void commit();
     void finalize() noexcept;
 
+    /// True when rolling back a failed commit did not run to completion, so the operations that
+    /// were already applied to object storage are still in place.
+    bool isPartiallyRolledBack() const;
+
 private:
     std::deque<MetadataOperationPtr> operations;
     MetadataStorageTransactionState state{MetadataStorageTransactionState::PREPARING};
