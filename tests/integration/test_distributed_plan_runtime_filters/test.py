@@ -228,14 +228,31 @@ def _check_topology(tasks, buckets, levels):
     # send `N * N`.
     assert total_sent <= tree_edges + broadcast_edges, (total_sent, tree_edges, broadcast_edges)
 
-    # Inside the tree every state arrives, and this is the assertion that pins the topology
-    # exactly: a merge task publishes nothing unless all of its inputs did
-    # (`MergeRuntimeFiltersTransform::finalize`), so every one of the `tree_edges` must land.
-    # This is a timing property rather than an invariant: a merge task is itself a destination and
-    # closes its inputs when its own output closes. It holds wherever a counter assertion runs,
-    # because whenever the root's broadcast sends are counted at all, `finalize` has already proved
-    # the tree leg complete. Losses on this leg were only seen under `KILL QUERY`.
-    assert merge_received == tree_edges, (merge_received, tree_edges, tasks)
+    # The build leg is the one exact per-state count here, and it is what separates a tree from
+    # all-to-all at the leaves: a tree has each build task serialize its partial once, for its one
+    # merge parent, where all-to-all would serialize once per destination.
+    # `BuildRuntimeFilterPartialTransform` reaches that serialize on its own input finishing, and
+    # bails out early only when its *data* output is gone -- never on the state of the merge
+    # parent -- so a merge task closing its inputs cannot suppress the count.
+    build_tasks = [t for t in tasks if not t["task"].startswith("rf_merge_")]
+    assert all(t["states_sent"] <= 1 for t in build_tasks), tasks
+    assert sum(t["states_sent"] for t in build_tasks) == buckets, tasks
+
+    # Tree-leg completeness, conditioned on the guard that makes it an invariant rather than a
+    # race. A merge task publishes only once every input has arrived
+    # (`MergeRuntimeFiltersTransform::finalize`), so a root that forwarded anything proves the
+    # whole tree leg: each state it merged was itself published by a merge task that had consumed
+    # all of its own inputs.
+    #
+    # Unconditionally it is a race, and losing it needs no cancellation. A probe task closes its
+    # receive branch as soon as its own scan ends, and once every destination has gone,
+    # `MergeRuntimeFiltersTransform::prepare` closes the merge task's inputs unread -- discarding a
+    # partial that had already arrived. At `N = 32` a probe scans only `BIG_ROWS / N` rows while
+    # the build side moves `N` blooms through two merge levels, so the probes normally finish
+    # first: two CI workers running this concurrently on one runner split 34/34 and 33/34.
+    root_published = any(t["states_sent"] == buckets for t in merge_tasks)
+    if root_published:
+        assert merge_received == tree_edges, (merge_received, tree_edges, tasks)
 
     # The root's broadcast to the probe tasks is best-effort by design: a probe task cancels its
     # receive branch once its data work is done (`RuntimeFilterReceiveBranches::finish`), and a
@@ -344,7 +361,17 @@ def test_multi_level_tree_and_memory_bound(started_cluster):
         for t in merge_tasks_by_buckets[max_buckets]
         if t["states_received"] == FAN_IN
     ]
-    assert fan_in_receivers, merge_tasks_by_buckets[max_buckets]
+    # A first-level merge forwards once, and only after all of its inputs arrived, so one that
+    # forwarded is necessarily a full-fan-in receiver. Requiring one unconditionally is the same
+    # race as the tree-leg count above: if the probes finish first, the cascade closes these tasks'
+    # inputs unread and none of them reaches the fan-in.
+    first_level_published = [
+        t
+        for t in merge_tasks_by_buckets[max_buckets]
+        if 0 < t["states_sent"] < max_buckets
+    ]
+    if first_level_published:
+        assert fan_in_receivers, merge_tasks_by_buckets[max_buckets]
     two_input_root_peak = max(t["memory_usage"] for t in merge_tasks_by_buckets[2])
     for task in fan_in_receivers:
         assert task["memory_usage"] <= two_input_root_peak + (2 * FAN_IN + 2) * BLOOM_BYTES, (
@@ -386,10 +413,12 @@ def test_exact_states_topology(started_cluster):
     # 4 into the root + 4 broadcast, bounded for the same reason as in `_check_topology`: the
     # root may skip a broadcast whose destinations have all finished.
     assert total_sent <= 8, tasks
-    # The same delivery split as in `_check_topology`: the tree leg is pinned exactly, the
-    # best-effort broadcast leg only bounded. The received-byte bound below therefore still bites
-    # at the root, which consumes all four partials.
-    assert merge_received == 4, (merge_received, tasks)
+    # The same delivery split as in `_check_topology`, and conditioned the same way: a root that
+    # forwarded proves it consumed all four partials, because `finalize` publishes nothing until
+    # every input arrived. Unconditionally the probes can close their receive branches first and
+    # leave an arrived partial unread.
+    if any(t["states_sent"] == 4 for t in tasks if t["task"].startswith("rf_merge_")):
+        assert merge_received == 4, (merge_received, tasks)
     assert total_received <= total_sent, (total_received, total_sent, tasks)
 
     # The states must be exact, not degraded blooms: the default bloom is 512 KiB, and the 64000
@@ -427,9 +456,11 @@ def test_short_string_keys_arrive_exact(started_cluster):
         t["states_received"] for t in tasks if t["task"].startswith("rf_merge_")
     )
     # 4 partials into the root + 4 broadcast copies of the union; bounded because the root may
-    # skip a broadcast whose destinations have all finished. `merge_received` pins the tree leg.
+    # skip a broadcast whose destinations have all finished. The tree leg is pinned whenever the
+    # root forwarded, which proves it consumed all four partials.
     assert total_sent <= 8, tasks
-    assert merge_received == 4, (merge_received, tasks)
+    if any(t["states_sent"] == 4 for t in tasks if t["task"].startswith("rf_merge_")):
+        assert merge_received == 4, (merge_received, tasks)
     assert total_received <= total_sent, (total_received, total_sent, tasks)
     assert all(t["oversized_rejected"] == 0 for t in tasks), tasks
 
