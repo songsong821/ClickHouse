@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include <base/arithmeticOverflow.h>
+
 #include <Core/Settings.h>
 #include <Interpreters/InterpreterSelectQuery.h>
 #include <Parsers/ASTFunction.h>
@@ -130,7 +132,15 @@ std::optional<size_t> getLimitFromQueryInfo(const SelectQueryInfo & query_info, 
     if (!shouldPushdownLimit(query_info, lim_info))
         return {};
 
-    return lim_info.limit_length + lim_info.limit_offset;
+    /// The OFFSET is applied on top of the rows this source generates, so it has to generate
+    /// `length + offset` of them. When that sum does not fit into `UInt64` the source is simply
+    /// unbounded: without this check the addition wraps around and, for
+    /// `LIMIT 18446744073709551615 OFFSET 1`, asks the source for zero rows.
+    UInt64 limit_with_offset = 0;
+    if (common::addOverflow(lim_info.limit_length, lim_info.limit_offset, limit_with_offset))
+        return {};
+
+    return limit_with_offset;
 }
 
 void checkLimits(const Settings & settings, size_t rows)

@@ -1,7 +1,10 @@
--- `LimitStep::getLimitForSorting` returns 0 when `limit + offset` overflows `UInt64`, which means
--- "the number of rows to read is unknown", while a source step reads it as an exact upper bound on
--- the number of rows it may produce. Propagating that sentinel made the sources below return
--- nothing at all instead of every row after the offset.
+-- A source that pre-limits itself is told to produce `limit + offset` rows, because the OFFSET is
+-- applied on top of what it produces. When that sum does not fit into `UInt64` there is no bound to
+-- push down at all, but both ways of computing it used to turn the overflow into a zero:
+-- `NumbersLikeUtils::getLimitFromQueryInfo` let the addition wrap around, and
+-- `LimitStep::getLimitForSorting` returns 0 as its "unknown" sentinel, which
+-- `optimizePrimaryKeyConditionAndLimit` then passed on as an exact bound. The sources below
+-- therefore returned nothing at all instead of every row after the offset.
 
 SELECT 'numbers';
 SELECT count() FROM (SELECT * FROM numbers(10) LIMIT 18446744073709551615 OFFSET 1);
@@ -15,6 +18,8 @@ SELECT count() FROM (SELECT * FROM generate_series(10, 0, -1) LIMIT 184467440737
 SELECT 'no overflow';
 SELECT count() FROM (SELECT * FROM numbers(10) LIMIT 18446744073709551615);
 SELECT count() FROM (SELECT * FROM numbers(10) LIMIT 3 OFFSET 1);
+-- `limit + offset` is exactly `18446744073709551615`, the largest value that still fits.
+SELECT count() FROM (SELECT * FROM numbers(20) LIMIT 18446744073709551605 OFFSET 10);
 
 -- A real `LIMIT 0` still reads nothing.
 SELECT 'limit 0';
