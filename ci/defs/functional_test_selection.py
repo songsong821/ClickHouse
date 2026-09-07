@@ -4,8 +4,8 @@ from ci.defs.defs import ArtifactNames
 from ci.jobs.scripts.test_selection_config import SELECTION_CONFIG
 
 
-def selection_variants(jobs, option):
-    """Collapse shards, and combine execution flavors for selected-test jobs."""
+def targeted_variants(jobs, allow_failure=True):
+    """Run one repeated targeted check per build and settings configuration."""
     variants = {}
     source_flavors = {}
     for job in jobs:
@@ -17,24 +17,21 @@ def selection_variants(jobs, option):
         options = [
             part
             for part in source_options
-            if part != "selected tests"
+            if part not in ("targeted", "parallel", "sequential")
             and not re.fullmatch(r"\d+/\d+", part)
-            and not (option == "selected tests" and part in ("parallel", "sequential"))
         ]
-        parameter = ", ".join([*options, option])
+        parameter = ", ".join([*options, "targeted"])
         variant = job.copy()
         variant.parameter = parameter
         variant.name = f"{job.name.split(' (', 1)[0]} ({parameter})"
         variant.command = job.command.replace(job.parameter, parameter)
         variant.provides = []
-        if option == "targeted":
-            variant.allow_failure = True
+        variant.allow_failure = allow_failure
         previous = variants.get(parameter)
-        combine_flavors = (
-            previous
-            and option == "selected tests"
-            and {source_flavors[parameter], flavor} == {"parallel", "sequential"}
-        )
+        combine_flavors = previous and {source_flavors[parameter], flavor} == {
+            "parallel",
+            "sequential",
+        }
         if previous and (
             previous.runs_on if not combine_flavors else None,
             previous.requires,
@@ -69,7 +66,7 @@ def targeted_matrix(jobs):
             )
         else:
             eligible.append(job)
-    return selection_variants(eligible, "targeted"), exemptions
+    return targeted_variants(eligible), exemptions
 
 
 def require_selection(jobs):

@@ -11,12 +11,9 @@ from ci.defs.job_configs import JobConfigs
 from ci.jobs.scripts.workflow_hooks.filter_job import should_skip_job
 from ci.jobs.scripts.workflow_hooks.trusted import can_be_tested
 
-# Functional tests with sanitizers are trimmed down in pull requests: instead of
-# the full suite, their `selected tests` counterparts run only the tests selected
-# for the change. The full suite still runs here in the debug and plain binary
-# flavors, the sanitizer builds are still exercised by the stress tests, and the
-# master workflow keeps running the full suite in every flavor.
-# See ClickHouse/ClickHouse#114725.
+# PR sanitizer jobs repeat tests related to the change to find intermittent failures.
+# Debug and plain binary jobs run the full suite. Master keeps the full suite in
+# every configuration; coverage-based targeting is specific to pull requests.
 FUNCTIONAL_TESTS_JOBS = JobConfigs.functional_tests_pr_jobs
 
 ALL_FUNCTIONAL_TESTS = [job.name for job in FUNCTIONAL_TESTS_JOBS]
@@ -30,9 +27,9 @@ CORE_BLOCKING_JOB_NAMES = [
             "_debug, parallel",
             "_binary, parallel",
             "_binary, sequential",
-            "_asan_ubsan, distributed plan, selected tests",
-            "_asan_ubsan, db disk, distributed plan, selected tests",
-            "_tsan, selected tests",
+            "_asan_ubsan, distributed plan, targeted",
+            "_asan_ubsan, db disk, distributed plan, targeted",
+            "_tsan, targeted",
         )
     )
 ] + [

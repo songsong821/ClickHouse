@@ -513,7 +513,6 @@ def should_skip_job(job_name):
             match = re.search(r"(\d)/\d", job_name)
             if (match and match.group(1) != "1") or (
                 "sequential" in job_name
-                and "selected tests" not in job_name
                 and "targeted" not in job_name
             ):
                 return True, "Skipped: only CI scripts changed; running stateless batch 1 only"

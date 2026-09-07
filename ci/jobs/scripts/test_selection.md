@@ -2,7 +2,7 @@
 
 `Select functional tests` produces a single manifest for a PR SHA and selector
 version. A conditional S3 insert makes the first successful manifest immutable;
-retries and all selected/targeted configurations consume the same artifact.
+retries and all targeted configurations consume the same artifact.
 Missing, mismatched, stale, or incompatible manifests fail selection. No keyword
 or broad-only replacement is used. Changed tests and previous failures remain
 mandatory even when they exceed the temporary ceiling; the manifest reports the
@@ -79,20 +79,21 @@ unhealthy snapshots are errors. Changed regression tests are reported separately
 and do not establish coverage recall. A review-ready dataset needs at least 60
 days, actual failures, later flaky fixes, linked regressions, and controls.
 
-`expanded_targeted_matrix` remains disabled pending that replay and shadow review.
-The generated matrix uses the regular PR functional configurations plus the
-original ARM ASan job. Dedicated Azure, LLVM coverage, and excluded-from-LLVM job
-groups are outside this matrix. LLVM coverage modes in the regular configurations remain
-exempt because those runners disable randomized settings. The selected sanitizer
-configurations are derived from the full-suite definitions. Targeted repetitions preserve each
-configuration's runner, build, environment, timeout, and flavor.
+PRs run targeted checks in four sanitizer configurations and the original ARM
+ASan configuration. Each job repeats the complete related test list up to 50
+times with randomized settings; the existing time and failure limits can stop
+execution earlier. Targeted jobs run only in the PR workflow. Master continues
+to run the full functional suite.
 
-Each selected-test configuration runs the full selected list once in a single
-job. The runner schedules parallel and sequential tests within that job. When
-combining execution flavors, the job uses the parallel flavor's runner. Build,
-storage, and query settings still define separate configurations.
-
-The entire compatible selection is repeated in targeted jobs.
+`expanded_targeted_matrix` remains disabled pending replay and shadow review.
+It adds targeted checks for the other regular PR functional configurations.
+Dedicated Azure, LLVM coverage, and excluded-from-LLVM job groups are outside
+this matrix. LLVM coverage modes in the regular configurations remain exempt
+because those runners disable randomized settings. Targeted configurations
+are derived from the full-suite definitions. The runner schedules parallel and
+sequential tests within one job, with 50 repetitions for both. When combining
+execution flavors, the job uses the parallel flavor's runner. Build, storage,
+and query settings still define separate configurations.
 
 Validation on 2026-09-05 passed the live production canary with fresh snapshots
 from all eight shards. A pre-PR replay attempt for
