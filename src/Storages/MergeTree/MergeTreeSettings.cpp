@@ -2467,9 +2467,9 @@ mutations on disks that support hard links; note the recommended `plain_rewritab
 Follower instances act as read-only replicas. Requires every disk in the storage policy to be an `S3`
 object storage disk with `metadata_type = plain_rewritable` — the only metadata layout currently
 accepted — so that after a failover the new leader sees the parts written by the previous leader.
-Tables on disks with the default per-replica `metadata_type = local` are rejected at creation, and
-`metadata_type = keeper` is implemented but rejected until it is covered by dedicated failover tests.
-(`Azure` object storage is likewise implemented but not yet test-covered, so it is rejected for now.)
+Tables on disks with any other metadata layout, including the default per-replica
+`metadata_type = local`, are rejected at creation.
+(`Azure` object storage is implemented but not yet test-covered, so it is rejected for now.)
 )", EXPERIMENTAL) \
     DECLARE(Seconds, leader_election_heartbeat_interval, 10, R"(
 Interval in seconds between leader election heartbeats. The leader renews its lease at this interval,

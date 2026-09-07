@@ -304,20 +304,21 @@ StorageMergeTree::StorageMergeTree(
                     disk->getName());
             }
 
-            /// `Keeper` metadata is shared across nodes too and would satisfy the invariant,
-            /// but the leader-election flows (follower part-list refresh, takeover reload,
-            /// shared dedup-log rotation) are currently only covered by `plain_rewritable`
-            /// integration tests. Restrict to `plain_rewritable` until a keeper-backed
-            /// failover test exists; re-enabling `Keeper` here is a one-line change.
+            /// `PlainRewritable` is the only accepted layout. `Keeper` metadata is shared
+            /// across nodes too and would satisfy the invariant in principle, but it is not a
+            /// layout this build can even be configured with: `MetadataStorageFromKeeper` is
+            /// registered only under `CLICKHOUSE_CLOUD`, so `metadata_type = keeper` already
+            /// fails earlier, when the disk itself is created. Enabling it for
+            /// `leader_election` would need both the metadata storage and a keeper-backed
+            /// failover test, so it is not advertised here as merely awaiting coverage.
             if (description.metadata_type != MetadataStorageType::PlainRewritable)
             {
                 throw Exception(ErrorCodes::BAD_ARGUMENTS,
                     "The `leader_election` setting requires every disk in the storage policy to use"
-                    " shared metadata so that the next leader after a failover sees the parts"
-                    " written by the previous leader. Disk '{}' uses a different metadata layout:"
-                    " with node-local metadata each replica's part list is invisible to its peers,"
-                    " and `metadata_type = keeper` is implemented but not yet covered by tests, so"
-                    " it is rejected for now. Use a disk with `metadata_type = plain_rewritable`.",
+                    " `metadata_type = plain_rewritable`, so that the next leader after a failover"
+                    " sees the parts written by the previous leader. Disk '{}' uses a different"
+                    " metadata layout: with node-local metadata each replica's part list is"
+                    " invisible to its peers. Use a disk with `metadata_type = plain_rewritable`.",
                     disk->getName());
             }
         }
