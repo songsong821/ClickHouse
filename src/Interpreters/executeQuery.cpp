@@ -2815,10 +2815,12 @@ static BlockIO executeQueryImpl(
             const bool ddl_workload_enabled = context->getUseDdlWorkload();
             if (is_ddl_query && ddl_workload_enabled)
             {
+                /// Route DDL under `ddl_workload` instead of `workload`. `ddl_workload` is a separate
+                /// setting with its own constraints (configurable via a user profile) and is
+                /// intentionally NOT validated against `workload`'s constraints: administrators control
+                /// DDL scheduling by constraining `ddl_workload`, not `workload`. See the setting docs.
                 const String & ddl_workload = settings[Setting::ddl_workload];
-                SettingChange change{"workload", Field(ddl_workload.empty() ? String("default") : ddl_workload)};
-                context->checkSettingsConstraints(change, SettingSource::QUERY);
-                context->applySettingChange(change);
+                context->setSetting("workload", ddl_workload.empty() ? String("default") : ddl_workload);
             }
             /// processlist also has query masked now, to avoid secrets leaks though SHOW PROCESSLIST by other users.
             process_list_entry = context->getProcessList().insert(
