@@ -550,9 +550,6 @@ void CPULeaseAllocation::unparkLease(Lease & lease)
 
     // Demand rose by one (effectiveMaxSlots() grew): kick one re-request so the borrowed slot is
     // backed by a real quantum again (unless shutting down); the grant chain fills the rest.
-    // unpark() runs from CPULeaseParkGuard's destructor and must not throw: enqueueRequest() can
-    // raise INVALID_SCHEDULER_NODE while the workload queue is being torn down. If so, keep running
-    // on the borrow -- the next renew() observes the failure or shutdown and stops the thread.
     if (!shutdown && allocated < effectiveMaxSlots() && !requests.hasEnqueued())
     {
         try
@@ -560,7 +557,15 @@ void CPULeaseAllocation::unparkLease(Lease & lease)
             if (!schedule(lock))
                 grantImpl(lock);
         }
-        catch (...) {} // NOLINT(bugprone-empty-catch) Ok: unpark must stay non-throwing (CPULeaseParkGuard destructor path)
+        catch (...)
+        {
+            // unpark() runs from CPULeaseParkGuard's destructor and must not throw. Record the
+            // failure -- SERVER_OVERLOADED if the workload queue is full, or INVALID_SCHEDULER_NODE
+            // during queue teardown -- so the thread's next renew() surfaces it as a normal query
+            // error instead of hiding it and running on an unbacked borrow.
+            if (!exception)
+                exception = std::current_exception();
+        }
     }
 }
 
