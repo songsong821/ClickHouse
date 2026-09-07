@@ -607,7 +607,12 @@ static void addFilters(
     if (!predicate)
         return;
 
-    const auto & settings = context->getSettingsRef();
+    /// The rewrite has to be governed by the context the shipped query itself runs under - the one
+    /// `canAddFiltersToShippedQuery` asked before letting the predicate into the initiator's local plan.
+    /// Read from the ambient query instead and the gate could promise a rewrite that then declines here,
+    /// leaving the replicas planning the unfiltered fragment while the initiator planned a filtered one.
+    const auto shipped_query_context = getShippedQueryContext(query_tree, context);
+    const auto & settings = shipped_query_context->getSettingsRef();
     auto shipped_table_expression = findSingleShippedTableExpression(query_tree);
 
     /// Extract the storage snapshot, identifier (when available) and alias from the table expression
@@ -642,7 +647,7 @@ static void addFilters(
     bool optimize_with = settings[Setting::allow_push_predicate_when_subquery_contains_with];
 
     ASTs predicates{predicate};
-    PredicateRewriteVisitor::Data data(context, predicates, table_with_columns, optimize_final, optimize_with);
+    PredicateRewriteVisitor::Data data(shipped_query_context, predicates, table_with_columns, optimize_final, optimize_with);
 
     data.rewriteSubquery(getSelectQuery(query_ast), table_with_columns.columns.getNames());
 }
