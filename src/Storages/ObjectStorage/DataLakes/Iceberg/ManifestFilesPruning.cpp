@@ -424,33 +424,6 @@ PruningReturnStatus ManifestFilesPruner::canBePruned(
         }
     }
 
-    if (partition_key_condition.has_value() && entry->common_partition_specification)
-    {
-        for (const auto & partition_field : *entry->common_partition_specification)
-        {
-            auto key_condition_it = min_max_key_conditions.find(partition_field.source_id);
-            if (key_condition_it == min_max_key_conditions.end())
-                continue;
-
-            auto name_and_type = schema_processor.tryGetFieldCharacteristics(initial_schema_id, partition_field.source_id);
-            if (!name_and_type.has_value())
-                continue;
-
-            if (partition_field.tuple_index < 0 || static_cast<size_t>(partition_field.tuple_index) >= partition_value.size())
-                continue;
-
-            auto range = rangeOfPartitionValue(
-                partition_field.transform_name,
-                partition_value[partition_field.tuple_index],
-                *removeNullable(name_and_type->type));
-            if (!range.has_value())
-                continue;
-
-            if (!key_condition_it->second.mayBeTrueInRange(1, &range->left, &range->right, {name_and_type->type}))
-                return PruningReturnStatus::PARTITION_PRUNED;
-        }
-    }
-
     for (const auto & [column_id, key_condition] : min_max_key_conditions)
     {
         std::optional<NameAndTypePair> name_and_type;
@@ -474,11 +447,29 @@ PruningReturnStatus ManifestFilesPruner::canBePruned(
                 && *info_it->second.nulls_count == 0;
         }
 
-        auto rect_it = entry_hyperrectangles.find(column_id);
-        if (rect_it == entry_hyperrectangles.end())
-            continue;
+        const DataTypes data_types{name_and_type->type};
 
-        if (has_no_nulls && !key_condition.mayBeTrueInRange(1, &rect_it->second.left, &rect_it->second.right, {name_and_type->type}))
+        if (entry->common_partition_specification)
+        {
+            for (const auto & partition_field : *entry->common_partition_specification)
+            {
+                if (partition_field.source_id != column_id || partition_field.tuple_index < 0
+                    || static_cast<size_t>(partition_field.tuple_index) >= partition_value.size())
+                    continue;
+
+                auto range = rangeOfPartitionValue(
+                    partition_field.transform_name,
+                    partition_value[partition_field.tuple_index],
+                    *removeNullable(name_and_type->type));
+
+                if (range && !key_condition.mayBeTrueInRange(1, &range->left, &range->right, data_types))
+                    return PruningReturnStatus::PARTITION_PRUNED;
+            }
+        }
+
+        auto rect_it = entry_hyperrectangles.find(column_id);
+        if (has_no_nulls && rect_it != entry_hyperrectangles.end()
+            && !key_condition.mayBeTrueInRange(1, &rect_it->second.left, &rect_it->second.right, data_types))
         {
             return PruningReturnStatus::MIN_MAX_INDEX_PRUNED;
         }
