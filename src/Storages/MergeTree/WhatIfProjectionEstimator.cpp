@@ -39,6 +39,7 @@ namespace Setting
     extern const SettingsUInt64 max_bytes_to_read;
     extern const SettingsOverflowMode read_overflow_mode;
     extern const SettingsBool optimize_use_projections;
+    extern const SettingsBool use_primary_key;
 }
 
 namespace MergeTreeSetting
@@ -459,7 +460,9 @@ WhatIfCandidateResult evaluateProjection(
     if (filter_dag)
     {
         predicate_dag.emplace(filter_dag->getOutputs().front(), context, /* boolean_context */ true);
-        key_condition.emplace(*predicate_dag, context, proj_key.column_names, proj_key.expression);
+        /// the KeyDescription overload, so the key's own directions and `use_primary_key` are honoured like a real read
+        key_condition.emplace(
+            *predicate_dag, context, proj_key, /* single_point */ false, !context->getSettingsRef()[Setting::use_primary_key]);
         if (key_condition->alwaysUnknownOrTrue())
             key_condition.reset();
     }

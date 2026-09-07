@@ -96,6 +96,14 @@ $CLICKHOUSE_CLIENT -q "
     EXPLAIN WHATIF SELECT count() FROM t_est WHERE b = 42 SETTINGS optimize_trivial_count_query = 0, optimize_use_projections = 0;
 " | grep -E '^\s+reason:' | awk '{$1=$1; print}'
 
+echo "--- use_primary_key = 0 turns the projection's own pruning off, as in the optimizer ---"
+$CLICKHOUSE_CLIENT -q "
+    CREATE HYPOTHETICAL PROJECTION p_b ON t_est (SELECT a, b, v ORDER BY b);
+    EXPLAIN WHATIF SELECT count() FROM t_est WHERE b = 42 SETTINGS ${PIN}, use_primary_key = 0;
+" | grep -E '^\s+reason:' | awk '{$1=$1; print}'
+$CLICKHOUSE_CLIENT -q "EXPLAIN indexes = 1 SELECT count() FROM t_real WHERE b = 42 SETTINGS ${PIN}, use_primary_key = 0" \
+    | grep -oE 'ReadFromMergeTree \(p_b\)' || echo "real: read from the base table"
+
 echo "--- empirical = 0 scans nothing ---"
 $CLICKHOUSE_CLIENT -q "
     CREATE HYPOTHETICAL PROJECTION p_b ON t_est (SELECT a, b, v ORDER BY b);
