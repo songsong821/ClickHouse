@@ -2195,7 +2195,9 @@ class MergeTreeSettingsRandomizer:
         ),
         "text_index_max_memory_usage_before_flush": lambda: random.choice([4096, 65536, 1048576, 1073741824]),
         "text_index_max_processed_tokens_before_flush": lambda: random.choice([1, 100, 10000, 100000000]),
-        "enable_adaptive_codec_selection": lambda: random.random() < 0.3,
+        # Disable for now, issue found: with compress_per_column_in_compact_parts = 0 a mutation
+        # writes a Compact part whose Array offsets substream cannot be read back.
+        #"enable_adaptive_codec_selection": lambda: random.random() < 0.3,
         "map_serialization_version": lambda: random.choice(["basic", "with_buckets"]),
         "map_serialization_version_for_zero_level_parts": lambda: random.choice(["basic", "with_buckets"]),
         "max_buckets_in_map": lambda: random.randint(1, 100),
@@ -2208,22 +2210,11 @@ class MergeTreeSettingsRandomizer:
             [0, 100, 1024, 1024 * 1024, 10 * 1024 * 1024]
         ),
         "concurrent_part_removal_threshold_for_remote_disk": lambda: random.choice([0, 1, 16, 100]),
-        # Don't randomize the implicit-index settings below: they are not transparent to queries,
-        # they change what every table looks like, so they perturb the output of ~150 tests that
-        # print index metadata or plans, and pinning them one by one is not viable.
-        #
-        # `add_minmax_index_for_block_number_column` / `add_minmax_index_for_block_offset_column`
-        # add real `MINMAX` skipping indices named `auto_minmax_index__block_number` /
-        # `auto_minmax_index__block_offset`, which then show up in `SHOW INDEXES`,
-        # `system.data_skipping_indices`, part checksums and the `Skip` section of
-        # `EXPLAIN indexes = 1`. This is why their siblings
-        # `add_minmax_index_for_{numeric,string,temporal}_columns` are not randomized either.
+        # Don't randomize the implicit-index settings below, nor their
+        # `add_minmax_index_for_{numeric,string,temporal}_columns` siblings: they add indices every
+        # table then carries, perturbing ~150 tests that print index metadata or plans.
         # "add_minmax_index_for_block_number_column": lambda: random.random() < 0.3,
         # "add_minmax_index_for_block_offset_column": lambda: random.random() < 0.3,
-        #
-        # `part_minmax_index_columns = with_block_number_offset` gives every table a part-level
-        # min-max index even without a partition key, so `EXPLAIN indexes = 1` grows an extra
-        # `Min-Max / Condition: true` block everywhere.
         # "part_minmax_index_columns": lambda: random.choice(["partition_key_only", "with_block_number_offset"]),
     }
 
