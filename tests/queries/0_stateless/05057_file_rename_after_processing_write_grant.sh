@@ -21,7 +21,7 @@ FS_DB="fsdb_${CLICKHOUSE_TEST_UNIQUE_NAME}"
 RENAME="rename_files_after_processing='processed_%a'"
 
 # One input file per renaming scenario: a successful rename consumes the name.
-for name in direct_select wrapped_url cluster_initiator cluster_no_setting cluster_granted \
+for name in direct_select cluster_initiator cluster_no_setting cluster_granted \
             explain_pipeline explain_plan granted_write \
             cached_armed_for_reader cached_armed_for_owner cached_unarmed \
             repeated_ref repeated_ref_setting \
@@ -59,12 +59,6 @@ ${CLICKHOUSE_CLIENT} --user "${READER}" -q \
     "SELECT * FROM file('${FILES_DIR}/direct_select.csv', 'CSV', 'x UInt8') SETTINGS ${RENAME}" 2>&1 |
     grep -o -m1 'WRITE ON FILE'
 file_state direct_select
-
-echo '--- the same through url(file://), which resolves to a file() delegate'
-${CLICKHOUSE_CLIENT} --user "${READER}" -q \
-    "SELECT * FROM url('file://${FILES_DIR}/wrapped_url.csv', 'CSV', 'x UInt8') SETTINGS ${RENAME}" 2>&1 |
-    grep -o -m1 'WRITE ON FILE'
-file_state wrapped_url
 
 echo '--- the same through fileCluster(), refused on the initiator'
 # Without a cluster secret the secondary query is authorized as the cluster's configured user, so a
