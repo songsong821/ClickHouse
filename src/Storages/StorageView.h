@@ -79,6 +79,12 @@ public:
     /// policy attached to the view.
     static bool hasAdditionalTableFilter(const StorageID & storage_id, const String & alias, const ContextPtr & context);
 
+    /// Whether a `SETTINGS` clause written in the view's query can hide rows (a `limit`, an extra
+    /// filter, `final`, an identifier-resolution switch, ...). Only settings that provably tune
+    /// execution alone are accepted; anything else, including a reset to a default, fails closed.
+    /// It is the AST-side counterpart of `effectiveContextCanHideRows`.
+    static bool settingsClauseCanHideRows(const ASTPtr & settings_ast);
+
     /// Whether the effective security context of the view hides rows by itself, through settings
     /// inherited from a `SQL SECURITY DEFINER` view's definer profile (a `limit`, an extra filter,
     /// `final`, a limit with a non-throwing overflow mode, ...). Fails closed like `canHideRows`,

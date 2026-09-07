@@ -232,75 +232,6 @@ bool hasRowHidingFunctionOutsideSubqueries(const IAST & ast)
     return hasRowHidingFunctionOutsideSubqueries(ast, udfs_in_progress, 0);
 }
 
-/// A `SETTINGS` clause of the view's query is applied to the context the inner query runs in, so
-/// it can hide rows without any clause of the `SELECT` doing so: `limit` and `offset` truncate the
-/// result, `final` rewrites every table read as `FINAL`, `additional_table_filters` and
-/// `additional_result_filter` add predicates, `max_rows_to_read` under a `read_overflow_mode = 'break'`
-/// profile truncates the scan, `prefer_column_name_to_alias` or `enable_analyzer` change which
-/// column an identifier binds to, and so on. Rather than enumerate everything that can go wrong,
-/// only settings that tune execution and provably cannot change the rows or the names the query
-/// produces are accepted; any other change - including one that resets a setting to its default,
-/// which may undo a limit of the definer's profile - fails closed. Query parameters bind values
-/// into the query text, so a clause carrying them is not a pure tuning clause either.
-bool settingsClauseCanHideRows(const ASTPtr & settings_ast)
-{
-    if (!settings_ast)
-        return false;
-
-    static const std::unordered_set<std::string_view> execution_only_settings
-    {
-        "max_threads",
-        "max_block_size",
-        "preferred_block_size_bytes",
-        "preferred_max_column_in_block_size_bytes",
-        "max_memory_usage",
-        "max_memory_usage_for_user",
-        "max_bytes_before_external_group_by",
-        "max_bytes_before_external_sort",
-        "max_bytes_ratio_before_external_group_by",
-        "max_bytes_ratio_before_external_sort",
-        "max_streams_to_max_threads_ratio",
-        "max_streams_for_merge_tree_reading",
-        "merge_tree_min_rows_for_concurrent_read",
-        "merge_tree_min_bytes_for_concurrent_read",
-        "merge_tree_max_rows_to_use_cache",
-        "merge_tree_max_bytes_to_use_cache",
-        "min_bytes_to_use_direct_io",
-        "min_bytes_to_use_mmap_io",
-        "max_read_buffer_size",
-        "use_uncompressed_cache",
-        "local_filesystem_read_method",
-        "remote_filesystem_read_method",
-        "enable_filesystem_cache",
-        "read_from_filesystem_cache_if_exists_otherwise_bypass_cache",
-        "optimize_move_to_prewhere",
-        "optimize_move_to_prewhere_if_final",
-        "optimize_read_in_order",
-        "optimize_aggregation_in_order",
-        "use_skip_indexes",
-        "priority",
-        "os_thread_priority",
-        "log_comment",
-        "log_queries",
-        "log_query_threads",
-        "log_processors_profiles",
-    };
-
-    const auto * set_query = settings_ast->as<ASTSetQuery>();
-    if (!set_query || !set_query->query_parameters.empty())
-        return true;
-
-    for (const auto & change : set_query->changes)
-        if (!execution_only_settings.contains(change.name))
-            return true;
-
-    for (const auto & name : set_query->default_settings)
-        if (!execution_only_settings.contains(name))
-            return true;
-
-    return false;
-}
-
 bool isNullableOrLcNullable(DataTypePtr type)
 {
     if (type->isNullable())
@@ -1110,6 +1041,75 @@ bool StorageView::isSecurityBarrier(const StorageInMemoryMetadata & metadata, co
         return false;
 
     return context->getServerSettings()[ServerSetting::sql_security_views_are_optimization_barriers];
+}
+
+/// A `SETTINGS` clause of the view's query is applied to the context the inner query runs in, so
+/// it can hide rows without any clause of the `SELECT` doing so: `limit` and `offset` truncate the
+/// result, `final` rewrites every table read as `FINAL`, `additional_table_filters` and
+/// `additional_result_filter` add predicates, `max_rows_to_read` under a `read_overflow_mode = 'break'`
+/// profile truncates the scan, `prefer_column_name_to_alias` or `enable_analyzer` change which
+/// column an identifier binds to, and so on. Rather than enumerate everything that can go wrong,
+/// only settings that tune execution and provably cannot change the rows or the names the query
+/// produces are accepted; any other change - including one that resets a setting to its default,
+/// which may undo a limit of the definer's profile - fails closed. Query parameters bind values
+/// into the query text, so a clause carrying them is not a pure tuning clause either.
+bool StorageView::settingsClauseCanHideRows(const ASTPtr & settings_ast)
+{
+    if (!settings_ast)
+        return false;
+
+    static const std::unordered_set<std::string_view> execution_only_settings
+    {
+        "max_threads",
+        "max_block_size",
+        "preferred_block_size_bytes",
+        "preferred_max_column_in_block_size_bytes",
+        "max_memory_usage",
+        "max_memory_usage_for_user",
+        "max_bytes_before_external_group_by",
+        "max_bytes_before_external_sort",
+        "max_bytes_ratio_before_external_group_by",
+        "max_bytes_ratio_before_external_sort",
+        "max_streams_to_max_threads_ratio",
+        "max_streams_for_merge_tree_reading",
+        "merge_tree_min_rows_for_concurrent_read",
+        "merge_tree_min_bytes_for_concurrent_read",
+        "merge_tree_max_rows_to_use_cache",
+        "merge_tree_max_bytes_to_use_cache",
+        "min_bytes_to_use_direct_io",
+        "min_bytes_to_use_mmap_io",
+        "max_read_buffer_size",
+        "use_uncompressed_cache",
+        "local_filesystem_read_method",
+        "remote_filesystem_read_method",
+        "enable_filesystem_cache",
+        "read_from_filesystem_cache_if_exists_otherwise_bypass_cache",
+        "optimize_move_to_prewhere",
+        "optimize_move_to_prewhere_if_final",
+        "optimize_read_in_order",
+        "optimize_aggregation_in_order",
+        "use_skip_indexes",
+        "priority",
+        "os_thread_priority",
+        "log_comment",
+        "log_queries",
+        "log_query_threads",
+        "log_processors_profiles",
+    };
+
+    const auto * set_query = settings_ast->as<ASTSetQuery>();
+    if (!set_query || !set_query->query_parameters.empty())
+        return true;
+
+    for (const auto & change : set_query->changes)
+        if (!execution_only_settings.contains(change.name))
+            return true;
+
+    for (const auto & name : set_query->default_settings)
+        if (!execution_only_settings.contains(name))
+            return true;
+
+    return false;
 }
 
 bool StorageView::effectiveContextCanHideRows(const ContextPtr & context)

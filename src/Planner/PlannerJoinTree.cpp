@@ -59,7 +59,6 @@
 
 #include <Parsers/ASTSelectQuery.h>
 #include <Parsers/ASTSelectWithUnionQuery.h>
-#include <Parsers/ASTSetQuery.h>
 #include <Parsers/ASTFunction.h>
 #include <Parsers/ASTOrderByElement.h>
 #include <Parsers/ASTIdentifier.h>
@@ -1460,23 +1459,19 @@ void pushOrderByIntoView(
     if (sel->orderBy() || sel->limitBy() || sel->limitLength() || sel->limitOffset())
         return;
 
-    /// View must not carry `LIMIT`/`OFFSET` through its own `SETTINGS` clause.
-    /// `SETTINGS limit = N` / `offset = N` constrain which rows the view exposes,
-    /// just like an explicit `LIMIT`/`OFFSET`. Pushing the outer `ORDER BY`/`LIMIT`
-    /// into the inner query would re-sort and truncate around that setting and
-    /// change which rows the view returns, so treat it like an existing inner
-    /// `LIMIT` and skip the pushdown.
-    ///
-    /// Likewise reject `prefer_column_name_to_alias` here: the injected inner
-    /// `ORDER BY` identifiers are resolved under the view's own `SETTINGS`
-    /// clause, so it could re-introduce the alias-vs-source-column ambiguity
-    /// that the outer-context guard above already excludes.
-    if (const auto & settings_ast = sel->settings())
-    {
-        const auto & changes = settings_ast->as<ASTSetQuery &>().changes;
-        if (changes.tryGet("limit") || changes.tryGet("offset") || changes.tryGet("prefer_column_name_to_alias"))
-            return;
-    }
+    /// The view's own `SETTINGS` clause is applied to the context its inner query runs in, so it
+    /// can constrain which rows the view exposes without any clause of the `SELECT` doing so:
+    /// `SETTINGS limit = N` / `offset = N` truncate the result just like an explicit
+    /// `LIMIT`/`OFFSET`, `additional_result_filter` grows a filter above the inner plan (applied
+    /// by `IInterpreterUnionOrSelectQuery::addAdditionalPostFilter` only after that plan is
+    /// built, so an injected inner `LIMIT` would keep the wrong rows and the late filter would
+    /// then drop them), `final` collapses row versions, and `prefer_column_name_to_alias`
+    /// re-introduces the alias-vs-source-column ambiguity that the outer-context guard above
+    /// already excludes. Rather than enumerate them here, reuse the same allowlist proof that
+    /// `StorageView::canHideRows` applies to the clause, so that the two guards cannot drift
+    /// apart: anything but pure execution tuning skips the pushdown.
+    if (StorageView::settingsClauseCanHideRows(sel->settings()))
+        return;
 
     /// The pushed `ORDER BY`/`LIMIT` is evaluated by the view's inner query,
     /// before `StorageView` converts the inner result to the view's declared
