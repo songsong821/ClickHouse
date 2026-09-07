@@ -54,6 +54,10 @@ namespace ErrorCodes
 
 void DiskObjectStorageTransaction::waitBlobRemoval(const StoredObjects & blobs) const
 {
+    /// Blob removal is not deferred on this disk, so there is nothing to wait for.
+    if (!blob_killer)
+        return;
+
     try
     {
         ProfileEventTimeIncrement<Microseconds> watch(ProfileEvents::DiskObjectStorageWaitBlobRemovalMicroseconds);

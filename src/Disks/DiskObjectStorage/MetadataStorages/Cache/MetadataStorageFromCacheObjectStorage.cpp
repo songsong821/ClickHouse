@@ -236,6 +236,11 @@ int64_t MetadataStorageFromCacheObjectStorage::getDeadBlobsQueueEstimate()
     return std::ssize(objects_to_remove);
 }
 
+bool MetadataStorageFromCacheObjectStorage::hasDeadBlobsQueue() const
+{
+    return underlying->hasDeadBlobsQueue();
+}
+
 IMetadataStorage::BlobsToReplicate MetadataStorageFromCacheObjectStorage::getBlobsToReplicate(const ClusterConfigurationPtr & cluster, int64_t max_count)
 {
     return underlying->getBlobsToReplicate(cluster, max_count);
@@ -249,6 +254,11 @@ int64_t MetadataStorageFromCacheObjectStorage::recordAsReplicated(const BlobsToR
 bool MetadataStorageFromCacheObjectStorage::hasUnreplicatedBlobs(const Location & location_to_check)
 {
     return underlying->hasUnreplicatedBlobs(location_to_check);
+}
+
+bool MetadataStorageFromCacheObjectStorage::hasMissingBlobsQueue() const
+{
+    return underlying->hasMissingBlobsQueue();
 }
 
 void MetadataStorageFromCacheObjectStorage::updateCache(const std::vector<std::string> & paths, bool recursive, bool enforce_fresh, std::string * serialized_cache_update_description)
