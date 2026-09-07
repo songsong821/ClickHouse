@@ -218,11 +218,14 @@ public:
     /// before it.
     ///
     /// `IStorage::checkTableCanBeRenamedByDatabaseRename` is a no-op everywhere except
-    /// `StorageMergeTree`, where it only throws under `leader_election`, so the settings-only
-    /// predicate below decides it exactly: it resolves `leader_election` the same way the
-    /// storage would — from the table's own `CREATE` query, falling back to the server-wide
-    /// `merge_tree` default — and when it is off the nested call is a no-op by construction,
-    /// so skipping it changes nothing.
+    /// `StorageMergeTree`, where it only throws under `leader_election`, so the storage-free
+    /// predicate below decides it exactly. It is true only when the `CREATE` query names an
+    /// engine that `StorageMergeTree` backs *and* `leader_election` resolves to on for that
+    /// table (from its own `SETTINGS`, falling back to the server-wide `merge_tree` default);
+    /// when either half is false, the nested call is a no-op by construction and skipping it
+    /// changes nothing. In particular a lazy `ReplicatedMergeTree`, whose hook is the no-op
+    /// one, is not materialized just because the server-wide default happens to be on — which
+    /// would fail the rename outright, since that engine refuses to attach under the setting.
     void checkTableCanBeRenamedByDatabaseRename() const override
     {
         {
@@ -293,9 +296,9 @@ private:
     mutable StoragePtr nested; /// The materialized real storage, set on first access.
     bool drop_load_failed = false; /// `drop()` could not load the lazy table; force fail-closed cleanup decision.
     /// Storage-free answer to "could `checkTableCanBeRenamedByDatabaseRename` reject this
-    /// table?", resolved from the `CREATE` query's settings and the server-wide `merge_tree`
-    /// defaults. Lets `RENAME DATABASE` skip materializing tables that cannot carry the
-    /// `leader_election` guard. Never `nullptr`.
+    /// table?", resolved from the `CREATE` query's engine and settings and the server-wide
+    /// `merge_tree` defaults. Lets `RENAME DATABASE` skip materializing tables that cannot
+    /// carry the `leader_election` guard. Never `nullptr`.
     std::function<bool()> may_need_database_rename_guard;
     LoggerPtr log;
 };

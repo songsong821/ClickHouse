@@ -63,6 +63,20 @@ node5_no_keeper = cluster.add_instance(
     stay_alive=True,
 )
 
+# `test_global_leader_election_default_does_not_load_lazy_replicated` needs a node whose
+# server-wide `merge_tree` defaults turn `leader_election` on, and a table created *before* that
+# default exists (`ReplicatedMergeTree` rejects the setting at create/attach). That means a restart
+# with a new config file, so the node must be its own: a restart under such a default would fail to
+# attach any eagerly loaded `MergeTree` table another test left behind. No object storage is needed
+# either - the scenario is about a table that must never be loaded.
+node6_global_leader_election_default = cluster.add_instance(
+    "node6_global_leader_election_default",
+    main_configs=["configs/config.d/no_system_logs.xml"],
+    with_minio=False,
+    with_zookeeper=True,
+    stay_alive=True,
+)
+
 
 @pytest.fixture(scope="module")
 def started_cluster():
@@ -4654,5 +4668,94 @@ def test_stalled_leader_reclaims_lease_as_new_epoch(started_cluster):
         for node in (node1, node2):
             try:
                 node.query(f"DROP TABLE IF EXISTS {table} SYNC")
+            except Exception:
+                pass
+
+
+GLOBAL_LEADER_ELECTION_CONFIG_PATH = (
+    "/etc/clickhouse-server/config.d/zz_global_leader_election_default.xml"
+)
+GLOBAL_LEADER_ELECTION_CONFIG = (
+    "<clickhouse><merge_tree><leader_election>1</leader_election></merge_tree></clickhouse>"
+)
+
+
+def test_global_leader_election_default_does_not_load_lazy_replicated(started_cluster):
+    """
+    Regression for the lazy `RENAME DATABASE` fast path.
+
+    `DatabaseAtomic::renameDatabase` asks every table it holds whether the rename is allowed, via
+    `IStorage::checkTableCanBeRenamedByDatabaseRename`. For an unloaded table that question is
+    answered by `StorageTableProxy` without materializing the storage, from the `CREATE` query and
+    the server-wide `merge_tree` defaults. Deciding it from the effective value of `leader_election`
+    alone is not enough: only `StorageMergeTree` overrides the hook, so for any other engine the
+    value says nothing at all.
+
+    A `ReplicatedMergeTree` cannot carry `leader_election` in its own `CREATE` query — that is
+    rejected at create/attach — but it does inherit a server-wide `merge_tree.leader_election = 1`
+    default. Under such a default the effective-value-only predicate materialized a lazy
+    `ReplicatedMergeTree` on `RENAME DATABASE`, and materializing it throws, so a metadata-only
+    rename failed because of an unrelated dormant table. `04339_leader_election_rename_database.sh`
+    and `05099`/`05100` cover the `MergeTree` directions of the same hook.
+    """
+    node = node6_global_leader_election_default
+    ensure_node_up(node)
+    database = "lazy_global_le_db"
+    try:
+        node.query(f"DROP DATABASE IF EXISTS {database} SYNC")
+        node.query(f"DROP DATABASE IF EXISTS {database}_new SYNC")
+        node.query(f"CREATE DATABASE {database} ENGINE = Atomic SETTINGS lazy_load_tables = 1")
+        # Created while the server-wide default is still off - the only order in which this
+        # scenario is reachable, since `StorageReplicatedMergeTree` rejects `leader_election`.
+        node.query(
+            f"CREATE TABLE {database}.rmt (x UInt64) "
+            "ENGINE = ReplicatedMergeTree('/clickhouse/tables/lazy_global_le', 'r1') ORDER BY x"
+        )
+        node.query(f"INSERT INTO {database}.rmt VALUES (42)")
+        # A second engine that cannot carry the guard either, and whose materialization would
+        # succeed: it pins the "was not loaded at all" half of the contract, which the
+        # `ReplicatedMergeTree` above can only show by failing the rename.
+        node.query(f"CREATE TABLE {database}.lg (x UInt64) ENGINE = Log")
+        node.query(f"INSERT INTO {database}.lg VALUES (42)")
+
+        # Turn the default on. `Context::getMergeTreeSettings` reads the `merge_tree` config
+        # section once per process, so this needs a restart, not `SYSTEM RELOAD CONFIG`.
+        node.replace_config(GLOBAL_LEADER_ELECTION_CONFIG_PATH, GLOBAL_LEADER_ELECTION_CONFIG)
+        node.restart_clickhouse()
+
+        # Both tables come back unloaded: a lazy database attaches nothing by itself.
+        engines = node.query(
+            f"SELECT name, engine FROM system.tables WHERE database = '{database}' ORDER BY name"
+        )
+        assert engines == "lg\tTableProxy\nrmt\tTableProxy\n", (
+            f"The tables were not lazy after the restart, got: {engines}"
+        )
+
+        # The rename must not depend on those dormant tables: answering the guard for an engine
+        # that does not implement it needs no storage.
+        node.query(f"RENAME DATABASE {database} TO {database}_new")
+
+        engines = node.query(
+            f"SELECT name, engine FROM system.tables WHERE database = '{database}_new' ORDER BY name"
+        )
+        assert engines == "lg\tTableProxy\nrmt\tTableProxy\n", (
+            f"`RENAME DATABASE` materialized a lazy table that cannot carry the guard, got: {engines}"
+        )
+
+        # And materializing it really would have failed the rename: the inherited default is
+        # invalid for this engine. That is the table's own problem, not the rename's.
+        error = node.query_and_get_error(f"SELECT x FROM {database}_new.rmt")
+        assert "leader_election" in error, (
+            f"Expected the `leader_election` rejection on materialization, got: {error}"
+        )
+    finally:
+        node.remove_file_from_container(GLOBAL_LEADER_ELECTION_CONFIG_PATH)
+        try:
+            node.restart_clickhouse()
+        except Exception:
+            ensure_node_up(node)
+        for name in (database, f"{database}_new"):
+            try:
+                node.query(f"DROP DATABASE IF EXISTS {name} SYNC")
             except Exception:
                 pass
