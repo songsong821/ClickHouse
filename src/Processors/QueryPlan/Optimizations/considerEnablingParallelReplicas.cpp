@@ -6,7 +6,6 @@
 #include <Processors/QueryPlan/BuildRuntimeFilterStep.h>
 #include <Processors/QueryPlan/CreatingSetsStep.h>
 #include <Processors/QueryPlan/ExpressionStep.h>
-#include <Processors/QueryPlan/FilterStep.h>
 #include <Processors/QueryPlan/JoinLazyColumnsStep.h>
 #include <Processors/QueryPlan/JoinStep.h>
 #include <Processors/QueryPlan/ReadFromMergeTree.h>
@@ -50,6 +49,24 @@ bool isReadFromOtherReplicas(const IQueryPlanStep & step)
         || typeid_cast<const ReadFromParallelReplicasStep *>(&step);
 }
 
+/// Steps that can sit between the `Union` and the node the two plans have in common without changing
+/// what the node below computes. `FilterStep` is deliberately absent: the replicas ship what comes out
+/// of it, so looking past one instruments a node carrying more rows than they would actually send. It
+/// reports `supportsDataflowStatisticsCollection`, so it is matched on its own terms - and for a plain
+/// `SELECT ... WHERE ...` it is the only node above the read, so peeling it would leave nothing to
+/// instrument but the reading step itself.
+///
+/// Only steps that pass their rows through unchanged belong here.
+/// E.g. `DelayedCreatingSetsStep`. Technically, `ExpressionStep` doesn't qualify,
+/// but it is safe most of the time, and not skipping it would harm more queries by
+/// not applying the optimization rather than save from a few false positives.
+bool isPassThroughWrapper(const IQueryPlanStep & step)
+{
+    return typeid_cast<const ExpressionStep *>(&step)
+        || typeid_cast<const DelayedCreatingSetsStep *>(&step)
+        || typeid_cast<const CreatingSetsStep *>(&step);
+}
+
 /// Find the top node of the parallel replicas plan. E.g.:
 ///
 /// Expression ((Project names + Projection))
@@ -91,15 +108,14 @@ QueryPlan::Node * findTopNodeOfReplicasPlan(QueryPlan::Node * plan_with_parallel
                 /// rather than one of each kind - `Expression -> CreatingSets -> Expression` used to
                 /// leave the search stranded on the second `Expression`.
                 ///
-                /// Only steps that pass their rows through unchanged belong here.
-                /// E.g. `DelayedCreatingSetsStep`. Technically, `ExpressionStep` doesn't qualify,
-                /// but it is safe most of the time, and not skipping it would harm more queries by
-                /// not applying the optimization rather than save from a few false positives.
-                while (node->children.size() == 1
-                       && (typeid_cast<const ExpressionStep *>(node->step.get())
-                           || typeid_cast<const FilterStep *>(node->step.get())
-                           || typeid_cast<const DelayedCreatingSetsStep *>(node->step.get())
-                           || typeid_cast<const CreatingSetsStep *>(node->step.get())))
+                /// On this branch, stop above the reading step: it records only input bytes, so
+                /// matching it leaves no estimate of what the replicas would send and the optimization
+                /// is skipped altogether. The last wrapper above it does record output bytes. The other
+                /// branch is peeled all the way down, since recognizing the read from the other
+                /// replicas is the whole point of looking through its wrappers.
+                while (node->children.size() == 1 && isPassThroughWrapper(*node->step)
+                       && (!node->children.front()->children.empty()
+                           || isReadFromOtherReplicas(*node->children.front()->step)))
                 {
                     node = node->children.front();
                 }
