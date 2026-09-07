@@ -2,8 +2,6 @@
 
 #include <Common/SharedMutex.h>
 
-#include <concepts>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -80,22 +78,6 @@ public:
         : mutex()
         , object(std::forward<Args>(args)...)
     {
-    }
-
-    template <template <class> class ReadLock = SharedLock, typename Functor>
-        requires std::invocable<Functor &&, const T *>
-    decltype(auto) accessReadOnly(Functor && functor) const
-    {
-        ReadLock<Mutex> lock{mutex};
-        return std::invoke(std::forward<Functor>(functor), std::addressof(object));
-    }
-
-    template <template <class> class WriteLock = UniqueLock, typename Functor>
-        requires std::invocable<Functor &&, T *>
-    decltype(auto) accessWriteEnabled(Functor && functor)
-    {
-        WriteLock<Mutex> lock{mutex};
-        return std::invoke(std::forward<Functor>(functor), std::addressof(object));
     }
 
     template <template <class> class ReadLock = SharedLock>
