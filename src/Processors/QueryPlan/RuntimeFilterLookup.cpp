@@ -768,72 +768,59 @@ class RuntimeFilterLookup : public IRuntimeFilterLookup
 public:
     void add(const String & key, const String & display_name, UniqueRuntimeFilterPtr runtime_filter) override
     {
-        data.accessWriteEnabled(
-            [&](Data * lookup_data)
-            {
-                auto & filter = lookup_data->filters_by_name[key];
-                if (!filter)
-                {
-                    ProfileEvents::increment(ProfileEvents::RuntimeFiltersCreated);
-                    filter.reset(runtime_filter.release()); /// Save new filter.
-                    /// Record the readable structural name once because the map is keyed by the opaque rendezvous key.
-                    lookup_data->display_names.emplace(key, display_name);
-                }
-                else
-                {
-                    filter->merge(runtime_filter.get()); /// Add all new keys to an existing filter.
-                }
-                filter->finishInsert();
-            });
+        auto lookup_data = data.getWriteEnabled();
+        auto & filter = lookup_data->filters_by_name[key];
+        if (!filter)
+        {
+            ProfileEvents::increment(ProfileEvents::RuntimeFiltersCreated);
+            filter.reset(runtime_filter.release()); /// Save new filter.
+            /// Record the readable structural name once because the map is keyed by the opaque rendezvous key.
+            lookup_data->display_names.emplace(key, display_name);
+        }
+        else
+        {
+            filter->merge(runtime_filter.get()); /// Add all new keys to an existing filter.
+        }
+        filter->finishInsert();
     }
 
     void replace(const String & name, UniqueRuntimeFilterPtr runtime_filter) override
     {
-        data.accessWriteEnabled(
-            [&](Data * lookup_data)
-            {
-                auto & filter = lookup_data->filters_by_name[name];
-                if (!filter)
-                    ProfileEvents::increment(ProfileEvents::RuntimeFiltersCreated);
-                filter.reset(runtime_filter.release());
-            });
+        auto lookup_data = data.getWriteEnabled();
+        auto & filter = lookup_data->filters_by_name[name];
+        if (!filter)
+            ProfileEvents::increment(ProfileEvents::RuntimeFiltersCreated);
+        filter.reset(runtime_filter.release());
     }
 
     RuntimeFilterConstPtr find(const String & name) const override
     {
-        return data.accessReadOnly(
-            [&](const Data * lookup_data) -> RuntimeFilterConstPtr
-            {
-                auto it = lookup_data->filters_by_name.find(name);
-                if (it == lookup_data->filters_by_name.end())
-                    return nullptr;
-                return it->second;
-            });
+        auto lookup_data = data.getReadOnly();
+        auto it = lookup_data->filters_by_name.find(name);
+        if (it == lookup_data->filters_by_name.end())
+            return nullptr;
+        return it->second;
     }
 
     void logStats() const override
     {
-        data.accessReadOnly(
-            [](const Data * lookup_data)
-            {
-                for (const auto & [filter_key, filter] : lookup_data->filters_by_name)
-                {
-                    const auto & stats = filter->getStats();
-                    /// `filter_key` is the opaque random rendezvous key; prefer the readable structural name.
-                    auto name_it = lookup_data->display_names.find(filter_key);
-                    const String & name
-                        = (name_it != lookup_data->display_names.end() && !name_it->second.empty()) ? name_it->second : filter_key;
-                    LOG_TRACE(
-                        getLogger("RuntimeFilter"),
-                        "Stats for '{}': rows skipped {}, rows checked {}, rows passed {}, blocks skipped {}, blocks processed {}",
-                        name,
-                        stats.rows_skipped.load(),
-                        stats.rows_checked.load(),
-                        stats.rows_passed.load(),
-                        stats.blocks_skipped.load(),
-                        stats.blocks_processed.load());
-                }
-            });
+        auto lookup_data = data.getReadOnly();
+        for (const auto & [filter_key, filter] : lookup_data->filters_by_name)
+        {
+            const auto & stats = filter->getStats();
+            /// `filter_key` is the opaque random rendezvous key; prefer the readable structural name.
+            auto name_it = lookup_data->display_names.find(filter_key);
+            const String & name = (name_it != lookup_data->display_names.end() && !name_it->second.empty()) ? name_it->second : filter_key;
+            LOG_TRACE(
+                getLogger("RuntimeFilter"),
+                "Stats for '{}': rows skipped {}, rows checked {}, rows passed {}, blocks skipped {}, blocks processed {}",
+                name,
+                stats.rows_skipped.load(),
+                stats.rows_checked.load(),
+                stats.rows_passed.load(),
+                stats.blocks_skipped.load(),
+                stats.blocks_processed.load());
+        }
     }
 
 private:
