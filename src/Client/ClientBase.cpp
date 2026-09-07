@@ -4466,8 +4466,20 @@ String ClientBase::runQueryForAI(const String & query, bool readonly, bool allow
             if (current_value == 0 || current_value > limit)
                 client_context->setSetting(String(name), limit);
         };
-        tighten("max_execution_time", static_cast<UInt64>(current[Setting::max_execution_time].totalSeconds()), max_execution_time_limit);
-        tighten("max_execution_time_leaf", static_cast<UInt64>(current[Setting::max_execution_time_leaf].totalSeconds()), max_execution_time_limit);
+        /// The execution-time limits only look like whole seconds: they are `Seconds` settings
+        /// backed by microseconds, and `0.5` is a value a session can legitimately hold. Compared
+        /// in seconds it would round down to zero, be read as "no limit" and have the query of the
+        /// agent widened to 30 seconds - the one thing this must never do is loosen a limit of the
+        /// session. So the comparison is in microseconds, and only the value written is in seconds.
+        const auto tighten_seconds = [&](std::string_view name, Int64 current_microseconds, UInt64 limit_seconds)
+        {
+            const Int64 limit_microseconds = static_cast<Int64>(limit_seconds) * 1'000'000;
+            if (current_microseconds == 0 || current_microseconds > limit_microseconds)
+                client_context->setSetting(String(name), limit_seconds);
+        };
+        tighten_seconds("max_execution_time", current[Setting::max_execution_time].totalMicroseconds(), max_execution_time_limit);
+        tighten_seconds(
+            "max_execution_time_leaf", current[Setting::max_execution_time_leaf].totalMicroseconds(), max_execution_time_limit);
         tighten("max_memory_usage", current[Setting::max_memory_usage], max_memory_usage_limit);
         tighten("max_memory_usage_for_user", current[Setting::max_memory_usage_for_user], max_memory_usage_limit);
 

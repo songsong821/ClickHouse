@@ -202,10 +202,11 @@ void checkNoTableAccessInSetExpression(const IAST & ast, bool allow_system_table
         const auto & parts = identifier->name_parts;
         const String database = parts.size() == 2 ? parts.front() : "";
 
-        /// The schema restriction hides the `system` database. Because of the ambiguity above, an
-        /// unqualified name is rejected as well - it is usually a column, but the session database
-        /// can make it a `system` table, and nothing here can tell.
-        if (!allow_system_tables && (database == "system" || database.empty()))
+        /// The schema restriction hides every database the server owns (`system` and both
+        /// spellings of `information_schema`). Because of the ambiguity above, an unqualified name
+        /// is rejected as well - it is usually a column, but the session database can make it a
+        /// `system` table, and nothing here can tell.
+        if (!allow_system_tables && (isServerOwnedDatabaseForAIAgent(database) || database.empty()))
             throw Exception(
                 ErrorCodes::BAD_ARGUMENTS,
                 "Schema access is disabled for the read-only tool. Use the run_query tool for this query");
@@ -317,7 +318,9 @@ void checkNoSchemaAccess(const IAST & ast)
         if (table_expression->database_and_table_name)
         {
             const auto & table = table_expression->database_and_table_name->as<ASTTableIdentifier &>();
-            if (table.getDatabaseName() == "system")
+            /// Every database the server owns, not just `system`: `information_schema` is views
+            /// over `system` by design, so it is the same schema surface under another name.
+            if (isServerOwnedDatabaseForAIAgent(table.getDatabaseName()))
                 throw Exception(
                     ErrorCodes::BAD_ARGUMENTS,
                     "Schema access is disabled for the read-only tool. Use the run_query tool for this query");
@@ -468,6 +471,26 @@ void collectNamedTables(const IAST & ast, std::vector<AIQueryTableReference> & r
                     add(parts.front(), parts.back());
             }
         }
+    }
+    else if (const auto * with_table = dynamic_cast<const ASTQueryWithTableAndOutput *>(&ast))
+    {
+        /// `EXISTS TABLE`, `EXISTS VIEW`, `EXISTS DICTIONARY`, `SHOW CREATE TABLE`,
+        /// `SHOW CREATE VIEW`, `SHOW CREATE DICTIONARY`: the target of the statement is not an
+        /// `ASTTableExpression`, it is a pair of identifier children of the statement itself, and
+        /// the traversal below sees them as bare identifiers it cannot tell from a column.
+        /// `EXISTS DATABASE` and `SHOW CREATE DATABASE` leave `table` unset and name no table.
+        if (with_table->table)
+            add(with_table->getDatabase(), with_table->getTable());
+    }
+    else if (const auto * show_columns = ast.as<ASTShowColumnsQuery>())
+    {
+        /// `SHOW COLUMNS` and `SHOW INDEXES` keep their target in plain strings rather than in
+        /// children, so the traversal below cannot reach it at all.
+        add(show_columns->database, show_columns->table);
+    }
+    else if (const auto * show_indexes = ast.as<ASTShowIndexesQuery>())
+    {
+        add(show_indexes->database, show_indexes->table);
     }
 
     for (const auto & child : ast.children)

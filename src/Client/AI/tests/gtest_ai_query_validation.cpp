@@ -230,6 +230,50 @@ TEST(AIQueryValidation, CollectsNamedTables)
     EXPECT_EQ(collect("SELECT 1 WHERE 1 IN numbers(3)"), std::vector<String>{});
 }
 
+TEST(AIQueryValidation, CollectsNamedTablesOfStatementTargets)
+{
+    /// The statements whose target is not an `ASTTableExpression`: it is either a pair of
+    /// identifier children of the statement itself (`ASTQueryWithTableAndOutput`), or two plain
+    /// strings the traversal cannot reach at all (`SHOW COLUMNS`, `SHOW INDEXES`). Left out, they
+    /// would reach the server without their engine ever being checked.
+    auto collect = [](const String & query)
+    {
+        std::vector<String> names;
+        for (const auto & reference : collectNamedTablesForAIAgent(*parse(query)))
+            names.push_back(reference.database.empty() ? reference.table : reference.database + "." + reference.table);
+        return names;
+    };
+
+    EXPECT_EQ(collect("SHOW CREATE TABLE db.t"), std::vector<String>{"db.t"});
+    EXPECT_EQ(collect("SHOW CREATE TABLE t"), std::vector<String>{"t"});
+    EXPECT_EQ(collect("SHOW CREATE VIEW db.v"), std::vector<String>{"db.v"});
+    EXPECT_EQ(collect("SHOW CREATE DICTIONARY db.d"), std::vector<String>{"db.d"});
+    EXPECT_EQ(collect("EXISTS TABLE db.t"), std::vector<String>{"db.t"});
+    EXPECT_EQ(collect("EXISTS VIEW db.v"), std::vector<String>{"db.v"});
+    EXPECT_EQ(collect("EXISTS DICTIONARY db.d"), std::vector<String>{"db.d"});
+    EXPECT_EQ(collect("SHOW COLUMNS FROM t FROM db"), std::vector<String>{"db.t"});
+    EXPECT_EQ(collect("SHOW COLUMNS FROM db.t"), std::vector<String>{"db.t"});
+    EXPECT_EQ(collect("SHOW INDEXES FROM t FROM db"), std::vector<String>{"db.t"});
+    EXPECT_EQ(collect("SHOW INDEXES FROM db.t"), std::vector<String>{"db.t"});
+
+    /// The database-only spellings name no table, and reading a database definition reaches
+    /// nothing outside of the server.
+    EXPECT_EQ(collect("EXISTS DATABASE db"), std::vector<String>{});
+    EXPECT_EQ(collect("SHOW CREATE DATABASE db"), std::vector<String>{});
+}
+
+TEST(AIQueryValidation, DisablingSchemaAccessBlocksInformationSchema)
+{
+    /// `information_schema` is views over `system` by design, so it is the same schema surface
+    /// under another name: hiding only `system` would leave it readable.
+    EXPECT_FALSE(isAllowedWithoutSchemaAccess("SELECT * FROM information_schema.tables"));
+    EXPECT_FALSE(isAllowedWithoutSchemaAccess("SELECT column_name FROM information_schema.columns"));
+    EXPECT_FALSE(isAllowedWithoutSchemaAccess("SELECT * FROM INFORMATION_SCHEMA.TABLES"));
+    EXPECT_FALSE(isAllowedWithoutSchemaAccess("SELECT 1 WHERE 1 IN information_schema.tables"));
+    /// Still allowed with schema access, like the `system` tables.
+    EXPECT_TRUE(isAllowed("SELECT * FROM information_schema.tables"));
+}
+
 TEST(AIQueryValidation, AllowsReadingRegularLookingTables)
 {
     /// A name in a FROM can be a view whose definition reaches an external resource, and the
