@@ -5,12 +5,15 @@
 # A part that shares no column with the current table structure must still be readable: every
 # metadata column is missing from it, so it contributes rows of default values.
 #
-# `injectRequiredColumns` injects the smallest physical column of the part when none of the requested
-# columns is physically present, only to learn the number of rows. It intersects the part's columns
-# with the metadata, and when that intersection was empty it fell back to the raw part columns and
-# injected one of those, which the caller cannot resolve: `NO_SUCH_COLUMN_IN_TABLE`, naming a column
-# that is not in the table. With adaptive granularity the row count comes from the marks, so nothing
-# needs to be injected at all.
+# `injectRequiredColumns` used to inject the smallest physical column of the part when none of the
+# requested columns was physically present, only to learn the number of rows. It intersected the
+# part's columns with the metadata, and when that intersection was empty it fell back to the raw part
+# columns and injected one of those, which the caller cannot resolve: `NO_SUCH_COLUMN_IN_TABLE`,
+# naming a column that is not in the table. Nothing is injected any more -- the row count comes from
+# the index granularity, which is exact for non-adaptive parts too -- and what the function does
+# instead is to refuse a part holding data that neither the structure nor a pending conversion
+# accounts for. The cases below pin both halves: which parts read as rows of defaults, and which
+# must not.
 
 CURDIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=../shell_config.sh
@@ -24,6 +27,7 @@ cleanup() {
     $CLICKHOUSE_CLIENT -q "DROP TABLE IF EXISTS t_all_dropped_non_adaptive" 2>/dev/null
     $CLICKHOUSE_CLIENT -q "DROP TABLE IF EXISTS t_dropped_readded" 2>/dev/null
     $CLICKHOUSE_CLIENT -q "DROP TABLE IF EXISTS t_stale_attach" 2>/dev/null
+    $CLICKHOUSE_CLIENT -q "DROP TABLE IF EXISTS t_stale_attach_mixed" 2>/dev/null
     $CLICKHOUSE_CLIENT -q "DROP TABLE IF EXISTS t_non_adaptive_rename" 2>/dev/null
     $CLICKHOUSE_CLIENT -q "DROP TABLE IF EXISTS t_rename_then_drop" 2>/dev/null
 }
@@ -153,12 +157,38 @@ ALTER TABLE t_stale_attach ATTACH PART 'all_1_1_0';
 SELECT count(), min(b), max(b) FROM t_stale_attach;
 " 2>&1 | grep -oF 'NO_SUCH_COLUMN_IN_TABLE' | head -1
 
+echo 'stale part re-attached alongside a column the structure knows'
+
+# The same stale part, except that it also holds `k`, which the structure still knows. Reading a
+# column the part does not have therefore has a candidate to serve the row count, and the older
+# behaviour was to inject `k` and report `b` as its default -- silently hiding the rows of `a` that
+# are on disk. The part is refused for the same reason as above: what decides is whether everything
+# the part holds is accounted for, not whether some column of it happens to be readable.
+$CLICKHOUSE_CLIENT -mq "
+DROP TABLE IF EXISTS t_stale_attach_mixed;
+
+CREATE TABLE t_stale_attach_mixed (a UInt64, k UInt64)
+ENGINE = MergeTree()
+ORDER BY tuple()
+SETTINGS min_bytes_for_wide_part = 0, min_rows_for_wide_part = 0;
+
+INSERT INTO t_stale_attach_mixed SELECT number, number FROM numbers(1000);
+
+ALTER TABLE t_stale_attach_mixed DETACH PART 'all_1_1_0';
+ALTER TABLE t_stale_attach_mixed ADD COLUMN b UInt64 DEFAULT 42;
+ALTER TABLE t_stale_attach_mixed DROP COLUMN a SETTINGS alter_sync = 2;
+ALTER TABLE t_stale_attach_mixed ATTACH PART 'all_1_1_0';
+
+SELECT min(b), max(b) FROM t_stale_attach_mixed;
+" 2>&1 | grep -oF 'NO_SUCH_COLUMN_IN_TABLE' | head -1
+
 echo 'renamed columns'
 
-# What this pins is the mapping of a renamed column to its name in the part. Without it the pairing
-# comes out empty, the part is then found to hold `a` -- neither in the structure nor being dropped --
-# and the read is refused. That happens under either granularity; `index_granularity_bytes = 0` here
-# only makes the injected column come from a part whose marks are not adaptive.
+# What this pins is the mapping of a part's column name through a pending rename. The part holds `a`
+# and `h`, the structure knows them as `c` and `d`, and only that mapping tells the two apart from
+# unexplained data -- without it the part looks like a stale attach and the read is refused. That
+# holds under either granularity; `index_granularity_bytes = 0` here makes the part's marks
+# non-adaptive, so the row count of a read that touches no column is exercised as well.
 $CLICKHOUSE_CLIENT -mq "
 DROP TABLE IF EXISTS t_non_adaptive_rename;
 

@@ -10,6 +10,8 @@ dropped and readded columns, non-adaptive granularity
 10000	42	42
 stale part re-attached
 NO_SUCH_COLUMN_IN_TABLE
+stale part re-attached alongside a column the structure knows
+NO_SUCH_COLUMN_IN_TABLE
 renamed columns
 20000	42	42
 20000	42	42

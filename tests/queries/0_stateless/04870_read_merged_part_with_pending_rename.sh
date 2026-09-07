@@ -56,7 +56,7 @@ SYSTEM DISABLE FAILPOINT mt_select_parts_to_mutate_no_free_threads;
 echo 'every column renamed'
 
 # With no column left under its old name the merged part shares no name with the source parts, which is
-# also the shape that makes a merge need an injected row-count column.
+# also the shape in which a merge reads a part that can serve none of the columns it asks for.
 $CLICKHOUSE_CLIENT -mq "
 DROP TABLE IF EXISTS t_merge_pending_rename_all;
 
