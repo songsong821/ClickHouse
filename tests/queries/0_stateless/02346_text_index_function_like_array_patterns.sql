@@ -248,6 +248,40 @@ FROM (EXPLAIN actions = 1 SELECT count() FROM tab WHERE name LIKE 'alpha%');
 
 DROP TABLE tab;
 
+SELECT 'A non-ASCII ILIKE needle is left to the original condition';
+
+CREATE TABLE tab
+(
+    id UInt32,
+    name String,
+    INDEX idx(name) TYPE text(tokenizer = array)
+)
+ENGINE = MergeTree
+ORDER BY (id);
+
+INSERT INTO tab(id, name) VALUES
+    (1, 'RESUME-SERVICE-PROD'),
+    (2, 'R\xC3\x89SUM\xC3\x89-SERVICE-PROD');
+
+SELECT 'The dictionary scan folds case for ASCII only, while ilike folds the whole of UTF-8, so a non-ASCII needle must not reach the scan';
+
+SELECT groupArray(id) FROM tab WHERE name ILIKE '%r\xC3\xA9sum\xC3\xA9%';
+SELECT groupArray(id) FROM tab WHERE name ILIKE '%r\xC3\xA9sum\xC3\xA9%' SETTINGS use_skip_indexes = 0;
+SELECT groupArray(id) FROM tab WHERE name ILIKE 'r\xC3\xA9sum\xC3\xA9%';
+SELECT groupArray(id) FROM tab WHERE name ILIKE 'r\xC3\xA9sum\xC3\xA9%' SETTINGS use_skip_indexes = 0;
+
+SELECT 'An ASCII needle still reaches the scan, and a case-sensitive non-ASCII pattern is byte-exact';
+
+SELECT groupArray(id) FROM tab WHERE name ILIKE '%service%';
+SELECT groupArray(id) FROM tab WHERE name ILIKE '%service%' SETTINGS use_skip_indexes = 0;
+SELECT groupArray(id) FROM tab WHERE name LIKE '%R\xC3\x89SUM\xC3\x89%';
+SELECT groupArray(id) FROM tab WHERE name LIKE '%R\xC3\x89SUM\xC3\x89%' SETTINGS use_skip_indexes = 0;
+
+SELECT 'ilike ascii', countIf(explain LIKE '%\_\_text_index\_%') > 0 FROM (EXPLAIN actions = 1 SELECT count() FROM tab WHERE name ILIKE '%service%');
+SELECT 'ilike non-ascii', countIf(explain LIKE '%\_\_text_index\_%') > 0 FROM (EXPLAIN actions = 1 SELECT count() FROM tab WHERE name ILIKE '%r\xC3\xA9sum\xC3\xA9%');
+
+DROP TABLE tab;
+
 SELECT 'A FixedString value keeps its zero padding, which the pattern matches against';
 
 CREATE TABLE tab

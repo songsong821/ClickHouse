@@ -1,6 +1,6 @@
 <test>
   <settings>
-    <max_threads>4</max_threads>
+    <max_threads>1</max_threads>
     <use_query_condition_cache>0</use_query_condition_cache>
     <!-- Otherwise an anchored pattern is rewritten into startsWith/endsWith -->
     <optimize_rewrite_like_perfect_affix>0</optimize_rewrite_like_perfect_affix>

@@ -894,11 +894,9 @@ String escapeForLikePattern(std::string_view needle)
 
 }
 
-std::vector<OptimizedRegularExpression>
-MergeTreeIndexConditionText::stringLikeToPatterns(const Field & field, bool case_insensitive) const
+/// Returns one pattern, or nothing when the pattern is not eligible for a dictionary scan.
+std::vector<OptimizedRegularExpression> MergeTreeIndexConditionText::stringLikeToPatterns(const Field & field, bool case_insensitive) const
 {
-    /// Returns a single-element vector on success, empty when the pattern is not eligible for a dictionary scan.
-
     const String value = preprocessor->processConstant(field.safeGet<String>());
     if (value.empty())
         return {};
@@ -915,14 +913,14 @@ MergeTreeIndexConditionText::stringLikeToPatterns(const Field & field, bool case
         return patterns;
     };
 
-    /// The array tokenizer does not split a value, so a token is the whole value and any pattern matches a token
-    /// exactly when it matches the value: anchors, punctuation, '_' and several '%'-separated needles included.
+    /// Special case: the array tokenizer does not split a value, so a token is the whole value.
     if (tokenizer->getType() == ITokenizer::Type::Array)
     {
-        /// Count the characters the pattern requires the value to contain, across the whole pattern: adding
-        /// literal content only shrinks the match set, so it must only score higher - the longest run alone
-        /// would rank '%foo%bar%baz%' below the '%foobar%' it is a subset of. One such character is required
-        /// even at 0, otherwise the pattern can match the empty string, which has no token.
+        /// A non-ASCII needle is unsafe: `match` folds case for ASCII only, `ilike` for the whole of UTF-8.
+        if (case_insensitive && !isAllASCII(reinterpret_cast<const UInt8 *>(value.data()), value.size()))
+            return {};
+
+        /// Wildcards do not count, and one literal character is required: the empty string has no token.
         const auto literal_length = std::ranges::count_if(value, [](char c) { return c != '%' && c != '_'; });
         if (static_cast<size_t>(literal_length) < std::max<size_t>(1, min_pattern_length))
             return {};
@@ -930,9 +928,7 @@ MergeTreeIndexConditionText::stringLikeToPatterns(const Field & field, bool case
         return compile_pattern(value);
     }
 
-    /// A tokenizer that splits a value only handles '%value%', 'value%' and '%value' with an alphanumeric
-    /// needle: such a needle cannot span a token boundary, so a token contains it exactly when the value does.
-
+    /// A splitting tokenizer needs an alphanumeric needle, which cannot span a token boundary.
     const char * data = value.data();
     const size_t length = value.size();
     size_t pos = 0;
@@ -1397,8 +1393,7 @@ bool MergeTreeIndexConditionText::traverseFunctionNode(
         const bool is_prefix = (function_name == "startsWith");
 
         /// A needle inside a single token yields no complete token below, so evaluate it as `LIKE 'needle%'`.
-        /// The needle is a literal, so escape it: with the array tokenizer any pattern is accepted below, and
-        /// an unescaped `%` or `_` in the needle would otherwise be taken for a wildcard.
+        /// The needle is a literal, so escape it: any pattern is accepted below for the array tokenizer.
         if (like_optimization_supported_tokenizers.contains(tokenizer->getType()) && !has_preprocessor && !has_postprocessor
             && settings[Setting::use_text_index_like_evaluation_by_dictionary_scan])
         {
@@ -1435,8 +1430,7 @@ bool MergeTreeIndexConditionText::traverseFunctionNode(
         if (like_optimization_supported_tokenizers.contains(tokenizer->getType()) && !has_preprocessor && !has_postprocessor
             && settings[Setting::use_text_index_like_evaluation_by_dictionary_scan])
         {
-            /// TODO(ahmadov): With a tokenizer that splits a value, only the '%foo%', 'foo%' and '%foo'
-            /// patterns are eligible for a dictionary scan.
+            /// TODO(ahmadov): With a splitting tokenizer, only '%foo%', 'foo%' and '%foo' are eligible.
             /// Add support for multiple patterns later with hint mode:
             /// 1. Handle multiple patterns e.g. %foo bar% -> postings_pattern(%foo) && postings_pattern(bar%) && regex(%foo bar%)
             /// 2. Handle exact tokens and patterns e.g. %foo bar baz% -> postings_exact(bar) && postings_pattern(%foo) && postings_pattern(bar%)
