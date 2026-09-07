@@ -80,6 +80,25 @@ namespace Setting
     extern const SettingsBool parallel_replicas_allow_view_over_mergetree;
     extern const SettingsBool parallel_replicas_plan_based;
     extern const SettingsBool enable_positional_arguments;
+    extern const SettingsBool final;
+    extern const SettingsUInt64 max_rows_to_read;
+    extern const SettingsUInt64 max_bytes_to_read;
+    extern const SettingsOverflowMode read_overflow_mode;
+    extern const SettingsUInt64 max_rows_to_read_leaf;
+    extern const SettingsUInt64 max_bytes_to_read_leaf;
+    extern const SettingsOverflowMode read_overflow_mode_leaf;
+    extern const SettingsSeconds max_execution_time;
+    extern const SettingsOverflowMode timeout_overflow_mode;
+    extern const SettingsSeconds max_execution_time_leaf;
+    extern const SettingsOverflowMode timeout_overflow_mode_leaf;
+    extern const SettingsUInt64 max_rows_to_group_by;
+    extern const SettingsOverflowModeGroupBy group_by_overflow_mode;
+    extern const SettingsUInt64 max_rows_to_sort;
+    extern const SettingsUInt64 max_bytes_to_sort;
+    extern const SettingsOverflowMode sort_overflow_mode;
+    extern const SettingsUInt64 max_rows_in_distinct;
+    extern const SettingsUInt64 max_bytes_in_distinct;
+    extern const SettingsOverflowMode distinct_overflow_mode;
 }
 
 namespace ServerSetting
@@ -1093,15 +1112,16 @@ bool StorageView::isSecurityBarrier(const StorageInMemoryMetadata & metadata, co
     return context->getServerSettings()[ServerSetting::sql_security_views_are_optimization_barriers];
 }
 
-bool StorageView::canHideRows(const ASTPtr & inner_query, const ContextPtr & context, bool remote_source_is_read_identically)
+bool StorageView::effectiveContextCanHideRows(const ContextPtr & context)
 {
-    if (!inner_query)
-        return true;
-
-    /// The view is executed with its effective security context. A profile-level limit or offset
-    /// in that context restricts the rows visible through the view just like a clause in its AST.
-    /// Callers pass the view context, so this also covers `SQL SECURITY DEFINER` profiles.
+    /// The view's inner query runs with its effective security context, so a setting inherited
+    /// through a `SQL SECURITY DEFINER` view's definer profile restricts the rows visible through
+    /// the view just like a clause of its AST. The AST side (`settingsClauseCanHideRows`) is an
+    /// allowlist of execution-only settings; here the whole settings set is always populated, so
+    /// the row-hiding settings that allowlist rejects are enumerated instead.
     const auto & settings = context->getSettingsRef();
+
+    /// A profile-level limit or offset truncates the view's result.
     if (settings[Setting::limit] != 0 || settings[Setting::offset] != 0)
         return true;
 
@@ -1110,6 +1130,45 @@ bool StorageView::canHideRows(const ASTPtr & inner_query, const ContextPtr & con
     /// filter the tables it reads. Both hide rows just like clauses of the view's AST.
     /// Fail closed without matching the filtered table names against the view's sources.
     if (!settings[Setting::additional_result_filter].value.empty() || !settings[Setting::additional_table_filters].value.empty())
+        return true;
+
+    /// `final` makes every source read of the inner query a `FINAL` read, which hides the
+    /// overwritten and deleted versions of a row exactly like a `FINAL` clause in the AST.
+    if (settings[Setting::final])
+        return true;
+
+    /// A quota-like limit with a non-throwing overflow mode stops the query early and returns the
+    /// rows read so far, so the view exposes an arbitrary prefix of its rows instead of all of
+    /// them. Every such pair hides rows; with the default `throw` mode none of them do.
+    /// `max_result_rows` / `max_result_bytes` are deliberately absent: `getViewSubqueryContext`
+    /// resets them for the view's own subquery, so they never truncate the inner query's result.
+    const bool read_breaks = settings[Setting::read_overflow_mode] == OverflowMode::BREAK
+        && (settings[Setting::max_rows_to_read] != 0 || settings[Setting::max_bytes_to_read] != 0);
+    const bool read_leaf_breaks = settings[Setting::read_overflow_mode_leaf] == OverflowMode::BREAK
+        && (settings[Setting::max_rows_to_read_leaf] != 0 || settings[Setting::max_bytes_to_read_leaf] != 0);
+    const bool timeout_breaks = settings[Setting::timeout_overflow_mode] == OverflowMode::BREAK
+        && settings[Setting::max_execution_time].totalMilliseconds() != 0;
+    const bool timeout_leaf_breaks = settings[Setting::timeout_overflow_mode_leaf] == OverflowMode::BREAK
+        && settings[Setting::max_execution_time_leaf].totalMilliseconds() != 0;
+    const bool group_by_breaks = settings[Setting::group_by_overflow_mode] != OverflowMode::THROW
+        && settings[Setting::max_rows_to_group_by] != 0;
+    const bool sort_breaks = settings[Setting::sort_overflow_mode] == OverflowMode::BREAK
+        && (settings[Setting::max_rows_to_sort] != 0 || settings[Setting::max_bytes_to_sort] != 0);
+    const bool distinct_breaks = settings[Setting::distinct_overflow_mode] == OverflowMode::BREAK
+        && (settings[Setting::max_rows_in_distinct] != 0 || settings[Setting::max_bytes_in_distinct] != 0);
+
+    return read_breaks || read_leaf_breaks || timeout_breaks || timeout_leaf_breaks || group_by_breaks || sort_breaks
+        || distinct_breaks;
+}
+
+bool StorageView::canHideRows(const ASTPtr & inner_query, const ContextPtr & context, bool remote_source_is_read_identically)
+{
+    if (!inner_query)
+        return true;
+
+    /// The view is executed with its effective security context, which can hide rows on its own.
+    /// Callers pass the view context, so this also covers `SQL SECURITY DEFINER` profiles.
+    if (effectiveContextCanHideRows(context))
         return true;
 
     const auto * union_query = inner_query->as<ASTSelectWithUnionQuery>();

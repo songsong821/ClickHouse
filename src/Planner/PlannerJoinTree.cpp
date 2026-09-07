@@ -122,7 +122,6 @@ namespace DB
 {
 namespace Setting
 {
-    extern const SettingsString additional_result_filter;
     extern const SettingsMap additional_table_filters;
     extern const SettingsUInt64 allow_experimental_parallel_reading_from_replicas;
     extern const SettingsBool optimize_trivial_view_pushdown_to_distributed;
@@ -136,9 +135,7 @@ namespace Setting
     extern const SettingsBool enable_cascades_optimizer;
     extern const SettingsBool enable_unaligned_array_join;
     extern const SettingsBool join_use_nulls;
-    extern const SettingsDouble limit;
     extern const SettingsBool make_distributed_plan;
-    extern const SettingsDouble offset;
     extern const SettingsBool prefer_column_name_to_alias;
     extern const SettingsJoinAlgorithm join_algorithm;
     extern const SettingsNonZeroUInt64 max_block_size;
@@ -1507,24 +1504,18 @@ void pushOrderByIntoView(
         /// query context. The AST `SETTINGS` guard above only rejects `limit`/`offset`/
         /// `prefer_column_name_to_alias` written in the view definition; it does not see
         /// settings inherited through a `SQL SECURITY DEFINER` view's definer profile.
-        /// A definer profile `limit`/`offset` constrains which rows the view exposes
-        /// (just like an inner `LIMIT`/`OFFSET`), so re-sorting and truncating around it
-        /// changes the result; a definer profile `prefer_column_name_to_alias` reintroduces
-        /// the alias-vs-source-column ambiguity that the outer-context guard already excludes.
-        /// Check the effective context here and skip the pushdown when any of these is set.
-        const auto & view_settings = view_context->getSettingsRef();
-        if (view_settings[Setting::limit] != 0 || view_settings[Setting::offset] != 0 || view_settings[Setting::prefer_column_name_to_alias])
+        /// Any setting of that context that hides rows - a `limit`/`offset`, an extra
+        /// filter, `final`, a limit with a non-throwing overflow mode - constrains which
+        /// rows the view exposes just like an inner clause would, so re-sorting and
+        /// truncating around it changes the result. Reuse the very set that
+        /// `StorageView::canHideRows` rejects, so that the two guards cannot drift apart.
+        if (StorageView::effectiveContextCanHideRows(view_context))
             return;
 
-        /// `additional_result_filter` from the effective context grows a filter step on top of
-        /// the inner query's result, after the inner plan is built (the inner interpreter runs at
-        /// subquery depth 0). An injected inner `LIMIT` would truncate the rows before that filter
-        /// drops its share, so the view would return fewer rows than the filtered top-N — a wrong
-        /// result, not just a missed optimization. `additional_table_filters` are applied at the
-        /// reading step, but fail closed on them too rather than proving which tables they hit,
-        /// mirroring `StorageView::canHideRows`.
-        if (!view_settings[Setting::additional_result_filter].value.empty()
-            || !view_settings[Setting::additional_table_filters].value.empty())
+        /// A definer profile `prefer_column_name_to_alias` reintroduces the alias-vs-source-column
+        /// ambiguity that the outer-context guard already excludes. It hides no rows, so it is not
+        /// part of the shared set above.
+        if (view_context->getSettingsRef()[Setting::prefer_column_name_to_alias])
             return;
 
         inner_header = InterpreterSelectQueryAnalyzer::getSampleBlock(inner, view_context, SelectQueryOptions().analyze());

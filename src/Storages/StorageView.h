@@ -79,6 +79,12 @@ public:
     /// policy attached to the view.
     static bool hasAdditionalTableFilter(const StorageID & storage_id, const String & alias, const ContextPtr & context);
 
+    /// Whether the effective security context of the view hides rows by itself, through settings
+    /// inherited from a `SQL SECURITY DEFINER` view's definer profile (a `limit`, an extra filter,
+    /// `final`, a limit with a non-throwing overflow mode, ...). Fails closed like `canHideRows`,
+    /// of which it is the settings-only part.
+    static bool effectiveContextCanHideRows(const ContextPtr & context);
+
     /// Whether the view's inner query can drop or collapse rows at all. `false` is returned only
     /// when the query provably preserves every row of a plainly readable source, so that a
     /// projection-only view keeps the fully optimizable path even when `isSecurityBarrier` holds;
