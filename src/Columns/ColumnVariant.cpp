@@ -29,6 +29,16 @@ namespace ErrorCodes
     extern const int PARAMETER_OUT_OF_BOUND;
     extern const int SIZES_OF_NESTED_COLUMNS_ARE_INCONSISTENT;
     extern const int SIZES_OF_COLUMNS_DOESNT_MATCH;
+    extern const int INCORRECT_DATA;
+}
+
+static void checkDiscriminatorValue(ColumnVariant::Discriminator discr, size_t num_variants, bool allow_logical_error)
+{
+    if (discr != ColumnVariant::NULL_DISCRIMINATOR && discr >= num_variants)
+        throw Exception(
+            allow_logical_error ? ErrorCodes::LOGICAL_ERROR : ErrorCodes::INCORRECT_DATA,
+            "Invalid discriminator value {} (num_variants = {})",
+            static_cast<UInt32>(discr), num_variants);
 }
 
 std::string ColumnVariant::getName() const
@@ -845,6 +855,8 @@ void ColumnVariant::deserializeAndInsertFromArena(ReadBuffer & in, const IColumn
     Discriminator global_discr;
     readBinaryLittleEndian<Discriminator>(global_discr, in);
 
+    checkDiscriminatorValue(global_discr, variants.size(), /* allow_logical_error= */ false);
+
     Discriminator local_discr = localDiscriminatorByGlobal(global_discr);
     getLocalDiscriminators().push_back(local_discr);
     if (local_discr == NULL_DISCRIMINATOR)
@@ -864,6 +876,8 @@ void ColumnVariant::skipSerializedInArena(ReadBuffer & in) const
 
     if (global_discr == NULL_DISCRIMINATOR)
         return;
+
+    checkDiscriminatorValue(global_discr, variants.size(), /* allow_logical_error= */ true);
 
     variants[localDiscriminatorByGlobal(global_discr)]->skipSerializedInArena(in);
 }
@@ -1770,6 +1784,16 @@ void ColumnVariant::applyNullMap(const ColumnVector<UInt8>::Container & null_map
 void ColumnVariant::applyNegatedNullMap(const ColumnVector<UInt8>::Container & null_map)
 {
     applyNullMapImpl<true>(null_map);
+}
+
+ColumnPtr ColumnVariant::createNullMap() const
+{
+    const auto & discriminators = getLocalDiscriminators();
+    auto null_map = ColumnUInt8::create(discriminators.size(), UInt8(0));
+    auto & null_map_data = null_map->getData();
+    for (size_t i = 0; i < discriminators.size(); ++i)
+        null_map_data[i] = (discriminators[i] == NULL_DISCRIMINATOR);
+    return null_map;
 }
 
 template <bool inverted>
