@@ -388,7 +388,6 @@ namespace Setting
     extern const SettingsString workload;
     extern const SettingsString compatibility;
     extern const SettingsBool allow_experimental_analyzer;
-    extern const SettingsBool allow_experimental_codecs;
     extern const SettingsBool parallel_replicas_only_with_analyzer;
     extern const SettingsBool enable_hdfs_pread;
     extern const SettingsUInt64 max_reverse_dictionary_lookup_cache_size_bytes;
@@ -2208,7 +2207,7 @@ void Context::setUsersConfig(const ConfigurationPtr & config)
     shared->users_config = config;
     shared->access_control->setUsersConfig(*shared->users_config);
     /// The selector uses the effective default-profile settings. Rebuild it after a users reload
-    /// so changes to `allow_experimental_codecs` take effect without restarting the server.
+    /// so changes to the `enable_<family>_codec` settings take effect without restarting the server.
     shared->compression_codec_selector.reset();
     ++shared->compression_codec_selector_generation;
 }

@@ -2831,7 +2831,7 @@ void MergeTreeSettingsImpl::sanityCheck(size_t background_pool_tasks, bool backg
 /// `default_compression_codec` becomes the part default codec, which is fed raw into the statistics
 /// and text-index streams. So a codec that requires a column type (e.g. `PCO`) or is lossy
 /// (e.g. `SZ3`) would only fail later, at the first such write. Experimental codecs are not
-/// classified as unsafe here: they are gated with the session `allow_experimental_codecs` setting
+/// classified as unsafe here: they are gated with the session `enable_<family>_codec` settings
 /// where fresh user input enters (see `registerStorageMergeTree` and
 /// `MergeTreeData::checkAlterIsPossible`), and stored metadata carrying one must remain loadable.
 ///

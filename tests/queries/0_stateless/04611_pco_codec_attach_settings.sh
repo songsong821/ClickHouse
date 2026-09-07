@@ -70,7 +70,7 @@ ATTACH TABLE local.t_def_alp (id UInt64, v Int64 STATISTICS(tdigest)) ENGINE=Mer
 EOF
 
 # An experimental codec that is safe for untyped data (`ZXC` is generic and lossless) must NOT be
-# reset: experimentality is gated with the session 'allow_experimental_codecs' setting where fresh
+# reset: experimentality is gated with the session 'enable_<family>_codec' settings where fresh
 # user input enters, while stored metadata must stay loadable and keep its codec.
 cat > "${WORKING_FOLDER}/metadata/local/t_def_zxc.sql" <<EOF
 ATTACH TABLE local.t_def_zxc (id UInt64, v Int64 STATISTICS(tdigest)) ENGINE=MergeTree ORDER BY id SETTINGS default_compression_codec='ZXC';

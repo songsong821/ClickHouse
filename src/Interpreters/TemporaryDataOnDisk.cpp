@@ -90,14 +90,14 @@ inline CompressionCodecPtr getCodec(const TemporaryDataOnDiskSettings & settings
     /// the validation of the `marks_compression_codec` / `primary_key_compression_codec` MergeTree
     /// settings, which are likewise applied to untyped streams. A gated codec (experimental or beta) is a
     /// session-gated policy: it is allowed when the session that set `temporary_files_codec` enabled that
-    /// very codec (its dedicated `enable_<family>_codec` setting, or - for an experimental one - the
-    /// blanket `allow_experimental_codecs`). The decision is carried in the settings because the query
-    /// settings are no longer available at spill time; see `spillCodecAuthorizedBySession`.
+    /// very codec with the codec's dedicated `enable_<family>_codec` setting. The decision is carried in
+    /// the settings because the query settings are no longer available at spill time; see
+    /// `spillCodecAuthorizedBySession`.
     if (CompressionCodecFactory::isCodecStringGated(settings.compression_codec) && !settings.spill_codec_authorized)
         throw Exception(
             ErrorCodes::BAD_ARGUMENTS,
             "Setting 'temporary_files_codec' cannot use the codec {}: the session did not enable it with the "
-            "codec's 'enable_<family>_codec' setting (or with 'allow_experimental_codecs')",
+            "codec's 'enable_<family>_codec' setting",
             settings.compression_codec);
     if (codec->requiresColumnTypeToCompress())
         throw Exception(

@@ -9,7 +9,7 @@ cluster = ClickHouseCluster(__file__)
 # fed raw (without a column type) into the statistics and text-index streams, so a codec that
 # requires a column type (e.g. PCO) must be rejected when the configuration is loaded. An
 # experimental codec (e.g. ZXC) is rejected as well, unless the server-level
-# `allow_experimental_codecs` policy (the default profile) enables it.
+# `enable_zxc_codec` policy (the default profile) enables it.
 node_pco = cluster.add_instance(
     "node_pco",
     main_configs=["configs/pco_compression_selector.xml"],
@@ -25,7 +25,7 @@ node_zxc = cluster.add_instance(
 node_zxc_allowed = cluster.add_instance(
     "node_zxc_allowed",
     main_configs=["configs/zxc_compression_selector.xml"],
-    user_configs=["configs/allow_experimental_codecs.xml"],
+    user_configs=["configs/enable_zxc_codec.xml"],
 )
 # The global context applies `system_profile`, which deliberately disagrees with the
 # default profile here. The selector must follow the latter because it is a durable
@@ -79,7 +79,7 @@ def test_experimental_codec_in_compression_selector_is_rejected(start_cluster):
     with pytest.raises(QueryRuntimeException) as exc:
         node_zxc.query(
             "INSERT INTO t_zxc_selector SELECT number FROM numbers(1000)",
-            settings={"allow_experimental_codecs": 1},
+            settings={"enable_zxc_codec": 1},
         )
     assert "enable_zxc_codec" in str(exc.value), str(exc.value)
 
@@ -129,12 +129,12 @@ def test_compression_selector_reloads_default_profile_policy(start_cluster):
     )
 
     node_zxc_allowed.replace_config(
-        "/etc/clickhouse-server/users.d/allow_experimental_codecs.xml",
+        "/etc/clickhouse-server/users.d/enable_zxc_codec.xml",
         """
 <clickhouse>
     <profiles>
         <default>
-            <allow_experimental_codecs>0</allow_experimental_codecs>
+            <enable_zxc_codec>0</enable_zxc_codec>
         </default>
     </profiles>
 </clickhouse>

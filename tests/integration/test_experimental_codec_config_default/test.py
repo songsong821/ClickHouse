@@ -109,7 +109,7 @@ def test_attach_with_stored_codec_setting_is_exempt(started_cluster):
 
 
 def test_session_opt_in_is_not_durable_without_default_profile(started_cluster):
-    # With the default profile at `allow_experimental_codecs = 0`, a session-level
+    # With the default profile at `enable_zxc_codec = 0`, a session-level
     # opt-in must not accept the config-inherited experimental default: nothing is
     # written into the table metadata, so the table would become unloadable after
     # a restart, when the value is re-validated against the default profile.

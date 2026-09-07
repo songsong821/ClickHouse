@@ -2,7 +2,7 @@
     <compression>
         <case>
             <!-- ZXC is experimental but safe for untyped data. The selector must still reject it,
-                 because the server-level `allow_experimental_codecs` policy is not enabled here. -->
+                 because the server-level `enable_zxc_codec` policy is not enabled here. -->
             <method>ZXC</method>
         </case>
     </compression>

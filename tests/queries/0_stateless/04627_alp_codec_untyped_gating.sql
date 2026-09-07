@@ -1,7 +1,7 @@
 -- The ALP codec built without a column type falls back to the `Float64` element width, reinterprets
 -- the bytes as floating-point values and throws for any input whose size is not a multiple of that
 -- width, so it cannot reliably compress untyped data and must be rejected everywhere a codec is
--- resolved without a column type — even with `allow_experimental_codecs` enabled, because this is a
+-- resolved without a column type — even with `enable_alp_codec` enabled, because this is a
 -- data-safety property, not the codec gate.
 
 SET enable_alp_codec = 1;

@@ -1,6 +1,6 @@
 -- Tags: no-fasttest
--- Gating of the experimental PCO (pcodec) codec: the experimental switch, the fact that it needs a
--- column type (so it is rejected in TTL RECOMPRESS), and that a codec-only ALTER can still add it.
+-- Gating of the experimental PCO (pcodec) codec: the `enable_pco_codec` gate, the fact that it needs
+-- a column type (so it is rejected in TTL RECOMPRESS), and that a codec-only ALTER can still add it.
 
 -- Experimental gate: rejected by default, both directly and inside a chain.
 DROP TABLE IF EXISTS t_pco_gate;
@@ -12,18 +12,15 @@ SET enable_pco_codec = 1;
 CREATE TABLE t_pco_gate (x UInt32 CODEC(PCO)) ENGINE = MergeTree ORDER BY tuple();
 DROP TABLE t_pco_gate;
 CREATE TABLE t_pco_gate (x UInt64 CODEC(ZXC)) ENGINE = MergeTree ORDER BY tuple(); -- { serverError BAD_ARGUMENTS }
-SET enable_pco_codec = 0;
 
-SET allow_experimental_codecs = 1;
-
--- Allowed once the switch is on.
+-- Allowed once the gate is on.
 CREATE TABLE t_pco_gate (x UInt32 CODEC(PCO)) ENGINE = MergeTree ORDER BY tuple();
 INSERT INTO t_pco_gate SELECT number FROM numbers(1000);
 SELECT 'rows', count() FROM t_pco_gate;
 DROP TABLE t_pco_gate;
 
 -- PCO needs the column type, so it cannot be used where the codec is resolved without one:
--- TTL ... RECOMPRESS (rejected even with the experimental switch on).
+-- TTL ... RECOMPRESS (rejected even with the gate on).
 DROP TABLE IF EXISTS t_pco_ttl;
 CREATE TABLE t_pco_ttl (d Date, x UInt32)
 ENGINE = MergeTree ORDER BY tuple()
@@ -42,7 +39,7 @@ DROP TABLE t_pco_alter_ttl;
 SET allow_suspicious_ttl_expressions = 0;
 
 -- The untyped MergeTree compression settings reject PCO (experimental, and marks/primary-key
--- streams are also untyped), both directly and inside a chain, even with the switch on.
+-- streams are also untyped), both directly and inside a chain, even with the gate on.
 CREATE TABLE t_pco_s (x UInt32) ENGINE = MergeTree ORDER BY tuple() SETTINGS default_compression_codec = 'PCO'; -- { serverError BAD_ARGUMENTS }
 CREATE TABLE t_pco_s (x UInt32) ENGINE = MergeTree ORDER BY tuple() SETTINGS marks_compression_codec = 'PCO'; -- { serverError BAD_ARGUMENTS }
 CREATE TABLE t_pco_s (x UInt32) ENGINE = MergeTree ORDER BY tuple() SETTINGS primary_key_compression_codec = 'PCO'; -- { serverError BAD_ARGUMENTS }

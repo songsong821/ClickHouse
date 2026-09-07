@@ -1,10 +1,10 @@
 <clickhouse>
     <profiles>
         <default>
-            <allow_experimental_codecs>1</allow_experimental_codecs>
+            <enable_zxc_codec>1</enable_zxc_codec>
         </default>
         <system>
-            <allow_experimental_codecs>0</allow_experimental_codecs>
+            <enable_zxc_codec>0</enable_zxc_codec>
         </system>
     </profiles>
 </clickhouse>

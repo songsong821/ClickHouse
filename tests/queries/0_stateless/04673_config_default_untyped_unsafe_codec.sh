@@ -5,8 +5,8 @@
 # `<merge_tree>` config defaults instead of the table definition. Such a value is not stored in the
 # table metadata, so it is re-resolved on every load, and it must be validated exactly like an
 # explicit one: a codec that can never work on an untyped stream (`T64`, which stores the column
-# type id in the stream) has to be rejected even when `allow_experimental_codecs` is enabled
-# everywhere, because that gate has nothing to do with this class of codecs.
+# type id in the stream) has to be rejected even when every `enable_<family>_codec` setting is
+# enabled, because those gates have nothing to do with this class of codecs.
 
 CUR_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=../shell_config.sh
@@ -16,18 +16,12 @@ WORKING_FOLDER="${CLICKHOUSE_TMP}/04673_config_default_untyped_unsafe_codec"
 rm -rf "${WORKING_FOLDER}"
 mkdir -p "${WORKING_FOLDER}"
 
-# `allow_experimental_codecs` is on in the default profile as well as in every session below, so
-# nothing here is gated by experimentality; `T64` is not experimental in the first place.
+# Nothing here is gated by experimentality; `T64` is not experimental in the first place.
 cat > "${WORKING_FOLDER}/unsafe.xml" <<EOF
 <clickhouse>
     <merge_tree>
         <marks_compression_codec>T64</marks_compression_codec>
     </merge_tree>
-    <profiles>
-        <default>
-            <allow_experimental_codecs>1</allow_experimental_codecs>
-        </default>
-    </profiles>
 </clickhouse>
 EOF
 
@@ -40,11 +34,6 @@ cat > "${WORKING_FOLDER}/unsafe_lossy.xml" <<EOF
     <merge_tree>
         <marks_compression_codec>SZ3</marks_compression_codec>
     </merge_tree>
-    <profiles>
-        <default>
-            <allow_experimental_codecs>1</allow_experimental_codecs>
-        </default>
-    </profiles>
 </clickhouse>
 EOF
 
@@ -53,11 +42,6 @@ cat > "${WORKING_FOLDER}/safe.xml" <<EOF
     <merge_tree>
         <marks_compression_codec>ZSTD(4)</marks_compression_codec>
     </merge_tree>
-    <profiles>
-        <default>
-            <allow_experimental_codecs>1</allow_experimental_codecs>
-        </default>
-    </profiles>
 </clickhouse>
 EOF
 
@@ -78,9 +62,8 @@ ALTER TABLE t_override RESET SETTING marks_compression_codec; -- { serverError B
 "
 
 # `SZ3` is experimental, so it has to be enabled first - otherwise it never reaches the lossy check.
-# `clickhouse-local` does not apply `<profiles>`, so the opt-in goes on the command line; the codec
-# then passes the experimental gate and must still be rejected for being lossy.
-SZ3_OPT_IN=(--allow_experimental_codecs=1 --enable_sz3_codec=1)
+# The codec then passes the experimental gate and must still be rejected for being lossy.
+SZ3_OPT_IN=(--enable_sz3_codec=1)
 
 ${CLICKHOUSE_LOCAL} --config-file="${WORKING_FOLDER}/unsafe_lossy.xml" "${SZ3_OPT_IN[@]}" --multiquery "
 CREATE TABLE t_inherited_lossy (x UInt32) ENGINE = MergeTree ORDER BY tuple();

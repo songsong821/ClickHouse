@@ -201,7 +201,7 @@ String CompressionCodecFactory::getReasonUnsafeForUntypedData(const ASTPtr & cod
             continue;
 
         /// Experimentality is deliberately not classified here: it is a policy gate, not a data-safety
-        /// property. It is enforced with the session `allow_experimental_codecs` setting at the points
+        /// property. It is enforced with the session `enable_<family>_codec` settings at the points
         /// where fresh user input enters (`validateCodecAndGetPreprocessedAST` and the codec-valued
         /// MergeTree settings gates in `registerStorageMergeTree` / `MergeTreeData::checkAlterIsPossible`),
         /// while stored metadata carrying an experimental codec must remain loadable and writable.

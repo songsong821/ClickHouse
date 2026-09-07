@@ -2,7 +2,7 @@
 -- Tests the PCO (pcodec) compression codec: lossless round-trip across numeric types, codec
 -- chaining, parameters, and that it actually compresses. Each check prints 0 = no mismatches.
 
-SET allow_experimental_codecs = 1;
+SET enable_pco_codec = 1;
 
 -- Per-element round-trip verification for every supported numeric type.
 DROP TABLE IF EXISTS t_pco;

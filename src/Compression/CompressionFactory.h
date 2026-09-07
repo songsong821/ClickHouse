@@ -117,10 +117,9 @@ public:
     /// codec chain is reported as ungated and fails later, where the codec is actually resolved.
     static bool isCodecStringGated(const String & compression_codec);
 
-    /// Whether `settings` satisfy the gate of every codec in the chain `compression_codec`: each gated
-    /// codec's dedicated `enable_<family>_codec` setting, or - for an experimental one - the blanket
-    /// `allow_experimental_codecs` escape hatch. Unlike `validateCodecString` this classifies instead of
-    /// throwing: it is meant for callers that record the session's authorization long before the codec is
+    /// Whether `settings` satisfy the gate of every codec in the chain `compression_codec`, i.e. every
+    /// gated codec has its dedicated `enable_<family>_codec` setting enabled. Unlike
+    /// `validateCodecString` this classifies instead of throwing: it is meant for callers that record the session's authorization long before the codec is
     /// resolved (the `temporary_files_codec` spill settings), so an unresolvable codec string is reported
     /// as authorized here and fails later, where it is actually used, with a precise message.
     static bool areCodecGatesSatisfied(const String & compression_codec, const Settings & settings);

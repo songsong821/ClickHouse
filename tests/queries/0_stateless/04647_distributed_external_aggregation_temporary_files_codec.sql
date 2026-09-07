@@ -2,8 +2,7 @@
 -- The temporary data settings of a spilling `GROUP BY` must survive query plan serialization,
 -- so that a remote shard spills with the initiator's `temporary_files_codec` and under the
 -- initiator's authorization for that codec, instead of the shard's own defaults. That authorization
--- can come from the dedicated `enable_<family>_codec` setting as well as from the blanket
--- `allow_experimental_codecs`, so both have to reach the shard.
+-- comes from the codec's dedicated `enable_<family>_codec` setting, so it has to reach the shard.
 
 SET serialize_query_plan = 1;
 SET prefer_localhost_replica = 0;
@@ -22,12 +21,7 @@ FORMAT Null; -- { serverError BAD_ARGUMENTS }
 
 -- With the opt-in, the shard spills with the codec chosen by the initiator.
 SELECT number, count() FROM remote('127.0.0.{1,2}', numbers(2_000_000)) GROUP BY number
-SETTINGS log_comment = '04647_distributed_external_aggregation_temporary_files_codec', allow_experimental_codecs = 1, temporary_files_codec = 'ZXC'
-FORMAT Null;
-
--- The dedicated per-codec setting authorizes the shard spill just as well.
-SELECT number, count() FROM remote('127.0.0.{1,2}', numbers(2_000_000)) GROUP BY number
-SETTINGS log_comment = '04647_distributed_external_aggregation_temporary_files_codec_dedicated', enable_zxc_codec = 1, temporary_files_codec = 'ZXC'
+SETTINGS log_comment = '04647_distributed_external_aggregation_temporary_files_codec', enable_zxc_codec = 1, temporary_files_codec = 'ZXC'
 FORMAT Null;
 
 SYSTEM FLUSH LOGS system.query_log;
@@ -37,7 +31,7 @@ SYSTEM FLUSH LOGS system.query_log;
 -- `current_database` directly: the serialized plan carries fully qualified table names, so the
 -- shard query is logged with the default database rather than the database of the test.
 -- They are attributed to this test through the initiator query, which does have
--- `current_database = currentDatabase()`. The log comments are matched exactly: `clickhouse-test`
+-- `current_database = currentDatabase()`. The log comment is matched exactly: `clickhouse-test`
 -- gives every other query of the file the default log comment `<test name>.sql-default`, which a
 -- prefix match would pick up as well.
 SELECT log_comment, sum(ProfileEvents['ExternalProcessingCompressedBytesTotal']) > 0
@@ -45,7 +39,7 @@ FROM system.query_log
 WHERE event_date >= yesterday() AND event_time >= (SELECT ts FROM start_ts)
     AND type != 1
     AND is_initial_query = 0
-    AND log_comment IN ('04647_distributed_external_aggregation_temporary_files_codec', '04647_distributed_external_aggregation_temporary_files_codec_dedicated')
+    AND log_comment = '04647_distributed_external_aggregation_temporary_files_codec'
     AND initial_query_id IN (
         SELECT query_id
         FROM system.query_log
@@ -53,6 +47,6 @@ WHERE event_date >= yesterday() AND event_time >= (SELECT ts FROM start_ts)
             AND type != 1
             AND is_initial_query
             AND current_database = currentDatabase()
-            AND log_comment IN ('04647_distributed_external_aggregation_temporary_files_codec', '04647_distributed_external_aggregation_temporary_files_codec_dedicated'))
+            AND log_comment = '04647_distributed_external_aggregation_temporary_files_codec')
 GROUP BY log_comment
 ORDER BY log_comment;

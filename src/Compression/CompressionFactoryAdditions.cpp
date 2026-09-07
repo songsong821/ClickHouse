@@ -110,12 +110,10 @@ bool CompressionCodecFactory::areCodecGatesSatisfied(const String & compression_
                 continue;
 
             const String gate_setting_name = getGateSettingName(family_name);
-            const std::optional<SettingsTierType> tier = getGateTier(gate_setting_name);
-            if (!tier)
+            if (!getGateTier(gate_setting_name))
                 continue;
 
-            const bool umbrella_bypass = *tier == SettingsTierType::EXPERIMENTAL && settings[Setting::allow_experimental_codecs];
-            if (!settings.get(gate_setting_name).safeGet<bool>() && !umbrella_bypass)
+            if (!settings.get(gate_setting_name).safeGet<bool>())
                 return false;
         }
     }
