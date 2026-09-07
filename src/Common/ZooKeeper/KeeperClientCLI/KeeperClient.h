@@ -3,12 +3,9 @@
 #include <Common/ZooKeeper/KeeperClientCLI/Commands.h>
 #include <Common/ZooKeeper/ZooKeeper.h>
 #include <Core/Names.h>
-#include <filesystem>
 #include <future>
 #include <unordered_map>
 
-
-namespace fs = std::filesystem;
 
 namespace DB
 {

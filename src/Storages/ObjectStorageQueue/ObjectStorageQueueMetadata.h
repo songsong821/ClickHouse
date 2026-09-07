@@ -1,7 +1,6 @@
 #pragma once
 
 #include <base/pathToString.h>
-#include <filesystem>
 #include <mutex>
 #include <optional>
 #include <unordered_map>
@@ -19,7 +18,6 @@
 #include <Common/ZooKeeper/ZooKeeperRetries.h>
 #include <Common/SettingsChanges.h>
 
-namespace fs = std::filesystem;
 namespace Poco { class Logger; }
 
 namespace DB

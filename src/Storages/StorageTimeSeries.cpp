@@ -32,7 +32,6 @@
 #include <Storages/TimeSeries/makeASTSelectFromTimeSeries.h>
 #include <Storages/TimeSeries/normalizeTimeSeriesDefinition.h>
 #include <base/insertAtEnd.h>
-#include <filesystem>
 #include <boost/algorithm/string.hpp>
 #include <base/EnumReflection.h>
 
@@ -59,8 +58,6 @@ namespace ErrorCodes
     extern const int UNEXPECTED_TABLE_ENGINE;
     extern const int UNKNOWN_TABLE;
 }
-
-namespace fs = std::filesystem;
 
 
 namespace

@@ -546,6 +546,11 @@ def main():
                         f"{wine_env} wine {build_dir}/programs/clickhouse.exe --version",
                         f'{wine_env} wine {build_dir}/programs/clickhouse.exe local --query "SELECT 1"',
                     ],
+                    # Run all of them even after one fails. The step still fails if any command
+                    # does, but while the port is being brought up every round of this job is the
+                    # only way to learn anything about how the binary behaves, so one failure
+                    # should not hide what the commands after it would have said.
+                    fail_fast=False,
                     with_info=True,
                 )
             )

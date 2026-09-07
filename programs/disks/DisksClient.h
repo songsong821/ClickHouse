@@ -1,7 +1,6 @@
 #pragma once
 
 #include <base/pathToString.h>
-#include <filesystem>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -13,8 +12,6 @@
 #include <boost/program_options/variables_map.hpp>
 
 #include <Poco/Util/AbstractConfiguration.h>
-
-namespace fs = std::filesystem;
 
 namespace DB
 {

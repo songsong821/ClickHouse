@@ -6,7 +6,6 @@
 #include <Common/SettingsChanges.h>
 #include <Common/ZooKeeper/Types.h>
 #include <Common/ZooKeeper/ZooKeeperPathUtils.h>
-#include <filesystem>
 
 namespace Poco
 {
@@ -17,8 +16,6 @@ namespace zkutil
 {
 class ZooKeeper;
 }
-
-namespace fs = std::filesystem;
 
 namespace DB
 {

@@ -1,3 +1,4 @@
+#include <cstdio>
 #include <cstdlib>
 #include <string_view>
 #if defined(OS_WINDOWS)
@@ -21,27 +22,36 @@ namespace DB::ErrorCodes
     extern const int SYSTEM_ERROR;
 }
 
-std::pair<uint16_t, uint16_t> getTerminalSize(int in_fd, int err_fd)
+/// `in_fd` is used on POSIX only: see the comment on the Windows branch below.
+std::pair<uint16_t, uint16_t> getTerminalSize([[maybe_unused]] int in_fd, int err_fd)
 {
 #if defined(OS_WINDOWS)
     /// Windows has no `TIOCGWINSZ`; the size is in the console's screen-buffer info. Take it
     /// from `srWindow`, the visible window, and not from `dwSize`, the screen buffer - the
     /// latter includes the scrollback and is typically far taller than the terminal.
-    for (int fd : {in_fd, err_fd})
+    ///
+    /// Only an *output* handle has a screen buffer, so `in_fd` is of no use here: unlike
+    /// `ioctl(TIOCGWINSZ)`, which answers on any descriptor of the terminal, its Windows
+    /// counterpart fails with `ERROR_INVALID_HANDLE` on the console *input* handle. Standard
+    /// output is tried alongside `err_fd` so that the size is still found when only one of the
+    /// two is redirected.
+    ///
+    /// `GetConsoleScreenBufferInfo` is also the predicate, rather than `_isatty` guarding it:
+    /// `_isatty` is true for every character device, `NUL` and the console input handle
+    /// included, so it cannot decide whether a descriptor has a screen buffer to measure -
+    /// whereas `GetConsoleScreenBufferInfo` succeeds exactly on one that does. Its failure is
+    /// therefore the answer "no console here", the same one the POSIX branch below gives for a
+    /// descriptor that is not a tty, and not an error: `clickhouse.exe --version` with its
+    /// output redirected to a pipe must print the version rather than throw.
+    for (int fd : {err_fd, _fileno(stdout)})
     {
-        if (!_isatty(fd))
-            continue;
-
         auto * handle = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
         if (handle == INVALID_HANDLE_VALUE)
             continue;
 
         CONSOLE_SCREEN_BUFFER_INFO info{};
         if (!GetConsoleScreenBufferInfo(handle, &info))
-            throw DB::Exception(
-                DB::ErrorCodes::SYSTEM_ERROR,
-                "Cannot obtain terminal window size (GetConsoleScreenBufferInfo), error code: {}",
-                GetLastError());
+            continue;
 
         return {static_cast<uint16_t>(info.srWindow.Right - info.srWindow.Left + 1),
                 static_cast<uint16_t>(info.srWindow.Bottom - info.srWindow.Top + 1)};
