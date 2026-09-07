@@ -1,5 +1,6 @@
 import logging
 import time
+import uuid
 from multiprocessing.dummy import Pool
 
 import pytest
@@ -821,6 +822,71 @@ def test_filter_pushdown(started_cluster):
     cursor.execute("DROP SCHEMA test_filter_pushdown CASCADE")
     node1.query("DROP TABLE test_filter_pushdown_local_table")
     node1.query("DROP TABLE test_filter_pushdown_pg_table")
+
+
+
+def test_limit_pushdown(started_cluster):
+    cursor = started_cluster.postgres_conn.cursor()
+    cursor.execute("DROP TABLE IF EXISTS test_limit_pushdown")
+    cursor.execute("CREATE TABLE test_limit_pushdown (id integer)")
+    cursor.execute("INSERT INTO test_limit_pushdown SELECT generate_series(1, 100)")
+
+    node1.query("DROP TABLE IF EXISTS pg_limit_pushdown")
+    node1.query(
+        f"""
+        CREATE TABLE pg_limit_pushdown (id UInt32)
+        ENGINE PostgreSQL('postgres1:5432', 'postgres', 'test_limit_pushdown', 'postgres', '{pg_pass}');
+    """
+    )
+
+    def run(query, **settings):
+        """Return the query result and the number of rows read from PostgreSQL."""
+        query_id = str(uuid.uuid4())
+        result = node1.query(query, query_id=query_id, settings=settings)
+        node1.query("SYSTEM FLUSH LOGS query_log")
+        read_rows = node1.query(
+            f"SELECT read_rows FROM system.query_log WHERE query_id = '{query_id}' AND type = 'QueryFinish'"
+        )
+        return result.strip(), int(read_rows.strip())
+
+    # The LIMIT is sent to PostgreSQL, so only the requested rows are read.
+    assert run("SELECT count() FROM (SELECT * FROM pg_limit_pushdown LIMIT 5)") == (
+        "5",
+        5,
+    )
+
+    # The OFFSET is applied locally, so the rows it skips are read remotely as well.
+    assert run(
+        "SELECT count() FROM (SELECT * FROM pg_limit_pushdown LIMIT 5 OFFSET 3)"
+    ) == ("5", 8)
+
+    # The setting turned off restores reading the whole table.
+    assert run(
+        "SELECT count() FROM (SELECT * FROM pg_limit_pushdown LIMIT 5)",
+        external_storage_push_down_limit=0,
+    ) == ("5", 100)
+
+    # `limit + offset` overflows UInt64, so no limit can be pushed down. The plan-level limit of
+    # `ReadFromPostgreSQL` comes from `LimitStep::getLimitForSorting`, which uses 0 as the overflow
+    # sentinel; it must not become a remote `LIMIT 0`, which would turn "all rows except the first"
+    # into "no rows".
+    assert run(
+        "SELECT count() FROM (SELECT * FROM pg_limit_pushdown LIMIT 18446744073709551615 OFFSET 1)"
+    ) == ("99", 100)
+
+    # A real `LIMIT 0` still reads nothing.
+    assert run("SELECT count() FROM (SELECT * FROM pg_limit_pushdown LIMIT 0)") == (
+        "0",
+        0,
+    )
+
+    # ORDER BY is applied locally, so the remote result must not be truncated.
+    assert run(
+        "SELECT count() FROM (SELECT * FROM pg_limit_pushdown ORDER BY id DESC LIMIT 5)"
+    ) == ("5", 100)
+
+    cursor.execute("DROP TABLE test_limit_pushdown")
+    node1.query("DROP TABLE pg_limit_pushdown")
 
 
 def test_fixed_string_type(started_cluster):
