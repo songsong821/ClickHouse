@@ -72,12 +72,14 @@ public:
     /// result the plan may end up not needing at all, so any further consult-only caller belongs here.
     SetPtr getOrderedSetIfAlreadyBuilt(const ContextPtr & context);
 
-    /// Whether the contents of the set can still change after a caller has looked at them.
-    /// Only a set backed by a table can: `StorageSet::insertBlock` inserts into the very `Set` object
-    /// held here, so a query sees values inserted after it started. A set the query builds for itself
-    /// is frozen once built. A caller that derives a decision from the set at analysis time and never
-    /// revisits it - index analysis that prunes granules, say - must refuse a set that can change.
-    virtual bool canChangeDuringQuery() const { return false; }
+    /// Whether the contents of the set can change while the query runs, without the query doing it.
+    /// Only a set that lives in a table can: `StorageSet::insertBlock` inserts into the very `Set`
+    /// object held here, so a concurrent `INSERT` is visible to a query that already started. A set the
+    /// query builds for itself is filled once and frozen. A caller that derives a decision from the set
+    /// and never revisits it - index analysis that prunes granules, say - must refuse a mutable one.
+    /// `FunctionIn` asks a related but distinct question with its own carrier tests: there the concern
+    /// is folding before a set the query owns has been filled, which is not mutation by anyone else.
+    virtual bool isMutableDuringQuery() const { return false; }
 
     using Hash = CityHash_v1_0_2::uint128;
     virtual Hash getHash() const = 0;
@@ -92,7 +94,11 @@ using FutureSetPtr = std::shared_ptr<FutureSet>;
 class FutureSetFromStorage final : public FutureSet
 {
 public:
-    explicit FutureSetFromStorage(Hash hash_, ASTPtr ast_, SetPtr set_, std::optional<StorageID> storage_id);
+    /// `is_mutable_during_query_` says whether `set_` is the live set of a table, which keeps changing
+    /// under the query, or a set the query built for itself and no longer touches. It is not derived
+    /// from `storage_id_`: the two happen to agree today, but the storage id is an identity, not a
+    /// statement about who may write to the set.
+    explicit FutureSetFromStorage(Hash hash_, ASTPtr ast_, SetPtr set_, std::optional<StorageID> storage_id, bool is_mutable_during_query_);
 
     SetPtr get() const override;
     DataTypes getTypes() const override;
@@ -100,10 +106,7 @@ public:
     Hash getHash() const override;
     ASTPtr getSourceAST() const override { return ast; }
 
-    /// No storage id means the set is not backed by a table at all: the query built it for itself and
-    /// wrapped it here to hand to `FunctionIn` (see `optimizeLazyFinal`). Such a set is filled once,
-    /// by the `CreatingSetStep` below it, and never mutated afterwards.
-    bool canChangeDuringQuery() const override { return storage_id.has_value(); }
+    bool isMutableDuringQuery() const override { return is_mutable_during_query; }
 
     const std::optional<StorageID> & getStorageID() const { return storage_id; }
 private:
@@ -111,6 +114,7 @@ private:
     ASTPtr ast;
     std::optional<StorageID> storage_id;
     SetPtr set;
+    bool is_mutable_during_query;
 };
 
 using FutureSetFromStoragePtr = std::shared_ptr<FutureSetFromStorage>;
@@ -262,6 +266,8 @@ public:
     using SetsFromStorage = std::unordered_map<Hash, FutureSetFromStoragePtr, Hashing>;
     using SetsFromSubqueries = std::unordered_map<Hash, FutureSetFromSubqueryPtr, Hashing>;
 
+    /// The set lives in a table (`ENGINE = Set`, or `SharedSet` in ClickHouse Cloud), so it is mutable:
+    /// both hand over the table's own `Set` object, which an `INSERT` writes into in place.
     FutureSetFromStoragePtr addFromStorage(const Hash & key, ASTPtr ast, SetPtr set_, StorageID storage_id);
     FutureSetFromTuplePtr addFromTuple(const Hash & key, ASTPtr ast, ColumnsWithTypeAndName block, const Settings & settings);
 
