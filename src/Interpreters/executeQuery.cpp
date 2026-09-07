@@ -1950,7 +1950,17 @@ bool deleteQueryStopsBeforeSources(const ASTDeleteQuery & delete_query, const Co
 
     /// The heavy path: the statement becomes an `ALTER ... DELETE`-style mutation directly.
     if (table->supportsDelete())
+    {
+        /// Only the predicate is serialized into that mutation command, and the storages taking it have no
+        /// notion of `MergeTree`-style partitions, so the interpreter rejects an `IN PARTITION` clause with
+        /// `NOT_IMPLEMENTED` rather than mutating a wider scope than the statement asked for — before it
+        /// builds the command and before the probes below, hence before anything reads the predicate's
+        /// tables.
+        if (delete_query.partition || delete_query.partitions)
+            return true;
+
         return !mutation_checks_pass();
+    }
 
     /// The lightweight path, gated exactly as in the interpreter.
     if (table->supportsLightweightDelete())

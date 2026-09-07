@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tags: long, no-flaky-check, no-random-detach, no-replicated-database
+# Tags: long, no-flaky-check, no-random-detach, no-replicated-database, no-fasttest
 # no-random-detach: test uses DETACH/ATTACH itself
 # long: comprehensive regression suite (RBAC users, BACKUP/RESTORE, many DETACH/ATTACH cycles) whose
 #       cumulative time across flaky-check reruns exceeds the flaky-check budget, though each run is quick
@@ -7,6 +7,9 @@
 #       seconds on a sanitizer build, so the reruns hit the per-test timeout. The suite is deterministic
 #       (it drives every `DETACH`/`ATTACH` itself and is `no-random-detach`), so there is nothing for the
 #       flaky check to shake out here.
+# no-fasttest: the `DELETE ... IN PARTITION` rejection needs a `supportsDelete` target, and the only one
+#              available in a stateless test is `EmbeddedRocksDB`, which the fast test does not build
+#              (`ENABLE_LIBRARIES=0`). The fast test runs with `--no-long` and already skips this suite.
 
 CURDIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=../shell_config.sh
@@ -1043,6 +1046,25 @@ ${CLICKHOUSE_CLIENT} -q "INSERT INTO t_reattach_mut_src VALUES (2)"
 check_if_detached "DELETE FROM t_reattach_mut_mt WHERE a IN (SELECT a FROM t_reattach_mut_src)" "t_reattach_mut_src"
 check_if_detached "ALTER TABLE t_reattach_mut_mt DELETE WHERE a IN (SELECT a FROM t_reattach_mut_src) SETTINGS mutations_sync = 1" "t_reattach_mut_src"
 check_if_detached "ALTER TABLE t_reattach_mut_mt REPLACE PARTITION ID 'all' FROM t_reattach_mut_src" "t_reattach_mut_src"
+
+# A `supportsDelete` target takes the statement as a mutation carrying only the serialized predicate, and
+# those storages have no notion of `MergeTree`-style partitions, so `InterpreterDeleteQuery` rejects an
+# `IN PARTITION` clause with `NOT_IMPLEMENTED` instead of mutating a wider scope than the statement asked
+# for. That happens before the command is built and before the mutation probes, hence before the predicate's
+# tables are read, so the source must not be randomized on the way to the rejection — in the single-partition
+# shape (`ASTDeleteQuery::partition`) as well as the list one (`ASTDeleteQuery::partitions`).
+${CLICKHOUSE_CLIENT} -q "DROP TABLE IF EXISTS t_reattach_mut_kv"
+${CLICKHOUSE_CLIENT} -q "CREATE TABLE t_reattach_mut_kv (a UInt64, v UInt64) ENGINE = EmbeddedRocksDB PRIMARY KEY a"
+${CLICKHOUSE_CLIENT} -q "INSERT INTO t_reattach_mut_kv VALUES (2, 20)"
+
+check_source_not_detached_for_failing_mutation "DELETE FROM t_reattach_mut_kv IN PARTITION ID 'all' WHERE a IN (SELECT a FROM t_reattach_mut_src)" "NOT_IMPLEMENTED"
+check_source_not_detached_for_failing_mutation "DELETE FROM t_reattach_mut_kv IN PARTITION ID 'all', ID 'other' WHERE a IN (SELECT a FROM t_reattach_mut_src)" "NOT_IMPLEMENTED"
+
+# Without the clause the same target accepts the statement and its mutation does read the predicate's table,
+# so that source must still be randomized: the skip above is about the rejected shape only.
+check_if_detached "DELETE FROM t_reattach_mut_kv WHERE a IN (SELECT a FROM t_reattach_mut_src)" "t_reattach_mut_src"
+
+${CLICKHOUSE_CLIENT} -q "DROP TABLE t_reattach_mut_kv"
 
 # A lightweight `UPDATE` throws on `enable_lightweight_update = 0` as the very first thing its interpreter
 # does, and SQL UDF substitution runs before the predicate's tables are read in both the `UPDATE` and the
