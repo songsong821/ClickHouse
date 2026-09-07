@@ -210,6 +210,9 @@ public:
         if (request.GetMethod() == Azure::Core::Http::HttpMethod::Head)
         {
             ++head_requests;
+            /// The blob is gone (another replica deleted it), or the endpoint is having a bad day.
+            if (fail_head)
+                return notFound();
             auto properties = std::make_unique<Azure::Core::Http::RawResponse>(1, 1, Azure::Core::Http::HttpStatusCode::Ok, "OK");
             properties->SetHeader("Content-Length", std::to_string(blob_size));
             if (send_etag)
@@ -317,11 +320,23 @@ public:
     /// of a sequence of requests, such as between the copy and the delete of a move.
     void overwriteObject(const std::string & new_etag) { overwritten_etag = new_etag; }
 
+    /// From now on the endpoint answers every `HEAD` with `404 Not Found`.
+    void failHeadRequests() { fail_head = true; }
+
 private:
     static std::unique_ptr<Azure::Core::Http::RawResponse> preconditionFailed()
     {
         auto failure = std::make_unique<Azure::Core::Http::RawResponse>(
             1, 1, Azure::Core::Http::HttpStatusCode::PreconditionFailed, "The condition specified using HTTP conditional header(s) is not met.");
+        failure->SetHeader("Content-Length", "0");
+        failure->SetBodyStream(std::make_unique<LyingBodyStream>(std::vector<uint8_t>{}, 0));
+        return failure;
+    }
+
+    static std::unique_ptr<Azure::Core::Http::RawResponse> notFound()
+    {
+        auto failure = std::make_unique<Azure::Core::Http::RawResponse>(
+            1, 1, Azure::Core::Http::HttpStatusCode::NotFound, "The specified blob does not exist.");
         failure->SetHeader("Content-Length", "0");
         failure->SetBodyStream(std::make_unique<LyingBodyStream>(std::vector<uint8_t>{}, 0));
         return failure;
@@ -343,6 +358,7 @@ private:
     std::vector<std::string> delete_if_match_headers;
     std::optional<std::string> overwritten_etag;
     size_t head_requests = 0;
+    bool fail_head = false;
 };
 
 /// Reads a blob from an endpoint that answers every ranged request with at most
@@ -2099,6 +2115,29 @@ TEST(AzureIngestedGeneration, EndpointWithoutETag)
     ASSERT_TRUE(entry.metadata->etag.empty());
     ASSERT_EQ(entry.metadata->size_bytes, 100u);
     ASSERT_EQ(transport->headRequests(), 1u);
+}
+
+/// The `HEAD` that would supply the generation the listing omitted fails - the blob was deleted by
+/// another replica after the queue claimed the file, or the endpoint answered with an error. The
+/// file is already claimed in Keeper at that point and the failure of one file must not abort the
+/// whole insert or `SELECT`, so it is not propagated: the generation stays unknown, the read stays
+/// unpinned, and the source fails this one file closed, exactly as for an endpoint that reports no
+/// `ETag` at all.
+TEST(AzureIngestedGeneration, FailingHeadFailsOnlyTheFile)
+{
+    auto transport = std::make_shared<MisbehavingRangeTransport>(100, 100, 100, /* send_etag */ true);
+    transport->failHeadRequests();
+    auto object_storage = objectStorageOver(transport);
+
+    auto throwing_entry = listingEntry("");
+    ASSERT_ANY_THROW(DB::learnIngestedGeneration(*object_storage, throwing_entry));
+
+    auto entry = listingEntry("");
+    bool learned = true;
+    ASSERT_NO_THROW(learned = DB::tryLearnIngestedGeneration(*object_storage, entry, getLogger("FailingHeadFailsOnlyTheFile")));
+    ASSERT_FALSE(learned);
+    ASSERT_FALSE(entry.require_read_pinned_to_generation);
+    ASSERT_TRUE(entry.metadata->etag.empty());
 }
 
 namespace

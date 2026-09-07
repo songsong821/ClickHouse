@@ -39,6 +39,16 @@ bool afterProcessingNeedsIngestedGeneration(ObjectStorageType storage_type, Obje
 /// table whose post-processing needs it must then refuse the file rather than read it.
 bool learnIngestedGeneration(const IObjectStorage & object_storage, RelativePathWithMetadata & object_info);
 
+/// Learns the ingested generation the way `learnIngestedGeneration` does, but never lets a failure
+/// of the `HEAD` reach the caller. It runs when the file is already claimed in Keeper, and every
+/// other read-time failure of a single file is accounted per file, so a blob deleted by another
+/// replica after the existence check, or a transient error of the endpoint, must fail this one
+/// file instead of aborting the whole insert or `SELECT` and making the files already read in this
+/// batch be retried. A failure leaves the generation unknown - and the pinning requirement off, so
+/// that no unpinned read is opened - which the source turns into a failed file, like an endpoint
+/// that reports no `ETag` at all.
+bool tryLearnIngestedGeneration(const IObjectStorage & object_storage, RelativePathWithMetadata & object_info, LoggerPtr log);
+
 class ObjectStorageQueueSource final : public ISource, WithContext
 {
 public:

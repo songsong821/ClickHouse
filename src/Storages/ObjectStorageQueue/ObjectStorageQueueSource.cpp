@@ -117,6 +117,26 @@ bool learnIngestedGeneration(const IObjectStorage & object_storage, RelativePath
     return false;
 }
 
+bool tryLearnIngestedGeneration(const IObjectStorage & object_storage, RelativePathWithMetadata & object_info, LoggerPtr log)
+{
+    try
+    {
+        return learnIngestedGeneration(object_storage, object_info);
+    }
+    catch (...)
+    {
+        tryLogCurrentException(
+            log,
+            fmt::format("Could not learn the generation (`ETag`) of {}", object_info.getPath()));
+
+        /// Nothing to pin the read to, exactly as when the endpoint reports no `ETag`: leave the
+        /// requirement off, so that no unpinned read is opened, and let the source fail this one
+        /// file closed instead of failing the query.
+        object_info.require_read_pinned_to_generation = false;
+        return false;
+    }
+}
+
 ObjectStorageQueueSource::ObjectStorageQueueObjectInfo::ObjectStorageQueueObjectInfo(
     const ObjectInfo & object_info, ObjectStorageQueueMetadata::FileMetadataPtr file_metadata_)
     /// Copies the whole carrier, so that everything the iterator learned about the object - its
@@ -677,11 +697,13 @@ ObjectInfoPtr ObjectStorageQueueSource::FileIterator::next(size_t processor)
         /// ingested, and an Azure `DELETE` deletes it, so that generation must be known before the
         /// read is opened, and the read is then pinned to it. The listing normally reports it; an
         /// endpoint that omits `Etag` from `ListBlobs` is asked once with a `HEAD`. A file whose
-        /// generation cannot be learned at all is still returned: the source refuses to read it and
-        /// fails it, so that it is never committed as processed and then moved or deleted as
-        /// whatever generation exists by then.
+        /// generation cannot be learned at all - because the endpoint reports none, or because
+        /// that `HEAD` itself failed - is still returned: the source refuses to read it and fails
+        /// it, so that it is never committed as processed and then moved or deleted as whatever
+        /// generation exists by then. The file is already claimed in Keeper here, so a failure of
+        /// the `HEAD` must fail this one file and not the whole query.
         if (afterProcessingNeedsIngestedGeneration(object_storage->getType(), metadata->getTableMetadata().after_processing))
-            learnIngestedGeneration(*object_storage, object_info->relative_path_with_metadata);
+            tryLearnIngestedGeneration(*object_storage, object_info->relative_path_with_metadata, log);
 
         return std::make_shared<ObjectStorageQueueObjectInfo>(*object_info, std::move(file_metadata));
     }
