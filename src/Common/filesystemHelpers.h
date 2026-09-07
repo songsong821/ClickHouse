@@ -77,6 +77,10 @@ bool pathStartsWith(const String & path, const String & prefix_path);
 
 /// Same as pathStartsWith, but without canonization, i.e. allowed to check symlinks.
 /// (Path is made absolute and normalized.)
+bool fileOrSymlinkPathStartsWith(const std::filesystem::path & path, const std::filesystem::path & prefix_path);
+
+/// Same as pathStartsWith, but without canonization, i.e. allowed to check symlinks.
+/// (Path is made absolute and normalized.)
 bool fileOrSymlinkPathStartsWith(const String & path, const String & prefix_path);
 
 size_t getSizeFromFileDescriptor(int fd, const String & file_name = "");

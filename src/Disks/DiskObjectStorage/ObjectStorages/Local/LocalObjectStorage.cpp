@@ -135,36 +135,42 @@ LocalObjectStorage::LocalObjectStorage(LocalObjectStorageSettings settings_)
         description = "/";
 
     if (!settings.read_only)
-        fs::create_directories(settings.key_prefix);
+        fs::create_directories(pathFromString(settings.key_prefix));
 }
 
-String resolvePathRelativelyToBase(const String & path, const String & base_path)
+/// Returns an `fs::path`, and the two incoming strings become one through `pathFromString`: these
+/// are UTF-8 paths, and every step here - normalization, the containment checks, the join - is a
+/// `std::filesystem` step, so a `String` in the middle would be decoded again through the narrow
+/// constructor, which on Windows reads it through the active code page. The callers convert back
+/// with `pathToString` where a syscall wrapper or a log line wants a string.
+fs::path resolvePathRelativelyToBase(const String & path, const String & base_path)
 {
-    auto configured_base = fs::path(base_path).lexically_normal();
+    const auto configured_base = pathFromString(base_path).lexically_normal();
+    const auto candidate = pathFromString(path);
 
-    auto is_inside = [&](const String & candidate)
+    auto is_inside = [&](const fs::path & to_check)
     {
-        return fileOrSymlinkPathStartsWith(candidate, configured_base.string())
-            && pathStartsWith(candidate, configured_base.string());
+        return fileOrSymlinkPathStartsWith(to_check, configured_base)
+            && pathStartsWith(to_check, configured_base);
     };
 
-    if (is_inside(path))
-        return path;
+    if (is_inside(candidate))
+        return candidate;
 
-    auto combined = (configured_base / path).lexically_normal().string();
+    auto combined = (configured_base / candidate).lexically_normal();
     if (is_inside(combined))
         return combined;
 
-    auto path_canonical = fs::weakly_canonical(fs::path(path).lexically_normal());
+    auto path_canonical = fs::weakly_canonical(candidate.lexically_normal());
     throw Exception(
         ErrorCodes::PATH_ACCESS_DENIED,
         "Path `{}` which was canonicalized to `{}` is outside the table path directory : `{}`",
         path,
-        path_canonical.string(),
-        configured_base.string());
+        pathToString(path_canonical),
+        pathToString(configured_base));
 }
 
-String LocalObjectStorage::resolvePathRelativelyToKeyPrefix(const String & path) const
+fs::path LocalObjectStorage::resolvePathRelativelyToKeyPrefix(const String & path) const
 {
     return resolvePathRelativelyToBase(path, settings.key_prefix);
 }
@@ -554,7 +560,7 @@ std::unique_ptr<ReadBufferFromFileBase> LocalObjectStorage::readObject( /// NOLI
     bool /* use_external_buffer */,
     bool /* restrict_seek */) const
 {
-    auto resolved_path = resolvePathRelativelyToKeyPrefix(object.remote_path);
+    const String resolved_path = pathToString(resolvePathRelativelyToKeyPrefix(object.remote_path));
     LOG_TEST(log, "Read object: {}", resolved_path);
     auto buf = createReadBufferFromFileBase(resolved_path, patchSettings(read_settings), read_hint);
 
@@ -584,12 +590,13 @@ std::unique_ptr<WriteBufferFromFileBase> LocalObjectStorage::writeObject( /// NO
     if (mode != WriteMode::Rewrite)
         throw Exception(ErrorCodes::BAD_ARGUMENTS, "LocalObjectStorage doesn't support append to files");
 
-    auto resolved_path = resolvePathRelativelyToKeyPrefix(object.remote_path);
+    const auto resolved = resolvePathRelativelyToKeyPrefix(object.remote_path);
+    const String resolved_path = pathToString(resolved);
     LOG_TEST(log, "Write object: {}", resolved_path);
 
     /// Unlike real blob storage, in local fs we cannot create a file with non-existing prefix.
     /// So let's create it.
-    fs::create_directories(fs::path(resolved_path).parent_path());
+    fs::create_directories(resolved.parent_path());
 
     auto blob_storage_log = BlobStorageLogWriter::create(settings.disk_name);
     if (blob_storage_log)
@@ -631,8 +638,8 @@ std::unique_ptr<WriteBufferFromFileBase> LocalObjectStorage::writeObject( /// NO
         /// otherwise be staged and published under the server's working directory,
         /// giving conditional writes a different notion of a key than every other
         /// method of this storage.
-        auto target_path = fs::path(resolved_path);
-        auto temp_path = target_path.parent_path() / fmt::format(".tmp_{}_{}", target_path.filename().string(), getRandomASCIIString(8));
+        const auto & target_path = resolved;
+        auto temp_path = target_path.parent_path() / fmt::format(".tmp_{}_{}", pathToString(target_path.filename()), getRandomASCIIString(8));
 
         return std::make_unique<WriteBufferToConditionallyPublishedFile>(
             resolved_path,
@@ -654,7 +661,8 @@ std::unique_ptr<WriteBufferFromFileBase> LocalObjectStorage::writeObject( /// NO
 void LocalObjectStorage::removeObject(const StoredObject & object) const
 {
     throwIfReadonly();
-    auto resolved_path = resolvePathRelativelyToKeyPrefix(object.remote_path);
+    const auto resolved = resolvePathRelativelyToKeyPrefix(object.remote_path);
+    const String resolved_path = pathToString(resolved);
 
     /// For local object storage files are actually removed when "metadata" is removed.
     if (!exists(object))
@@ -699,8 +707,8 @@ void LocalObjectStorage::removeObject(const StoredObject & object) const
             error_code,
             error_message);
 
-    fs::path dir = fs::path(resolved_path).parent_path();
-    fs::path root = fs::weakly_canonical(settings.key_prefix);
+    fs::path dir = resolved.parent_path();
+    fs::path root = fs::weakly_canonical(pathFromString(settings.key_prefix));
     while (dir.has_parent_path() && dir.has_relative_path() && dir != root && pathStartsWith(dir, root))
     {
         LOG_TEST(log, "Removing empty directory {}, has_parent_path: {}, has_relative_path: {}, root: {}, starts with root: {}",
@@ -747,7 +755,7 @@ std::optional<ObjectMetadata> LocalObjectStorage::tryGetObjectMetadata(const std
     /// this method only differs from it in tolerating an object that does not exist,
     /// so a caller must not be able to observe a different file or a differently
     /// shaped etag depending on which of the two it called.
-    auto resolved_path = resolvePathRelativelyToKeyPrefix(path);
+    const String resolved_path = pathToString(resolvePathRelativelyToKeyPrefix(path));
     LOG_TEST(log, "Getting metadata for path: {}", resolved_path);
 
     return tryStatResolvedPath(resolved_path);
@@ -759,7 +767,7 @@ SmallObjectDataWithMetadata LocalObjectStorage::readSmallObjectAndGetObjectMetad
     size_t max_size_bytes,
     std::optional<size_t>) const
 {
-    auto resolved_path = resolvePathRelativelyToKeyPrefix(object.remote_path);
+    const String resolved_path = pathToString(resolvePathRelativelyToKeyPrefix(object.remote_path));
     LOG_TEST(log, "Read small object: {}", resolved_path);
 
     /// Opening the file here instead of delegating to `readObject`: the etag must come
@@ -801,7 +809,7 @@ SmallObjectDataWithMetadata LocalObjectStorage::readSmallObjectAndGetObjectMetad
 
 ObjectMetadata LocalObjectStorage::getObjectMetadata(const std::string & path, bool) const
 {
-    auto resolved_path = resolvePathRelativelyToKeyPrefix(path);
+    const String resolved_path = pathToString(resolvePathRelativelyToKeyPrefix(path));
     LOG_TEST(log, "Getting metadata for path: {}", resolved_path);
 
     /// Every etag of this storage has to come out of `makeETag`: a caller feeds the
@@ -935,7 +943,7 @@ void LocalObjectStorage::listObjects(const std::string & path, RelativePathsWith
 
 bool LocalObjectStorage::existsOrHasAnyChild(const std::string & path) const
 {
-    auto resolved_path = resolvePathRelativelyToKeyPrefix(path);
+    const String resolved_path = pathToString(resolvePathRelativelyToKeyPrefix(path));
     /// Unlike real object storage, existence of a prefix path can be checked by
     /// just checking existence of this prefix directly, so simple exists is enough here.
     return exists(StoredObject(resolved_path));
