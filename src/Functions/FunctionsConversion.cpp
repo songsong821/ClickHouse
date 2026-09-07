@@ -714,11 +714,14 @@ FunctionCast::WrapperType FunctionCast::createDecimalWrapper(const DataTypePtr &
                 /// ends at 2262-04-11, and `Time64` holds at most 999:59:59), so `date_time_overflow_behavior` has to
                 /// reach the transform - unlike the other branches here, which cannot lose a value and therefore use
                 /// the default mode.
-                if constexpr (IsDataTypeNumber<LeftDataType>)
+                if constexpr (IsDataTypeNumber<LeftDataType>
+                    || (std::is_same_v<LeftDataType, DataTypeDate32> && std::is_same_v<RightDataType, DataTypeDateTime64>))
                 {
                     /// `accurateCast` rejects an unrepresentable value regardless of the overflow mode, and
                     /// `accurateCastOrNull` reports it as NULL, so neither of them may reach the mode-specific
                     /// transform, which would throw or clamp: the accurate additions check the range up front.
+                    /// `Date32` is the only date or time source that can overflow the target - the others stay
+                    /// inside the representable window of every scale - so it needs the same treatment.
                     if (cast_type == CastType::accurate)
                     {
                         AccurateConvertStrategyAdditions additions;
@@ -739,8 +742,9 @@ FunctionCast::WrapperType FunctionCast::createDecimalWrapper(const DataTypePtr &
                     }
                 }
 
-                /// `accurateCastOrNull` from a date or time source reports an unrepresentable value as NULL, so it
-                /// must not be turned into an exception by the `throw` mode.
+                /// The remaining date and time sources cannot lose a value, so the overflow mode is irrelevant
+                /// for them; still, keep `accurateCastOrNull` out of the `throw` mode, which reports an
+                /// unrepresentable value as an exception instead of NULL.
                 if (cast_type != CastType::accurateOrNull)
                 {
 #define GENERATE_OVERFLOW_MODE_CASE(OVERFLOW_MODE) \

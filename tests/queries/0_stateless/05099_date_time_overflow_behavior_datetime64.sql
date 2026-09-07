@@ -37,10 +37,13 @@ SELECT CAST(99999999999::UInt64, 'Date'), CAST(1e30::Float64, 'Date32'), CAST(99
 -- The accurate casts keep their contract in every mode: `accurateCast` rejects an unrepresentable value instead of
 -- clamping it, `accurateCastOrNull` reports it as NULL and `accurateCastOrDefault` substitutes the default.
 SELECT 'accurate';
-SELECT accurateCast(1735689600::UInt32, 'DateTime64(3)'), accurateCast(-1.5::Float64, 'DateTime64(3)'), accurateCast(-3599999::Int64, 'Time64(3)'), accurateCast(3599998.5::Float64, 'Time64(3)');
-SELECT accurateCastOrNull(1735689600::UInt32, 'DateTime64(3)'), accurateCastOrNull(-1.5::Float64, 'DateTime64(3)'), accurateCastOrNull(-3599999::Int64, 'Time64(3)'), accurateCastOrNull(3599998.5::Float64, 'Time64(3)');
+SELECT accurateCast(1735689600::UInt32, 'DateTime64(3)'), accurateCast(-1.5::Float64, 'DateTime64(3)'), accurateCast(-3599999::Int64, 'Time64(3)'), accurateCast(3599999.5::Float64, 'Time64(3)');
+SELECT accurateCastOrNull(1735689600::UInt32, 'DateTime64(3)'), accurateCastOrNull(-1.5::Float64, 'DateTime64(3)'), accurateCastOrNull(-3599999::Int64, 'Time64(3)'), accurateCastOrNull(3599999.5::Float64, 'Time64(3)');
 -- The whole-seconds bound of `DateTime64` depends on the scale: 2262-04-11 is the last day of a scale-9 value.
 SELECT accurateCast(9223372036::Int64, 'DateTime64(9)'), accurateCastOrNull(9223372037::Int64, 'DateTime64(9)'), accurateCast(9223372037::Int64, 'DateTime64(8)');
+-- A floating-point source is checked against the last representable tick, not against the last representable
+-- whole second, so the fractional tail of that second is accepted rather than rejected as an overflow.
+SELECT accurateCast(9223372036.5::Float64, 'DateTime64(9)'), accurateCastOrNull(9223372037.0::Float64, 'DateTime64(9)'), accurateCastOrNull(-3600000.5::Float64, 'Time64(1)');
 
 SELECT accurateCast(99999999999999::UInt64, 'DateTime64(3)') SETTINGS date_time_overflow_behavior = 'throw'; -- { serverError CANNOT_CONVERT_TYPE }
 SELECT accurateCast(99999999999999::UInt64, 'DateTime64(3)') SETTINGS date_time_overflow_behavior = 'ignore'; -- { serverError CANNOT_CONVERT_TYPE }
@@ -64,6 +67,16 @@ SELECT accurateCastOrNull(3600000::UInt64, 'Time64(3)'), accurateCastOrNull(-360
 
 SELECT accurateCastOrDefault(99999999999999::UInt64, 'DateTime64(3)'), accurateCastOrDefault(1e30::Float64, 'DateTime64(3)', toDateTime64('2025-01-01 00:00:00', 3)), accurateCastOrDefault(3600000::UInt64, 'Time64(3)'), accurateCastOrDefault(-3600000::Int64, 'Time64(3)', toTime64('1:00:00', 3)) SETTINGS date_time_overflow_behavior = 'ignore';
 SELECT accurateCastOrDefault(99999999999999::UInt64, 'DateTime64(3)'), accurateCastOrDefault(1e30::Float64, 'DateTime64(3)', toDateTime64('2025-01-01 00:00:00', 3)), accurateCastOrDefault(3600000::UInt64, 'Time64(3)'), accurateCastOrDefault(-3600000::Int64, 'Time64(3)', toTime64('1:00:00', 3)) SETTINGS date_time_overflow_behavior = 'saturate';
+
+-- A `Date32` day is not always representable as a high-precision `DateTime64` either, and the accurate casts
+-- report that instead of silently clamping to the boundary of the scale.
+SELECT accurateCastOrNull(toDate32('2299-12-31'), 'DateTime64(9)'), accurateCastOrNull(toDate32('2262-04-11'), 'DateTime64(9)'), accurateCastOrNull(toDate32('2299-12-31'), 'DateTime64(3)');
+SELECT accurateCast(toDate32('2299-12-31'), 'DateTime64(9)'); -- { serverError CANNOT_CONVERT_TYPE }
+SELECT accurateCastOrDefault(toDate32('2299-12-31'), 'DateTime64(9)', toDateTime64('2025-01-01 00:00:00', 9));
+
+-- A fraction that the target scale cannot express is truncated, not rejected: `DateTime64` and `Time64` are
+-- `Decimal` carriers, and `accurateCast` to a `Decimal` truncates the extra digits the same way.
+SELECT accurateCast(1.25::Float64, 'DateTime64(1)'), accurateCastOrNull(1.25::Float64, 'Time64(1)'), accurateCast(1.25::Float64, 'Decimal64(1)');
 
 -- The same holds for a block of values, where only the unrepresentable rows become NULL.
 SELECT number, accurateCastOrNull(number * 100000000000::UInt64, 'DateTime64(3)'), accurateCastOrNull(toInt64(number) * 1000000 - 2000000, 'Time64(3)') FROM numbers(5) SETTINGS date_time_overflow_behavior = 'ignore';

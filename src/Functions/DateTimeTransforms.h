@@ -4,6 +4,7 @@
 #include <limits>
 #include <base/arithmeticOverflow.h>
 #include <base/types.h>
+#include <Core/AccurateComparison.h>
 #include <Core/DecimalFunctions.h>
 #include <Common/Exception.h>
 #include <Common/DateLUTImpl.h>
@@ -79,6 +80,53 @@ inline time_t maxWholeSecondsForDateTime64(Int64 scale_multiplier)
 inline time_t minWholeSecondsForDateTime64(Int64 scale_multiplier)
 {
     return std::max<Int64>(MIN_DATETIME64_TIMESTAMP, std::numeric_limits<Int64>::min() / scale_multiplier);
+}
+
+/// The same window expressed in ticks rather than in whole seconds. A conversion from a floating-point source can
+/// land inside the last representable second - at scale 9 the last whole second is `9223372036`, yet
+/// `9223372036.5` still fits the `Int64` ticks - so a whole-seconds bound would reject a representable value.
+inline Int64 maxTicksForDateTime64(Int64 scale_multiplier)
+{
+    if (MAX_DATETIME64_TIMESTAMP > std::numeric_limits<Int64>::max() / scale_multiplier)
+        return std::numeric_limits<Int64>::max();
+    return MAX_DATETIME64_TIMESTAMP * scale_multiplier + scale_multiplier - 1;
+}
+
+inline Int64 minTicksForDateTime64(Int64 scale_multiplier)
+{
+    /// `MIN_DATETIME64_TIMESTAMP` is the first representable second, so there is no sub-second tail below it.
+    if (MIN_DATETIME64_TIMESTAMP < std::numeric_limits<Int64>::min() / scale_multiplier)
+        return std::numeric_limits<Int64>::min();
+    return MIN_DATETIME64_TIMESTAMP * scale_multiplier;
+}
+
+/// `Time64` holds a signed clock reading within `[-999:59:59.9..., 999:59:59.9...]`, so both ends carry the
+/// sub-second tail of the last representable second and never come close to the `Int64` tick limit.
+inline Int64 maxTicksForTime64(Int64 scale_multiplier)
+{
+    return MAX_TIME_TIMESTAMP * scale_multiplier + scale_multiplier - 1;
+}
+
+/// The largest value of the floating-point type `T` that does not exceed `bound`, and the smallest one that is not
+/// below it. A conversion of an `Int64` bound to a floating-point type rounds to either side, and a bound that
+/// crossed the real one would let `convertToDecimal` overflow the `Int64` ticks (or make the cast of the product
+/// undefined) instead of saturating.
+template <typename T>
+T floatBoundNotAbove(Int64 bound)
+{
+    const T result = static_cast<T>(bound);
+    if (accurate::greaterOp(result, bound))
+        return std::nextafter(result, static_cast<T>(0));
+    return result;
+}
+
+template <typename T>
+T floatBoundNotBelow(Int64 bound)
+{
+    const T result = static_cast<T>(bound);
+    if (accurate::lessOp(result, bound))
+        return std::nextafter(result, static_cast<T>(0));
+    return result;
 }
 
 /// The window of day numbers whose midnight in `time_zone` is representable as a `DateTime64` with the given scale
@@ -3036,42 +3084,69 @@ struct Transformer
             return;
         }
 
+        using FromValueType = typename FromTypeVector::value_type;
+
+        /// The representable window of a `DateTime64` / `Time64` result, for the accurate casts from a numeric
+        /// source: the transform below silently clamps an out-of-range source to that window, which is exactly
+        /// what an accurate cast must reject instead. An integer source is a count of whole seconds, while a
+        /// floating-point one also carries a sub-second fraction and is therefore checked in the tick domain -
+        /// `999:59:59.5` is a good `Time64(1)` value even though `999:59:60` is not a good number of seconds.
+        [[maybe_unused]] Int64 whole_seconds_lower_bound = 0;
+        [[maybe_unused]] Int64 whole_seconds_upper_bound = 0;
+        [[maybe_unused]] FromValueType ticks_lower_bound {};
+        [[maybe_unused]] FromValueType ticks_upper_bound {};
+        /// A `Date32` day is not always representable as a high-precision `DateTime64` - a scale-9 one ends at
+        /// `2262-04-11` - and the transform below would clamp it, so an accurate cast needs this window too.
+        [[maybe_unused]] Int32 day_num_lower_bound = 0;
+        [[maybe_unused]] Int32 day_num_upper_bound = 0;
+        if constexpr (std::is_same_v<FromType, DataTypeDate32> && std::is_same_v<ToType, DataTypeDateTime64>
+            && is_any_of<Additions, AccurateConvertStrategyAdditions, AccurateOrNullConvertStrategyAdditions>)
+        {
+            std::tie(day_num_lower_bound, day_num_upper_bound) = getDateTime64DayNumRange(transform.scale_multiplier, time_zone);
+        }
+        if constexpr (is_any_of<ToType, DataTypeDateTime64, DataTypeTime64>
+            && is_any_of<Additions, AccurateConvertStrategyAdditions, AccurateOrNullConvertStrategyAdditions>)
+        {
+            if constexpr (std::is_same_v<ToType, DataTypeTime64>)
+            {
+                whole_seconds_lower_bound = -static_cast<Int64>(MAX_TIME_TIMESTAMP);
+                whole_seconds_upper_bound = MAX_TIME_TIMESTAMP;
+            }
+            else
+            {
+                /// The bounds depend on the scale, because the ticks are stored in an `Int64`.
+                whole_seconds_lower_bound = minWholeSecondsForDateTime64(transform.scale_multiplier);
+                whole_seconds_upper_bound = maxWholeSecondsForDateTime64(transform.scale_multiplier);
+            }
+
+            if constexpr (is_floating_point<FromValueType>)
+            {
+                /// The bounds of the transform itself, so that the accurate cast accepts exactly the values the
+                /// transform represents without clamping - including a fraction of the last representable second.
+                ticks_lower_bound = transform.min_ticks_in_source_domain;
+                ticks_upper_bound = transform.max_ticks_in_source_domain;
+            }
+        }
+
         for (size_t i = 0; i < input_rows_count; ++i)
         {
             if constexpr (is_any_of<ToType, DataTypeDateTime64, DataTypeTime64>)
             {
                 if constexpr (is_any_of<Additions, AccurateConvertStrategyAdditions, AccurateOrNullConvertStrategyAdditions>)
                 {
-                    /// The numeric source is a count of whole seconds, and the transform below silently clamps it to
-                    /// the representable window of the result, which is exactly what the accurate cast must reject.
-                    /// A fractional floating-point value is representable by the sub-second digits, so only the
-                    /// range is checked. Every comparison with a NaN is false, so a NaN is rejected as well.
-                    using FromValueType = typename FromTypeVector::value_type;
-                    Int64 lower_bound;
-                    Int64 upper_bound;
-                    if constexpr (std::is_same_v<ToType, DataTypeTime64>)
-                    {
-                        lower_bound = -static_cast<Int64>(MAX_TIME_TIMESTAMP);
-                        upper_bound = MAX_TIME_TIMESTAMP;
-                    }
-                    else
-                    {
-                        /// The bounds depend on the scale, because the ticks are stored in an `Int64`.
-                        lower_bound = minWholeSecondsForDateTime64(transform.scale_multiplier);
-                        upper_bound = maxWholeSecondsForDateTime64(transform.scale_multiplier);
-                    }
-
                     bool is_valid_input = false;
-                    if constexpr (is_floating_point<FromValueType>)
+                    if constexpr (std::is_same_v<FromType, DataTypeDate32>)
+                        is_valid_input = vec_from[i] >= day_num_lower_bound && vec_from[i] <= day_num_upper_bound;
+                    else if constexpr (is_floating_point<FromValueType>)
                     {
-                        /// `Float64` represents every `BFloat16` and `Float32` value exactly, and both bounds too.
-                        const Float64 value = static_cast<Float64>(vec_from[i]);
-                        is_valid_input = value >= static_cast<Float64>(lower_bound) && value <= static_cast<Float64>(upper_bound);
+                        /// Every comparison with a NaN is false, so a NaN is rejected as well.
+                        const FromValueType ticks = vec_from[i] * static_cast<FromValueType>(transform.scale_multiplier);
+                        is_valid_input = ticks >= ticks_lower_bound && ticks <= ticks_upper_bound;
                     }
                     else if constexpr (is_signed_v<FromValueType>)
-                        is_valid_input = vec_from[i] >= lower_bound && vec_from[i] <= upper_bound;
+                        is_valid_input = vec_from[i] >= whole_seconds_lower_bound && vec_from[i] <= whole_seconds_upper_bound;
                     else
-                        is_valid_input = vec_from[i] <= static_cast<UInt64>(upper_bound);
+                        is_valid_input = vec_from[i] <= static_cast<UInt64>(whole_seconds_upper_bound);
 
                     if (!is_valid_input)
                     {
@@ -3093,7 +3168,6 @@ struct Transformer
             {
                 if constexpr (is_any_of<Additions, DateTimeAccurateConvertStrategyAdditions, DateTimeAccurateOrNullConvertStrategyAdditions>)
                 {
-                    using FromValueType = typename FromTypeVector::value_type;
                     bool is_valid_input = false;
                     if constexpr (std::is_same_v<ToType, DataTypeTime>)
                     {
