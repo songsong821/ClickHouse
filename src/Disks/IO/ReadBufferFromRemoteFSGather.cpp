@@ -85,8 +85,14 @@ SeekableReadBufferPtr ReadBufferFromRemoteFSGather::createImplementationBuffer(c
     /// the pool only after a read observes EOF. That never happens when the caller reads exactly the
     /// remaining bytes (`MergeTree` readers size the buffer to the mark range), so the connection stays
     /// occupied until the buffer is destroyed, and every new stream has to open a new connection.
-    if (object.bytes_size != StoredObject::UnknownSize
-        && read_until_position > start_offset && read_until_position <= start_offset + object.bytes_size)
+    ///
+    /// The end of an object bounds the position only if its size is known. An object of `UnknownSize`
+    /// is always the only object of its file - the offsets of the objects after it could not be
+    /// computed - so a bound past `start_offset` is always inside it. It happens when an HTTP server
+    /// answers without `Content-Length`, on a `web` disk and in S3.
+    if (read_until_position > start_offset
+        && (object.bytes_size == StoredObject::UnknownSize
+            || read_until_position <= start_offset + object.bytes_size))
         buf->setReadUntilPosition(read_until_position - start_offset);
 
     return buf;
