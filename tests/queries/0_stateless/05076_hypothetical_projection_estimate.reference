@@ -112,6 +112,9 @@ empirical_status: disabled
 --- a forced projection must not fail the statement before the candidate is seen ---
 status: applicable
 verdict: would be chosen, it reads fewer marks than the base table
+--- a query that reads no parts gets no verdict, the optimizer ignores projections then ---
+status: not_applicable
+reason: The query reads no parts, so the optimizer would not consider a projection
 --- the preferred-projection setting only narrows existing projections, so it is ignored ---
 status: applicable
 verdict: would be chosen, it reads fewer marks than the base table

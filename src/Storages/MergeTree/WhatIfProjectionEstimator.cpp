@@ -319,8 +319,6 @@ bool tryEstimateProjection(
         result.verdict = "would not be chosen, it reads more marks than the base table";
     else if (sort_order_helps)
         result.verdict = "would be chosen, it reads the same marks as the base table and serves the ORDER BY";
-    else if (baseline_marks == 0)
-        result.verdict = "would be chosen, the base table read selects no marks either";
     else
         result.verdict = "would not be chosen, it reads the same marks as the base table and does not help with sorting";
     result.estimate_source = WhatIfCandidateResult::Empirical;
@@ -405,6 +403,12 @@ WhatIfCandidateResult evaluateProjection(
     if (!projection->metadata->getSecondaryIndices().empty())
     {
         result.not_applicable_reason = "EXPLAIN WHATIF does not estimate projections with their own skip indexes yet";
+        return result;
+    }
+
+    if (baseline_parts.empty())
+    {
+        result.not_applicable_reason = "The query reads no parts, so the optimizer would not consider a projection";
         return result;
     }
 

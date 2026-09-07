@@ -117,6 +117,17 @@ $CLICKHOUSE_CLIENT -q "
 " 2>&1 | grep -E '^\s+(status|verdict):|Code:' | awk '{$1=$1; print}'
 
 # a projection sort key has no direction, so the synthetic part is sorted the only way one can be
+echo "--- a query that reads no parts gets no verdict, the optimizer ignores projections then ---"
+$CLICKHOUSE_CLIENT -q "
+    DROP TABLE IF EXISTS t_pruned;
+    CREATE TABLE t_pruned (d Date, a UInt64, b UInt64) ENGINE = MergeTree PARTITION BY toYYYYMM(d) ORDER BY a
+        SETTINGS index_granularity = 100;
+    INSERT INTO t_pruned SELECT toDate('2020-01-01'), number, number % 100 FROM numbers(1000);
+    CREATE HYPOTHETICAL PROJECTION p_all ON t_pruned (SELECT d, a, b ORDER BY b);
+    EXPLAIN WHATIF SELECT count() FROM t_pruned WHERE d = '2030-05-05' AND b = 42 SETTINGS ${PIN};
+    DROP TABLE t_pruned;
+" | grep -E '^\s+(status|reason|verdict):' | awk '{$1=$1; print}'
+
 echo "--- the preferred-projection setting only narrows existing projections, so it is ignored ---"
 $CLICKHOUSE_CLIENT -q "
     CREATE HYPOTHETICAL PROJECTION p_b ON t_est (SELECT a, b, v ORDER BY b);
