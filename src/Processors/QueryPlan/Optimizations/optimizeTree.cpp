@@ -351,10 +351,11 @@ void optimizeTreeSecondPass(
                 while (true)
                 {
                     size_t changed_nodes = 0;
-                    /// `extra_settings` has to be the same one the main passes use: with a
-                    /// default-constructed struct `parallel_replicas_filter_pushdown` reads as off, and the
-                    /// filter then stops above the opaque `ReadFromLocalReplica` instead of entering the
-                    /// local plan.
+                    /// The rerun has to see the same `extra_settings` the main passes do. A
+                    /// default-constructed struct reads every field as zero: `parallel_replicas_filter_pushdown`
+                    /// comes out off, so the filter stops above the opaque `ReadFromLocalReplica` instead of
+                    /// entering the local plan, and `max_step_description_length` comes out 0, which truncates
+                    /// the description of every step merged here to the empty string.
                     if (rewrite_regardless_of_settings || optimization_settings.merge_expressions)
                         changed_nodes += tryMergeExpressions(&frame_node, nodes, extra_settings);
                     if (rewrite_regardless_of_settings || optimization_settings.merge_filters)
