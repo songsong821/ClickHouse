@@ -134,11 +134,21 @@ SELECT count(), sum(number) FROM t_cache_settings WHERE id < 1000;
 SET enable_writes_to_columns_cache = 0;
 SELECT count(), sum(number) FROM t_cache_settings WHERE id >= 4000;
 
+-- The read above must have observed the change of the setting, and not only returned the same
+-- numbers: the rows of the new range must not have entered the cache, while the range cached
+-- before the change stays there.
+SELECT count() FROM system.columns_cache
+WHERE database = currentDatabase() AND table = 't_cache_settings' AND row_end > 4000;
+SELECT count() > 0 FROM system.columns_cache
+WHERE database = currentDatabase() AND table = 't_cache_settings' AND row_begin = 0;
+
 -- Verify old range still cached
-SELECT count(), sum(number) FROM t_cache_settings WHERE id < 1000;
+SELECT count(), sum(number) FROM t_cache_settings WHERE id < 1000
+SETTINGS log_comment = '04070_test5_cached_read';
 
 -- New range should not be cached (reads should work but not populate)
-SELECT count(), sum(number) FROM t_cache_settings WHERE id >= 4000;
+SELECT count(), sum(number) FROM t_cache_settings WHERE id >= 4000
+SETTINGS log_comment = '04070_test5_uncached_read';
 
 -- =============================================================================
 -- Test 6: use_columns_cache = 0 (master switch off)
@@ -200,13 +210,17 @@ SELECT count(), sum(number), avg(length(value)) FROM t_cache_settings WHERE id %
 -- Read from cache with same filter
 SELECT count(), sum(number), avg(length(value)) FROM t_cache_settings WHERE id % 10 = 0;
 
--- Disable reads, same query should go to disk
+-- Disable reads, same query should go to disk. The `ColumnsCacheHits` of these two queries,
+-- checked at the end of the test, show that the change of the setting was observed by the read
+-- and not only that the numbers stayed the same.
 SET enable_reads_from_columns_cache = 0;
-SELECT count(), sum(number), avg(length(value)) FROM t_cache_settings WHERE id % 10 = 0;
+SELECT count(), sum(number), avg(length(value)) FROM t_cache_settings WHERE id % 10 = 0
+SETTINGS log_comment = '04070_test8_reads_disabled';
 
 -- Re-enable reads
 SET enable_reads_from_columns_cache = 1;
-SELECT count(), sum(number), avg(length(value)) FROM t_cache_settings WHERE id % 10 = 0;
+SELECT count(), sum(number), avg(length(value)) FROM t_cache_settings WHERE id % 10 = 0
+SETTINGS log_comment = '04070_test8_reads_reenabled';
 
 -- =============================================================================
 -- Test 9: Verify settings don't affect correctness
@@ -267,9 +281,17 @@ SELECT count(), sum(number) FROM t_cache_settings PREWHERE id < 2000 WHERE numbe
 SET enable_writes_to_columns_cache = 0;
 SELECT count(), sum(number) FROM t_cache_settings PREWHERE id >= 3000 WHERE number < 8000;
 
+-- Same oracle as in Test 5, for the `PREWHERE` shape: the rows read after the change must not
+-- have entered the cache, while the range cached before it stays there.
+SELECT count() FROM system.columns_cache
+WHERE database = currentDatabase() AND table = 't_cache_settings' AND row_begin >= 3000;
+SELECT count() > 0 FROM system.columns_cache
+WHERE database = currentDatabase() AND table = 't_cache_settings' AND row_begin < 2000;
+
 -- Verify old range still cached
 SET enable_writes_to_columns_cache = 1;
-SELECT count(), sum(number) FROM t_cache_settings PREWHERE id < 2000 WHERE number > 100;
+SELECT count(), sum(number) FROM t_cache_settings PREWHERE id < 2000 WHERE number > 100
+SETTINGS log_comment = '04070_test10_cached_read';
 
 DROP TABLE t_cache_settings;
 
@@ -277,6 +299,9 @@ DROP TABLE t_cache_settings;
 -- Verify through ProfileEvents that the settings actually changed behavior:
 -- with reads enabled the repeated read of Test 1 was served from the cache,
 -- and with reads disabled the repeated reads of Test 3 never touched it.
+-- The same for the settings changed in the middle of the session: the reads of Test 5 and
+-- Test 10 that follow the change tell a cached range from a range the change kept out of the
+-- cache, and the two reads of Test 8 differ only by `enable_reads_from_columns_cache`.
 -- =============================================================================
 
 SELECT 'ProfileEvents checks';
@@ -287,7 +312,10 @@ SELECT log_comment, ProfileEvents['ColumnsCacheHits'] > 0 AS has_hits
 FROM system.query_log
 WHERE current_database = currentDatabase()
     AND type = 'QueryFinish'
-    AND log_comment IN ('04070_test1_read2', '04070_test3_read2', '04070_test3_read3', '04070_test6_read2')
-ORDER BY event_time_microseconds;
+    AND log_comment IN ('04070_test1_read2', '04070_test3_read2', '04070_test3_read3', '04070_test6_read2',
+        '04070_test5_cached_read', '04070_test5_uncached_read',
+        '04070_test8_reads_disabled', '04070_test8_reads_reenabled',
+        '04070_test10_cached_read')
+ORDER BY log_comment;
 
 SELECT 'All read/write settings tests passed';
