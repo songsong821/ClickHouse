@@ -374,7 +374,8 @@ std::optional<ProjectionDescription> refreshHypotheticalProjection(
     const ContextPtr & context,
     String & reason)
 {
-    /// the privilege CREATE needed, re-checked so a stored definition cannot outlive it
+    if (!stored.required_columns.empty())
+        context->checkAccess(AccessType::SELECT, data.getStorageID(), stored.required_columns);
     context->checkAccess(AccessType::ALTER_ADD_PROJECTION, data.getStorageID());
 
     try
@@ -477,9 +478,6 @@ WhatIfCandidateResult evaluateProjection(
         result.not_applicable_reason = "Projection has no sort key to prune on";
         return result;
     }
-
-    if (!projection->required_columns.empty())
-        context->checkAccess(AccessType::SELECT, data.getStorageID(), projection->required_columns);
 
     const auto [outer_sorting, subtree_above_reading] = QueryPlanOptimizationSettings(context).read_in_order
         ? findOuterSorting(plan_root, read_step)

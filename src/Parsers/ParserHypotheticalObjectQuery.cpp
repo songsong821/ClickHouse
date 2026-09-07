@@ -355,7 +355,7 @@ Clears every hypothetical projection defined in the current session, regardless 
 
 ## Required privileges {#required-privileges}
 
-`CREATE HYPOTHETICAL PROJECTION` requires `ALTER ADD PROJECTION` on the table — the same privilege the real `ALTER TABLE ... ADD PROJECTION` needs — because it validates the definition against the table's columns. It reads no table data, so `SELECT` on the projection's columns is not required yet; when `EXPLAIN WHATIF` starts estimating projections it will read those columns and column-level `SELECT` will be required then, as it already is for [`CREATE HYPOTHETICAL INDEX`](/reference/statements/hypothetical-index#required-privileges).
+`CREATE HYPOTHETICAL PROJECTION` requires `ALTER ADD PROJECTION` on the table — the same privilege the real `ALTER TABLE ... ADD PROJECTION` needs — because it validates the definition against the table's columns. `EXPLAIN WHATIF` requires column-level `SELECT` on the projection's columns to estimate it, as it already does for [`CREATE HYPOTHETICAL INDEX`](/reference/statements/hypothetical-index#required-privileges).
 
 `DROP HYPOTHETICAL PROJECTION` requires the same privilege, so that naming a table in a drop cannot reveal whether it exists or is eligible, and `EXPLAIN WHATIF` re-checks it before validating a stored definition against the table. `DROP ALL HYPOTHETICAL PROJECTIONS` names no table and requires no privilege.
 
