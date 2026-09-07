@@ -62,7 +62,6 @@
 #include <Common/CurrentMetrics.h>
 #include <Common/CurrentThread.h>
 #include <Common/ThreadPool.h>
-#include <Common/VectorWithMemoryTracking.h>
 #include <Common/logger_useful.h>
 #include <Common/setThreadName.h>
 #include <Common/ProfileEvents.h>
@@ -990,10 +989,12 @@ void doExecuteTask(const DistributedQueryTaskDescription & task_description, Obj
 
         pipeline.setProgressCallback(progress_callback ? progress_callback : context->getProgressCallback());
 
-        CompletedPipelineExecutor executor(pipeline);
-        if (is_cancelled)
-            executor.setCancelCallback(is_cancelled, 100);
-        executor.execute();
+        {
+            CompletedPipelineExecutor executor(pipeline);
+            if (is_cancelled)
+                executor.setCancelCallback(is_cancelled, 100);
+            executor.execute();
+        }
 
         /// The data work is done; a filter that has not arrived by now has nothing left to serve.
         receive_branches.finish();

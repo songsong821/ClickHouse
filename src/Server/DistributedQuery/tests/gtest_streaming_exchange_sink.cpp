@@ -69,7 +69,7 @@ QueryPipeline makeSinkPipeline(std::shared_ptr<FutureConnection> future_connecti
 std::exception_ptr runSinkAgainstDisconnectingPeer(bool advisory)
 {
     /// A send to a peer that already reset the connection raises SIGPIPE otherwise.
-    signal(SIGPIPE, SIG_IGN);
+    (void)std::signal(SIGPIPE, SIG_IGN);
 
     Poco::Net::ServerSocket server(Poco::Net::SocketAddress("127.0.0.1", 0));
     Poco::Net::StreamSocket client;

@@ -4,7 +4,7 @@
 #include <DataTypes/DataTypesNumber.h>
 #include <IO/ReadBufferFromString.h>
 #include <IO/WriteBufferFromString.h>
-#include <Processors/Executors/PipelineExecutor.h>
+#include <Processors/Executors/Runtime/PipelineExecutor.h>
 #include <Processors/ISink.h>
 #include <Processors/ISource.h>
 #include <Processors/ResizeProcessor.h>

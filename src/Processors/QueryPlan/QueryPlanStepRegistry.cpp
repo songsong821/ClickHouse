@@ -39,6 +39,7 @@ QueryPlanStepPtr QueryPlanStepRegistry::createStep(
 
 void registerExpressionStep(QueryPlanStepRegistry & registry);
 void registerUnionStep(QueryPlanStepRegistry & registry);
+void registerIntersectOrExceptStep(QueryPlanStepRegistry & registry);
 void registerDistinctStep(QueryPlanStepRegistry & registry);
 void registerSortingStep(QueryPlanStepRegistry & registry);
 void registerAggregatingStep(QueryPlanStepRegistry & registry);
@@ -84,6 +85,7 @@ void QueryPlanStepRegistry::registerPlanSteps()
 
     registerExpressionStep(registry);
     registerUnionStep(registry);
+    registerIntersectOrExceptStep(registry);
     registerDistinctStep(registry);
     registerSortingStep(registry);
     registerAggregatingStep(registry);

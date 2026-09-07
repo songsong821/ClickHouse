@@ -647,7 +647,7 @@ TEST(RuntimeFilterSerialization, BuildStepTopologyRequiresRuntimeFilterExchanges
     EXPECT_TRUE(restored->getFilterKey().empty());
     EXPECT_EQ(restored->getFilterName(), "f");
     EXPECT_EQ(restored->getFilterColumnName(), "x");
-    /// `join_runtime_filter_exact_bytes_limit` is a version-10 setting name; a stream below that
+    /// `join_runtime_filter_exact_bytes_limit` is a version-15 setting name; a stream below that
     /// version omits it and the reader falls back to the constructor floor (the bloom filter size
     /// is the default when the setting is absent, and the limit defaults to the bloom size).
     auto expected_geometry = makeGeometry();
