@@ -435,6 +435,8 @@ void KeeperDispatcher::signalShutdown()
     if (shutting_down.exchange(true))
         return; // already called
 
+    failPendingSessionIDRequests();
+
     {
         std::lock_guard lock(early_shutdown_wait_mutex);
     }
@@ -591,9 +593,19 @@ int64_t KeeperDispatcher::getSessionID(int64_t session_timeout_ms)
 
     {
         std::lock_guard lock(new_session_id_mutex);
+        if (isShuttingDown())
+            throw Exception(ErrorCodes::ABORTED, "Not issuing new session ID because of shutdown");
+
         auto [it, inserted] = new_session_id_requests.try_emplace(request->internal_id);
         chassert(inserted);
         future = it->second.get_future();
+    }
+
+    if (isShuttingDown())
+    {
+        std::lock_guard lock(new_session_id_mutex);
+        new_session_id_requests.erase(request->internal_id);
+        throw Exception(ErrorCodes::ABORTED, "Not issuing new session ID because of shutdown");
     }
 
     try
@@ -723,7 +735,7 @@ bool KeeperDispatcher::reconfigEnabled() const
 
 bool KeeperDispatcher::isServerActive() const
 {
-    return checkInit() && hasLeader() && !server->isRecovering();
+    return !isShuttingDown() && checkInit() && hasLeader() && !server->isRecovering();
 }
 
 void KeeperDispatcher::updateConfiguration(const Poco::Util::AbstractConfiguration & config, const MultiVersion<Macros>::Version & macros)

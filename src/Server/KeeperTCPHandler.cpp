@@ -266,6 +266,19 @@ KeeperTCPHandler::KeeperTCPHandler(
     , last_op(std::make_unique<LastOp>(EMPTY_LAST_OP))
 {
     KeeperTCPHandler::registerConnection(this);
+
+    /// A handler accepted while the listener is stopping can register after the shutdown sweep.
+    if (keeper_dispatcher->isShuttingDown())
+    {
+        try
+        {
+            socket().shutdown();
+        }
+        catch (...)
+        {
+            tryLogCurrentException(log, "Failed to close late Keeper connection during shutdown");
+        }
+    }
 }
 
 void KeeperTCPHandler::sendHandshake(bool has_leader, bool & use_compression)

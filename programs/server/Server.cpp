@@ -1861,8 +1861,14 @@ try
 
         async_metrics->stop();
 
-        /// Signal and close Keeper TCP handlers before shutting down the global context.
+        /// Stop accepting Keeper connections and close the active handlers before shutting down the global context.
         /// An idle handler may be blocked in a socket poll and otherwise delay this shutdown.
+        {
+            std::lock_guard lock(servers_lock);
+            for (auto & server : servers_to_start_before_tables)
+                if (server.getPortName().starts_with("keeper_server."))
+                    server.stop();
+        }
         global_context->signalKeeperDispatcherShutdown();
         close_keeper_connections();
 
@@ -1884,7 +1890,8 @@ try
                 std::lock_guard lock(servers_lock);
                 for (auto & server : servers_to_start_before_tables)
                 {
-                    server.stop();
+                    if (!server.isStopping())
+                        server.stop();
                     current_connections += server.currentConnections();
                 }
             }
