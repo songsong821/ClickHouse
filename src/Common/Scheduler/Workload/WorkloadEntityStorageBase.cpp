@@ -431,11 +431,10 @@ bool WorkloadEntityStorageBase::storeEntity(
         // Validate workload
         if (workload)
         {
-            if (!workload->hasParent())
-            {
-                if (!root_name.empty() && root_name != workload->getWorkloadName())
-                    throw Exception(ErrorCodes::BAD_ARGUMENTS, "The second root is not allowed. You should probably add 'PARENT {}' clause.", root_name);
-            }
+            // Multiple root workloads (workloads created without a PARENT) are allowed. They form an
+            // independent forest of workload trees rather than a single tree, which lets one tree be
+            // managed via SQL while another is loaded from configuration. Trees are independent: there
+            // is no scheduling relationship between different roots.
 
             // Check the settings values and throw if something is wrong
             WorkloadSettings validator;
@@ -758,12 +757,7 @@ void WorkloadEntityStorageBase::applyEvent(
     {
         LOG_DEBUG(log, "Create or replace workload entity: {}", event.entity->formatForLogging());
 
-        auto * workload = typeid_cast<ASTCreateWorkloadQuery *>(event.entity.get());
         auto * resource = typeid_cast<ASTCreateResourceQuery *>(event.entity.get());
-
-        // Update root workload
-        if (workload && !workload->hasParent())
-            root_name = workload->getWorkloadName();
 
         // Update resource names. First clear any role-name field that currently points to this
         // resource: `CREATE OR REPLACE RESOURCE r (...)` may change `r`'s operation set, e.g.
@@ -811,9 +805,6 @@ void WorkloadEntityStorageBase::applyEvent(
         chassert(it != entities.end());
 
         LOG_DEBUG(log, "Drop workload entity: {}", event.name);
-
-        if (event.name == root_name)
-            root_name.clear();
 
         if (event.name == master_thread_resource)
             master_thread_resource.clear();
