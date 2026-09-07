@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -317,8 +318,16 @@ public:
     /// Looks up each value and returns column of Bool values.
     ColumnPtr find(const ColumnWithTypeAndName & values) const;
 
+    /// Whether building and all expected merges have finished.
+    bool isReady() const
+    {
+        auto filter_data = data.getReadOnly();
+        return filter_data->build_state.isFinished();
+    }
+
     /// Add all keys from one filter to the other so that destination filter contains the union of both filters.
-    void merge(const RuntimeFilter * source);
+    /// The source must be a distinct filter. Merges involving the same filters are serialized.
+    void merge(const RuntimeFilter & source);
 
     /// Opt in to collecting build-side metadata for storage index analysis.
     void enableIndexAnalysis();
@@ -331,6 +340,7 @@ public:
     const RuntimeFilterConfig & getConfig() const { return evaluation_state.getConfig(); }
 
 private:
+    mutable std::mutex merge_mutex;
     RuntimeFilterEvaluationState evaluation_state;
     MutexProtected<Data> data;
 };

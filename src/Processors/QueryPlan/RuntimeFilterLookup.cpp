@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <limits>
 #include <optional>
 #include <unordered_map>
 #include <utility>
@@ -91,7 +92,25 @@ void RuntimeFilterEvaluationState::updateStats(UInt64 rows_checked, UInt64 rows_
     /// Skip the configured number of blocks if too few rows got filtered out.
     const double rows_passed_threshold = config.pass_ratio_threshold_for_disabling * static_cast<double>(rows_checked);
     if (static_cast<double>(rows_passed) > rows_passed_threshold)
-        rows_to_skip += rows_checked * config.blocks_to_skip_before_reenabling;
+    {
+        const Int64 max_rows_to_skip = std::numeric_limits<Int64>::max();
+        const UInt64 max_rows_to_skip_unsigned = static_cast<UInt64>(max_rows_to_skip);
+        const UInt64 rows_to_add = config.blocks_to_skip_before_reenabling != 0
+                && rows_checked > max_rows_to_skip_unsigned / config.blocks_to_skip_before_reenabling
+            ? max_rows_to_skip_unsigned
+            : rows_checked * config.blocks_to_skip_before_reenabling;
+        const Int64 increment = static_cast<Int64>(rows_to_add);
+
+        Int64 current_rows_to_skip = rows_to_skip.load(std::memory_order_relaxed);
+        while (current_rows_to_skip < max_rows_to_skip)
+        {
+            const Int64 available = max_rows_to_skip - current_rows_to_skip;
+            const Int64 updated_rows_to_skip = increment >= available ? max_rows_to_skip : current_rows_to_skip + increment;
+            if (rows_to_skip.compare_exchange_weak(
+                    current_rows_to_skip, updated_rows_to_skip, std::memory_order_relaxed, std::memory_order_relaxed))
+                break;
+        }
+    }
 }
 
 bool RuntimeFilterEvaluationState::shouldSkip(size_t next_block_rows) const
@@ -105,9 +124,18 @@ bool RuntimeFilterEvaluationState::shouldSkip(size_t next_block_rows) const
         return true;
     }
 
-    rows_to_skip -= next_block_rows;
-    if (rows_to_skip > 0)
+    Int64 current_rows_to_skip = rows_to_skip.load(std::memory_order_relaxed);
+    while (current_rows_to_skip > 0)
     {
+        const bool should_skip = next_block_rows < static_cast<UInt64>(current_rows_to_skip);
+        const Int64 remaining_rows_to_skip = should_skip ? current_rows_to_skip - static_cast<Int64>(next_block_rows) : 0;
+        if (!rows_to_skip.compare_exchange_weak(
+                current_rows_to_skip, remaining_rows_to_skip, std::memory_order_relaxed, std::memory_order_relaxed))
+            continue;
+
+        if (!should_skip)
+            return false;
+
         stats.rows_skipped += next_block_rows;
         stats.blocks_skipped++;
         ProfileEvents::increment(ProfileEvents::RuntimeFilterRowsSkipped, next_block_rows);
@@ -115,7 +143,6 @@ bool RuntimeFilterEvaluationState::shouldSkip(size_t next_block_rows) const
         return true;
     }
 
-    rows_to_skip = 0;
     return false;
 }
 
@@ -679,12 +706,13 @@ ColumnPtr RuntimeFilter::find(const ColumnWithTypeAndName & values) const
     return result;
 }
 
-void RuntimeFilter::merge(const RuntimeFilter * source)
+void RuntimeFilter::merge(const RuntimeFilter & source)
 {
-    if (!source)
-        throw Exception(ErrorCodes::LOGICAL_ERROR, "Trying to merge runtime filters with different types");
+    if (&source == this)
+        throw Exception(ErrorCodes::LOGICAL_ERROR, "Trying to merge a runtime filter with itself");
 
-    auto source_data = source->data.getReadOnly();
+    std::scoped_lock merge_locks(merge_mutex, source.merge_mutex);
+    auto source_data = source.data.getReadOnly();
     auto destination_data = data.getWriteEnabled();
 
     /// `HashJoin::publishSharedRuntimeFilters` may have already replaced this lookup entry with a
@@ -779,7 +807,7 @@ public:
         }
         else
         {
-            filter->merge(runtime_filter.get()); /// Add all new keys to an existing filter.
+            filter->merge(*runtime_filter); /// Add all new keys to an existing filter.
         }
         filter->finishInsert();
     }
@@ -797,7 +825,7 @@ public:
     {
         auto lookup_data = data.getReadOnly();
         auto it = lookup_data->filters_by_name.find(name);
-        if (it == lookup_data->filters_by_name.end())
+        if (it == lookup_data->filters_by_name.end() || !it->second->isReady())
             return nullptr;
         return it->second;
     }

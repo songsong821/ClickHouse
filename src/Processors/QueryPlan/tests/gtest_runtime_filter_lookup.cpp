@@ -6,8 +6,11 @@
 #include <base/unit.h>
 #include <Common/tests/gtest_global_register.h>
 
+#include <array>
+#include <barrier>
 #include <initializer_list>
 #include <memory>
+#include <thread>
 
 namespace DB
 {
@@ -129,6 +132,9 @@ TEST(RuntimeFilterLookup, LookupMergesExactContainsFilters)
     first_filter->insert(makeUInt64Column({1}));
     lookup->add("runtime_filter", "runtime_filter", std::move(first_filter));
 
+    /// The first stream's filter is installed but must remain invisible while a merge is pending.
+    EXPECT_FALSE(lookup->find("runtime_filter"));
+
     auto second_filter = std::make_unique<RuntimeFilter>(
         /*filters_to_merge_=*/0,
         makeRuntimeFilterConfig(),
@@ -142,6 +148,154 @@ TEST(RuntimeFilterLookup, LookupMergesExactContainsFilters)
     auto filter = lookup->find("runtime_filter");
     ASSERT_TRUE(filter);
     expectMask(filter->find(makeUInt64ColumnWithType({1, 3, 5}, type)), {1, 0, 1});
+}
+
+TEST(RuntimeFilterLookup, SkipBudgetPreservesSerialExhaustionSemantics)
+{
+    RuntimeFilterEvaluationState state(
+        RuntimeFilterConfig{/*pass_ratio_threshold_for_disabling=*/0.5,
+                            /*blocks_to_skip_before_reenabling=*/1});
+
+    state.updateStats(/*rows_checked=*/100, /*rows_passed=*/100);
+    EXPECT_TRUE(state.shouldSkip(60));
+    EXPECT_FALSE(state.shouldSkip(60));
+    EXPECT_EQ(state.getStats().blocks_skipped.load(), 1);
+    EXPECT_EQ(state.getStats().rows_skipped.load(), 60);
+
+    state.updateStats(/*rows_checked=*/100, /*rows_passed=*/100);
+    EXPECT_FALSE(state.shouldSkip(100));
+}
+
+TEST(RuntimeFilterLookup, SkipBudgetConsumptionIsLinearizable)
+{
+    constexpr size_t iterations = 2000;
+    RuntimeFilterEvaluationState state(
+        RuntimeFilterConfig{/*pass_ratio_threshold_for_disabling=*/0.5,
+                            /*blocks_to_skip_before_reenabling=*/1});
+    std::barrier<> sync(3);
+    std::array<bool, 2> should_skip{};
+
+    auto consume_budget = [&](size_t thread_index)
+    {
+        for (size_t iteration = 0; iteration < iterations; ++iteration)
+        {
+            sync.arrive_and_wait();
+            should_skip[thread_index] = state.shouldSkip(60);
+            sync.arrive_and_wait();
+        }
+    };
+
+    std::thread first_consumer(consume_budget, 0);
+    std::thread second_consumer(consume_budget, 1);
+    size_t non_linearizable_iterations = 0;
+    for (size_t iteration = 0; iteration < iterations; ++iteration)
+    {
+        state.updateStats(/*rows_checked=*/100, /*rows_passed=*/100);
+        sync.arrive_and_wait();
+        sync.arrive_and_wait();
+        if (should_skip[0] == should_skip[1])
+            ++non_linearizable_iterations;
+    }
+    first_consumer.join();
+    second_consumer.join();
+
+    EXPECT_EQ(non_linearizable_iterations, 0);
+}
+
+TEST(RuntimeFilterLookup, SkipBudgetDoesNotLoseConcurrentReplenishment)
+{
+    constexpr size_t iterations = 10000;
+    RuntimeFilterEvaluationState state(
+        RuntimeFilterConfig{/*pass_ratio_threshold_for_disabling=*/0.5,
+                            /*blocks_to_skip_before_reenabling=*/1});
+    std::barrier<> sync(3);
+
+    std::thread consumer(
+        [&]
+        {
+            for (size_t iteration = 0; iteration < iterations; ++iteration)
+            {
+                sync.arrive_and_wait();
+                state.shouldSkip(100);
+                sync.arrive_and_wait();
+            }
+        });
+    std::thread replenisher(
+        [&]
+        {
+            for (size_t iteration = 0; iteration < iterations; ++iteration)
+            {
+                sync.arrive_and_wait();
+                state.updateStats(/*rows_checked=*/100, /*rows_passed=*/100);
+                sync.arrive_and_wait();
+            }
+        });
+
+    size_t lost_replenishments = 0;
+    for (size_t iteration = 0; iteration < iterations; ++iteration)
+    {
+        state.updateStats(/*rows_checked=*/100, /*rows_passed=*/100);
+        sync.arrive_and_wait();
+        sync.arrive_and_wait();
+        if (!state.shouldSkip(99))
+            ++lost_replenishments;
+        EXPECT_FALSE(state.shouldSkip(1));
+    }
+    consumer.join();
+    replenisher.join();
+
+    EXPECT_EQ(lost_replenishments, 0);
+}
+
+TEST(RuntimeFilterLookup, MergeRejectsSelf)
+{
+    const auto type = makeUInt64Type();
+    RuntimeFilter filter(
+        /*filters_to_merge_=*/1,
+        makeRuntimeFilterConfig(),
+        RuntimeFilter::ExactContains(
+            type,
+            /*bytes_limit_=*/1_MiB,
+            /*exact_values_limit_=*/100));
+
+    EXPECT_ANY_THROW(filter.merge(filter));
+}
+
+TEST(RuntimeFilterLookup, ReciprocalMergesAreSerialized)
+{
+    const auto type = makeUInt64Type();
+    RuntimeFilter first(
+        /*filters_to_merge_=*/1,
+        makeRuntimeFilterConfig(),
+        RuntimeFilter::ExactContains(type, /*bytes_limit_=*/1_MiB, /*exact_values_limit_=*/100));
+    RuntimeFilter second(
+        /*filters_to_merge_=*/1,
+        makeRuntimeFilterConfig(),
+        RuntimeFilter::ExactContains(type, /*bytes_limit_=*/1_MiB, /*exact_values_limit_=*/100));
+    first.insert(makeUInt64Column({1}));
+    second.insert(makeUInt64Column({2}));
+
+    std::barrier<> sync(3);
+    std::thread first_merge(
+        [&]
+        {
+            sync.arrive_and_wait();
+            first.merge(second);
+        });
+    std::thread second_merge(
+        [&]
+        {
+            sync.arrive_and_wait();
+            second.merge(first);
+        });
+    sync.arrive_and_wait();
+    first_merge.join();
+    second_merge.join();
+
+    first.finishInsert();
+    second.finishInsert();
+    expectMask(first.find(makeUInt64ColumnWithType({1, 2, 3}, type)), {1, 1, 0});
+    expectMask(second.find(makeUInt64ColumnWithType({1, 2, 3}, type)), {1, 1, 0});
 }
 
 TEST(RuntimeFilterLookup, ExactContainsMergesFinalizedSingleFilter)
@@ -165,7 +319,7 @@ TEST(RuntimeFilterLookup, ExactContainsMergesFinalizedSingleFilter)
     source.insert(makeUInt64Column({5}));
     source.finishInsert();
 
-    destination.merge(&source);
+    destination.merge(source);
     destination.finishInsert();
 
     expectMask(destination.find(makeUInt64ColumnWithType({5, 7}, type)), {1, 0});
@@ -192,7 +346,7 @@ TEST(RuntimeFilterLookup, ExactContainsMergesFinalizedEmptyFilter)
             /*exact_values_limit_=*/100));
     source.finishInsert();
 
-    destination.merge(&source);
+    destination.merge(source);
     destination.finishInsert();
 
     expectMask(destination.find(makeUInt64ColumnWithType({1, 2}, type)), {1, 0});
@@ -212,7 +366,7 @@ TEST(RuntimeFilterLookup, IndexAnalysisRecordsExactValuesAndMergedRange)
     source.insert(makeUInt64Column({1, 9}));
     source.finishInsert();
 
-    destination.merge(&source);
+    destination.merge(source);
     destination.finishInsert();
 
     auto values = destination.getRecordedKeyValues();
@@ -255,12 +409,9 @@ TEST(RuntimeFilterLookup, LateAddAfterSharedFilterPublicationFailsOpenForIndexMe
     initial_filter->insert(makeUInt64Column({3, 7}));
     lookup->add("runtime_filter", "runtime_filter", std::move(initial_filter));
 
-    auto incomplete_filter = lookup->find("runtime_filter");
-    ASSERT_TRUE(incomplete_filter);
-    auto recorded_key_range = incomplete_filter->getRecordedKeyRanges();
-    auto recorded_key_values = incomplete_filter->getRecordedKeyValues();
-    EXPECT_FALSE(recorded_key_range);
-    EXPECT_FALSE(recorded_key_values);
+    EXPECT_FALSE(lookup->find("runtime_filter"));
+    std::optional<Range> recorded_key_range;
+    ColumnPtr recorded_key_values;
 
     /// Simulate post-build publication. The probe sees the complete hash table, including key 1
     /// whose stream-local filter has not registered yet. The unfinished filter contributes no
