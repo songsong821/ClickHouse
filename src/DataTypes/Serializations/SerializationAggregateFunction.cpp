@@ -475,26 +475,20 @@ void SerializationAggregateFunction::serializeBinary(const Field & field, WriteB
     writeBinary(state.data, ostr);
 }
 
-void SerializationAggregateFunction::deserializeBinary(Field & field, ReadBuffer & istr, const FormatSettings & settings) const
+void SerializationAggregateFunction::deserializeBinary(Field & field, ReadBuffer & istr, const FormatSettings &) const
 {
     field = AggregateFunctionStateData();
     AggregateFunctionStateData & s = field.safeGet<AggregateFunctionStateData>();
     s.name = type_name;
 
-    /// This is the representation used when an `AggregateFunction` value is nested inside another value,
-    /// such as `argMax`. It is length-prefixed by `serializeBinary(Field, ...)`.
-    if (settings.aggregate_function_input_format == FormatSettings::AggregateFunctionInputFormat::State)
-    {
-        readBinary(s.data, istr);
-        return;
-    }
-
-    /// The value mode uses the argument type's binary representation.
-    auto tmp_column = ColumnAggregateFunction::create(function, version);
-    deserializeBinary(*tmp_column, istr, settings);
-
-    WriteBufferFromString buf(s.data);
-    function->serialize(tmp_column->getData()[0], buf, version);
+    /// The `Field` overloads are the representation of a value nested inside another value, such as the
+    /// argument of `argMax`, the value of a `sumMap`, or a path of a `JSON` column that went to the shared
+    /// data. They are only ever read back from what `serializeBinary(Field, ...)` wrote, and a carrier may
+    /// even keep the consumed bytes as they are, so this must stay its exact inverse: the length-prefixed
+    /// opaque state, independently of `aggregate_function_input_format`. The value and array forms of the
+    /// setting belong to the `IColumn` path, which is what an actual binary input format reads a column
+    /// with.
+    readBinary(s.data, istr);
 }
 
 void SerializationAggregateFunction::serializeBinary(const IColumn & column, size_t row_num, WriteBuffer & ostr, const FormatSettings &) const
