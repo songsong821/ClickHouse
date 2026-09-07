@@ -46,13 +46,13 @@ struct CPULeaseSettings
     /// For debugging purposes, not used in production
     String workload;
 
-    /// Enable OpenTelemetry tracing for CPU scheduling
-    bool trace_cpu_scheduling = false;
-
     /// Whether to park the lease during non-CPU waits (I/O or idle), from the `cpu_slot_parking`
     /// server setting. When false the executor never publishes the lease as the current CPU
     /// lease, so park/unpark are never invoked.
     bool parking_enabled = true;
+
+    /// Enable OpenTelemetry tracing for CPU scheduling
+    bool trace_cpu_scheduling = false;
 };
 
 class CPULeaseAllocation;

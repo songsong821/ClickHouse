@@ -479,24 +479,24 @@ bool CPULeaseAllocation::parkLease(Lease & lease)
 
     setParked(thread_num);
 
-    // Active clockless give-back. Parking dropped the query's slot demand by one
-    //     (effectiveMaxSlots() shrank). If we still hold more quanta than that, finish one now so
-    //     its scheduler semaphore unit is freed immediately for other queries — no clock read, no
-    //     waiting ~10 ms for another thread's consume(). A parker that was only borrowing holds no
-    //     spare quantum (allocated already <= cap) and skips this.
-    while (allocated > 0 && allocated > effectiveMaxSlots())
+    // Active clockless give-back: parking dropped this query's slot demand by one
+    // (effectiveMaxSlots() shrank), so if we still hold more quanta than that, finish one now to
+    // free its scheduler semaphore unit immediately for other queries -- no clock read, no waiting
+    // ~10 ms for another thread's consume(). A parker that was only borrowing holds no spare quantum
+    // (allocated already <= cap) and skips this. effectiveMaxSlots() is clamped at 0, so the first
+    // condition already implies allocated > 0.
+    while (allocated > effectiveMaxSlots())
     {
         --allocated;
         --granted;
-        if (granted <= 0 && !exception)
+        if (granted == 0 && !exception) // only on the transition to non-acquirable, not every decrement
             acquirable.store(false, std::memory_order_relaxed);
         requests.finish();
     }
 
-    // park is purely scheduler-side: no executor/task-layer callback (unlike preemption's
+    // Parking is purely scheduler-side: no executor/task-layer callback (unlike preemption's
     // on_preempt). The parked thread keeps its task and executor slot; the freed scheduler unit is
-    // handed to a waiter by the scheduler, so total_slots/finish-detection are unaffected. Trace the
-    // event (paired with CPU_LEASE_UNPARK by utils/trace-visualizer to show the parked interval).
+    // handed to a waiter by the scheduler, so total_slots/finish-detection are unaffected.
     if (settings.trace_cpu_scheduling)
     {
         OpenTelemetry::SpanHolder park_span("CPU_LEASE_PARK");
@@ -521,8 +521,7 @@ void CPULeaseAllocation::unparkLease(Lease & lease)
 
     resetParked(thread_num);
 
-    // Trace the unpark event (pairs with CPU_LEASE_PARK in utils/trace-visualizer). Emitted on
-    // both the normal and teardown paths so every park has a matching unpark.
+    // Trace unpark (matches the preceding CPU_LEASE_PARK span).
     if (settings.trace_cpu_scheduling)
     {
         OpenTelemetry::SpanHolder unpark_span("CPU_LEASE_UNPARK");
@@ -535,11 +534,20 @@ void CPULeaseAllocation::unparkLease(Lease & lease)
     }
 
     // Demand rose by one (effectiveMaxSlots() grew): kick one re-request so the borrowed slot is
-    // backed by a real quantum again (unless shutting down). The grant chain fills the rest.
+    // backed by a real quantum again (unless shutting down); the grant chain fills the rest.
+    // unpark() runs from CPULeaseParkGuard's destructor and must not throw: enqueueRequest() can
+    // raise INVALID_SCHEDULER_NODE while the workload queue is being torn down. If so, keep running
+    // on the borrow -- the next renew() observes the failure or shutdown and stops the thread.
     if (!shutdown && allocated < effectiveMaxSlots() && !requests.hasEnqueued())
     {
-        if (!schedule(lock))
-            grantImpl(lock);
+        try
+        {
+            if (!schedule(lock))
+                grantImpl(lock);
+        }
+        catch (...) // NOLINT(bugprone-empty-catch): unpark must stay non-throwing (destructor path)
+        {
+        }
     }
 }
 

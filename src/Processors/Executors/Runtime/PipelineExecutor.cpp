@@ -76,22 +76,18 @@ struct WorkloadResources
     {
         if (lease)
         {
-            // Runs on the worker thread that will execute the pipeline (same contract as
-            // startConsumption, which must be called from that thread).
             lease->startConsumption();
             last_renew_ns = clock_gettime_ns();
         }
 
-        // Manage the CurrentCPULease publication for this executor's region. A region drives
-        // parking only for its OWN lease: publish our lease when we have one and parking is
-        // enabled, so the park guards deep in work()/idle-wait find it. Otherwise -- no lease of
-        // our own, or parking disabled -- mask any lease published by an enclosing pipeline
-        // executor on this thread (a nested Pulling/PushingPipelineExecutor) with nullptr, so its
-        // guards do not park the outer lease; restore it on destruction. The masking cannot be
-        // gated on having a lease: a nested executor may have none (allocateCPU() can fall back to
-        // a non-lease allocation, e.g. after a cpu_slot_preemption reload) while an outer lease is
-        // still published. With nothing published and no lease to publish, the thread-local is
-        // left untouched so a server with the feature off pays nothing.
+        // Publish this executor's own lease as the current CPU lease so the park guards deep in
+        // work() and the idle wait find it. When there is no own lease (or parking is disabled),
+        // mask any lease published by an enclosing pipeline executor on this thread (a nested
+        // Pulling/PushingPipelineExecutor) with nullptr and restore it on destruction, so those
+        // guards do not park the outer lease. The masking cannot be gated on having a lease: a
+        // nested executor may have none (allocateCPU() can fall back to a non-lease allocation)
+        // while an outer lease is still published. With nothing published and no own lease, the
+        // thread-local is left untouched so a server with the feature off pays nothing.
         prev_cpu_lease = getCurrentCPULease();
         if (lease && lease->isParkingEnabled())
         {
@@ -631,8 +627,8 @@ SlotAllocationPtr PipelineExecutor::allocateCPU(size_t num_threads, bool concurr
                             .on_preempt = [this](size_t slot_id) { tasks.preempt(slot_id); },
                             .on_resume = [this](size_t slot_id) { tasks.resume(slot_id); },
                             .workload = query_context->getSettingsRef()[Setting::workload],
-                            .trace_cpu_scheduling = trace_cpu_scheduling,
                             .parking_enabled = query_context->getCPUSlotParking(),
+                            .trace_cpu_scheduling = trace_cpu_scheduling,
                         },
                         initial_max);
                 }
