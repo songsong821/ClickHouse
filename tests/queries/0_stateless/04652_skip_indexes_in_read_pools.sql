@@ -13,6 +13,13 @@ SET max_rows_to_read = 0;
 -- Pin the plain pools by default (the prefetched and parallel-replicas pools are
 -- enabled explicitly in dedicated queries below).
 SET enable_parallel_replicas = 0;
+-- The mark counts asserted at the end are sensitive to how a parallel-replicas read is split:
+-- they have never failed on `master`, they fail on the branch that enables
+-- `parallel_replicas_plan_based` by default, and
+-- https://github.com/ClickHouse/ClickHouse/pull/71028 breaks the same assertions by
+-- randomizing `parallel_replicas_min_number_of_rows_per_replica`. Pin the implementation for
+-- the whole test; pinning only the two read-in-order queries was not enough.
+SET parallel_replicas_plan_based = 0;
 SET allow_prefetched_read_pool_for_local_filesystem = 0, allow_prefetched_read_pool_for_remote_filesystem = 0;
 
 DROP TABLE IF EXISTS t_skip_idx_pools;
@@ -57,26 +64,14 @@ SETTINGS max_threads = 4, merge_tree_min_rows_for_concurrent_read = 256, optimiz
 
 -- Parallel replicas reading in order: MergeTreeReadPoolParallelReplicasInOrder (WithOrder mode).
 -- Single thread makes the sequence of tasks deterministic (no reading ahead of the LIMIT).
---
--- The two queries below pin `parallel_replicas_plan_based = 0`. Their mark counts rest on each side
--- reading until the coordinator stops it. The plan-based implementation restates the top-N as a
--- `Limit` inside both the local branch and the shipped fragment (see
--- https://github.com/ClickHouse/ClickHouse/pull/114315), so a side that reaches the first 'rare'
--- cluster at mark 100 satisfies `LIMIT 5` on its own and can stop before the refiner passes the ~150
--- marks counted here, leaving `ReadPoolRangeRefinerDroppedMarks` at 0. That is reading less rather
--- than reading wrong. The mechanism is the likely one rather than a measured one - the test has never
--- failed on `master`, but it fails on the branch that enables the plan-based implementation by
--- default, and https://github.com/ClickHouse/ClickHouse/pull/71028 hits the same assertions by
--- randomizing `parallel_replicas_min_number_of_rows_per_replica`, so these counts are sensitive to
--- how the read is split in general.
 SELECT /* skip_refiner_query_parallel_replicas_in_order */ id, region, value FROM t_skip_idx_pools WHERE region = 'rare' ORDER BY id LIMIT 5
-SETTINGS max_threads = 1, optimize_read_in_order = 1, parallel_replicas_plan_based = 0,
+SETTINGS max_threads = 1, optimize_read_in_order = 1,
     enable_parallel_replicas = 1, max_parallel_replicas = 3, parallel_replicas_for_non_replicated_merge_tree = 1,
     cluster_for_parallel_replicas = 'test_cluster_one_shard_three_replicas_localhost';
 
 -- The same pool in ReverseOrder mode.
 SELECT /* skip_refiner_query_parallel_replicas_reverse */ id, region, value FROM t_skip_idx_pools WHERE region = 'rare' ORDER BY id DESC LIMIT 5
-SETTINGS max_threads = 4, optimize_read_in_order = 1, parallel_replicas_plan_based = 0,
+SETTINGS max_threads = 4, optimize_read_in_order = 1,
     enable_parallel_replicas = 1, max_parallel_replicas = 3, parallel_replicas_for_non_replicated_merge_tree = 1,
     cluster_for_parallel_replicas = 'test_cluster_one_shard_three_replicas_localhost';
 
