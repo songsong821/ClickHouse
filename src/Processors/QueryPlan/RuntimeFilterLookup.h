@@ -69,6 +69,19 @@ private:
     bool inserts_are_finished = false;
 };
 
+/// Thread-safe, nonnegative row budget used to throttle runtime-filter evaluation.
+class RuntimeFilterSkipBudget
+{
+public:
+    /// Add `rows * multiplier` to the budget, saturating at the maximum representable value.
+    void replenish(UInt64 rows, UInt64 multiplier);
+
+    /// Consume `rows` and return whether enough budget remains to skip the current block.
+    bool consume(size_t rows);
+
+private:
+    std::atomic<Int64> rows_to_skip = 0;
+};
 }
 
 class RuntimeFilterEvaluationState
@@ -89,9 +102,7 @@ private:
 
     mutable RuntimeFilterStats stats;
 
-    /// How many rows should be skipped before trying to re-enable the filter after it was disabled due to
-    /// low percentage of filtered rows
-    mutable std::atomic<Int64> rows_to_skip = 0;
+    mutable detail::RuntimeFilterSkipBudget skip_budget;
     std::atomic<bool> is_fully_disabled = false;
 };
 
