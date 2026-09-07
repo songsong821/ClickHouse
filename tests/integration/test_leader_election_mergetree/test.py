@@ -958,35 +958,38 @@ def test_follower_sees_leader_writes(started_cluster):
 
         # The follower's refresh task runs at the heartbeat cadence (1 s in
         # `TABLE_SETTINGS`). Allow several cycles before failing.
-        deadline = time.monotonic() + 60
-        follower_count = 0
-        while time.monotonic() < deadline:
-            follower_count = int(
-                follower.query(f"SELECT count() FROM {table} WHERE x > 0").strip()
-            )
-            if follower_count >= 3:
-                break
-            time.sleep(1)
+        #
+        # The table is created fresh here and every row inserted matches `x > 0`, so the
+        # committed row set is known exactly. Assert the exact rows rather than "at least
+        # as many as expected": a refresh that double-loads a part or leaves a stale
+        # covered part active would satisfy a `>=` bound while the follower's view is
+        # wrong, which is precisely the regression this test exists to catch.
+        def wait_for_follower_rows(expected_rows):
+            deadline = time.monotonic() + 60
+            seen = None
+            while time.monotonic() < deadline:
+                seen = follower.query(
+                    f"SELECT x FROM {table} WHERE x > 0 ORDER BY x"
+                ).split()
+                if seen == expected_rows:
+                    break
+                time.sleep(1)
+            return seen
 
-        assert follower_count >= 3, (
-            f"Follower did not observe leader's parts after refresh interval "
-            f"(saw {follower_count} rows, expected at least 3)"
+        expected = ["1", "2", "3"]
+        seen = wait_for_follower_rows(expected)
+        assert seen == expected, (
+            f"Follower did not converge to the leader's parts after the refresh interval "
+            f"(saw {seen}, expected exactly {expected})"
         )
 
         # A second batch from the leader must also become visible on the follower.
         leader.query(f"INSERT INTO {table} VALUES (4), (5)")
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline:
-            follower_count = int(
-                follower.query(f"SELECT count() FROM {table} WHERE x > 0").strip()
-            )
-            if follower_count >= 5:
-                break
-            time.sleep(1)
-
-        assert follower_count >= 5, (
-            f"Follower did not observe the leader's second batch after refresh "
-            f"(saw {follower_count} rows, expected at least 5)"
+        expected = ["1", "2", "3", "4", "5"]
+        seen = wait_for_follower_rows(expected)
+        assert seen == expected, (
+            f"Follower did not converge to the leader's second batch after refresh "
+            f"(saw {seen}, expected exactly {expected})"
         )
     finally:
         for n in (node1, node2):
