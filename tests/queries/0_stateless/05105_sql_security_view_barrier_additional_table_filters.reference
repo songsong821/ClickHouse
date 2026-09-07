@@ -1,0 +1,15 @@
+--- atf_definer_view (parallel replicas reads, filters inside the read) ---
+no filter:	1	0
+filter on the view:	0	0
+filter on the alias:	0	0
+rows through the filter:	3
+--- atf_none_view (parallel replicas reads, filters inside the read) ---
+no filter:	1	0
+filter on the view:	0	0
+filter on the alias:	0	0
+rows through the filter:	3
+--- atf_invoker_view (parallel replicas reads, filters inside the read) ---
+no filter:	1	0
+filter on the view:	0	1
+filter on the alias:	0	1
+rows through the filter:	3
