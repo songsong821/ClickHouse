@@ -3,6 +3,7 @@
 #if USE_AZURE_BLOB_STORAGE
 
 #include <algorithm>
+#include <filesystem>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -19,6 +20,10 @@
 #include <IO/ReadHelpers.h>
 #include <IO/SharedThreadPools.h>
 #include <Interpreters/Context.h>
+#include <Interpreters/FileCache/FileCache.h>
+#include <Interpreters/FileCache/FileCacheFactory.h>
+#include <Interpreters/FileCache/FileCacheSettings.h>
+#include <Core/ServerUUID.h>
 #include <Storages/ObjectStorage/Utils.h>
 #include <Storages/ObjectStorageQueue/ObjectStorageQueuePostProcessor.h>
 #include <Storages/ObjectStorageQueue/ObjectStorageQueueSource.h>
@@ -29,7 +34,19 @@
 #include <azure/core/io/body_stream.hpp>
 #include <azure/storage/blobs/blob_container_client.hpp>
 
+#include <base/scope_guard.h>
+
 #include <gtest/gtest.h>
+
+namespace DB::FileCacheSetting
+{
+    extern const FileCacheSettingsString path;
+    extern const FileCacheSettingsUInt64 max_size;
+    extern const FileCacheSettingsUInt64 max_elements;
+    extern const FileCacheSettingsUInt64 max_file_segment_size;
+    extern const FileCacheSettingsUInt64 boundary_alignment;
+    extern const FileCacheSettingsUInt64 background_download_threads;
+}
 
 namespace DB::ErrorCodes
 {
@@ -2396,6 +2413,89 @@ TEST(AzureQueueReadPinning, PlainReadIsNotPinnedWhenTheSettingIsDisabled)
     std::string data;
     ASSERT_NO_THROW(DB::readStringUntilEOF(data, *buffer));
     ASSERT_EQ(data.size(), 100u);
+}
+
+/// The pre-read size does not only reach `ReadBufferFromAzureBlobStorage`: `createReadBuffer` also
+/// exports it to the outer layers of the read as `StoredObject::bytes_size`, where the bounded fast
+/// paths take it as the end of the data - `ReaderExecutor` clamps its object reads to it, and the
+/// filesystem cache takes it as the file size and as the `read_until_position` bound. For a read the
+/// caller deliberately leaves unpinned these layers must not cut the object back to a size measured
+/// on an older generation, or the buffer's own refusal to trust that size would be bypassed and the
+/// query would silently truncate the object that exists now. Both tests list the blob as 100 bytes
+/// while the endpoint holds 200.
+
+/// The `ReaderExecutor` path (`use_reader_executor`).
+TEST(AzureStaleSizeThroughCreateReadBuffer, ReaderExecutorDoesNotCutBackAnUnpinnedRead)
+{
+    auto transport = std::make_shared<MisbehavingRangeTransport>(
+        /* max_response_size */ 200, /* served_size */ 200, /* blob_size */ 200, /* send_etag */ true);
+    DB::ObjectStoragePtr object_storage = objectStorageOver(transport);
+
+    auto context = DB::Context::createCopy(getContext().context);
+    context->setSetting("s3_validate_etag_on_read", false);
+
+    auto read_settings = context->getReadSettings();
+    read_settings.reader_executor.enabled = true;
+    read_settings.reader_executor.use_long_connections = false;
+    /// The executor implements no async prefetch, so a pipeline that prefetches falls back to the
+    /// legacy path: this read has to be the one the executor serves.
+    read_settings.remote_fs_settings.prefetch = false;
+
+    auto entry = listingEntry(ETagBehaviour::first_generation_bare);
+    auto buffer = DB::createReadBuffer(
+        entry, object_storage, context, getLogger("AzureStaleSizeThroughCreateReadBuffer"), read_settings);
+
+    std::string data;
+    ASSERT_NO_THROW(DB::readStringUntilEOF(data, *buffer));
+    ASSERT_EQ(data.size(), static_cast<size_t>(200));
+    assertCountsUpFromZero(data);
+}
+
+/// The filesystem cache path (`filesystem_cache_name` with `enable_filesystem_cache`). The listed
+/// `ETag` is a usable cache key here, so before the fix the object was cached - and served - as a
+/// 100-byte file.
+TEST(AzureStaleSizeThroughCreateReadBuffer, FilesystemCacheDoesNotCutBackAnUnpinnedRead)
+{
+    const std::string cache_name = "azure_stale_size_without_pinning";
+    const auto cache_path = std::filesystem::current_path() / (cache_name + "_cache");
+    std::filesystem::remove_all(cache_path);
+    std::filesystem::create_directories(cache_path);
+    SCOPE_EXIT({
+        DB::FileCacheFactory::instance().clear();
+        std::filesystem::remove_all(cache_path);
+    });
+
+    /// The cache derives the id of its common origin from the server UUID.
+    DB::ServerUUID::setRandomForUnitTests();
+
+    DB::FileCacheSettings cache_settings;
+    cache_settings[DB::FileCacheSetting::path] = cache_path.string() + "/";
+    cache_settings[DB::FileCacheSetting::max_size] = 1024 * 1024;
+    cache_settings[DB::FileCacheSetting::max_elements] = 100;
+    cache_settings[DB::FileCacheSetting::boundary_alignment] = 0;
+    cache_settings[DB::FileCacheSetting::max_file_segment_size] = 1024 * 1024;
+    cache_settings[DB::FileCacheSetting::background_download_threads] = 0;
+    DB::FileCacheFactory::instance().getOrCreate(cache_name, cache_settings, "")->initialize();
+
+    auto transport = std::make_shared<MisbehavingRangeTransport>(
+        /* max_response_size */ 200, /* served_size */ 200, /* blob_size */ 200, /* send_etag */ true);
+    DB::ObjectStoragePtr object_storage = objectStorageOver(transport);
+
+    auto context = DB::Context::createCopy(getContext().context);
+    context->setSetting("s3_validate_etag_on_read", false);
+    context->setSetting("filesystem_cache_name", cache_name);
+
+    auto read_settings = context->getReadSettings();
+    read_settings.enable_filesystem_cache = true;
+
+    auto entry = listingEntry(ETagBehaviour::first_generation_bare);
+    auto buffer = DB::createReadBuffer(
+        entry, object_storage, context, getLogger("AzureStaleSizeThroughCreateReadBuffer"), read_settings);
+
+    std::string data;
+    ASSERT_NO_THROW(DB::readStringUntilEOF(data, *buffer));
+    ASSERT_EQ(data.size(), static_cast<size_t>(200));
+    assertCountsUpFromZero(data);
 }
 
 #endif

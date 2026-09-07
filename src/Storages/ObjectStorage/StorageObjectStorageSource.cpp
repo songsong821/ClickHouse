@@ -1832,9 +1832,6 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBuffer(
     /// filename to `readWithDistributedCache` (it ends up in `getFileName()` and in
     /// `system.distributed_cache_log.filename`). Use the object path so the DC log
     /// shows a useful name rather than an empty string.
-    const auto stored_object_size = is_size_known ? object_size : StoredObject::UnknownSize;
-    StoredObject stored_object(object_info.getPath(), object_info.getPath(), stored_object_size, object_info.read_source_index);
-
     /// Pin the read to the object generation seen here (etag from the LIST/HEAD): a GET with a
     /// different ETag means an in-place overwrite, reported as S3_OBJECT_CHANGED_DURING_READ
     /// instead of torn cross-generation data.
@@ -1844,16 +1841,46 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBuffer(
     /// on the ingested generation after the read, so reading a different generation would lose a
     /// file no matter how the setting is configured (and it can be turned off directly or through
     /// `compatibility`).
+    String pinned_generation;
     if (object_info.metadata.has_value()
         && (settings[Setting::s3_validate_etag_on_read] || object_info.require_read_pinned_to_generation))
-        stored_object.etag = object_info.metadata->etag;
+        pinned_generation = object_info.metadata->etag;
 
-    if (object_info.require_read_pinned_to_generation && stored_object.etag.empty())
+    if (object_info.require_read_pinned_to_generation && pinned_generation.empty())
         throw Exception(
             ErrorCodes::LOGICAL_ERROR,
             "Cannot read object {}: its read must be pinned to the generation that is processed "
             "after it, but that generation is not known",
             object_info.getPath());
+
+    /// The size seen before the read is authoritative only for a read pinned to the generation it
+    /// was measured on. `ReadBufferFromAzureBlobStorage` already refuses to bound an unpinned read
+    /// by it (`boundingObjectSize`), because the blob may have been overwritten between the
+    /// `LIST`/`HEAD` and the `GET`; handing the stale size to the outer layers would reintroduce
+    /// exactly the truncation the buffer avoids, since `ReaderExecutor` clamps object reads to
+    /// `StoredObject::bytes_size` and the filesystem cache takes it as the file size and as the
+    /// `read_until_position` bound. Report the size as unknown instead, which makes those bounded
+    /// fast paths step aside and lets the buffer itself decide where the data ends.
+    ///
+    /// S3 is deliberately not treated this way: `ReadBufferFromS3` learns the object size from the
+    /// endpoint during the read rather than from this pre-read size, so for it the outer size is
+    /// not tied to the generation this read pins, and nothing here changes its behaviour.
+    const bool size_measured_before_the_read_is_authoritative
+        = !pinned_generation.empty() || object_storage->getType() != ObjectStorageType::Azure;
+
+    /// Both caches address the data by absolute offset within a file of a known length, so neither
+    /// can hold an object whose size is not authoritative. `ReadPipeline` skips their stages for
+    /// such an object in any case; deciding it here keeps the log honest as well.
+    if (!size_measured_before_the_read_is_authoritative)
+    {
+        use_filesystem_cache = false;
+        use_page_cache = false;
+    }
+
+    const auto stored_object_size
+        = is_size_known && size_measured_before_the_read_is_authoritative ? object_size : StoredObject::UnknownSize;
+    StoredObject stored_object(object_info.getPath(), object_info.getPath(), stored_object_size, object_info.read_source_index);
+    stored_object.etag = pinned_generation;
     pipeline.setSource(object_storage, StoredObjects{stored_object}, modified_read_settings);
 
     /// Filesystem cache
