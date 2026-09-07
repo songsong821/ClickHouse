@@ -14,6 +14,23 @@
 namespace DB
 {
 
+/// A move of a file of a `plain_rewritable` disk is a copy of its blob followed by a delete of the
+/// blob it copied. Both requests address the blob by the path of the file, so on an object storage
+/// where a blob can be overwritten in place they may not be talking about the same content: another
+/// writer can replace the blob between them, and a delete by path alone would then take away a
+/// generation of the file that was never copied anywhere.
+///
+/// One `HEAD` names the generation before the copy. `copyObject` is then pinned to it (and needs no
+/// `HEAD` of its own any more), and so is the delete: both transfer and remove exactly the
+/// generation named here, or fail with `FILE_CHANGED_DURING_READ` and leave the file in place.
+///
+/// This is done for Azure only, the object storage whose delete honours the generation
+/// (`AzureObjectStorage::removeObjectImpl` sends it as `If-Match`); for the others the object is
+/// returned as it was and not a single extra request is made. An Azure endpoint that reports no
+/// generation for the blob cannot be pinned to one at all, and the move is refused with
+/// `AZURE_BLOB_STORAGE_ERROR` rather than made blind.
+StoredObject pinToTheGenerationThatIsThereNow(IObjectStorage & object_storage, const std::filesystem::path & remote_path);
+
 class MetadataStorageFromPlainObjectStorageValidatePreconditionsOperation final : public IMetadataOperation
 {
 private:
@@ -145,6 +162,9 @@ private:
     std::filesystem::path remote_tmp_path;
     bool copy_started = false;
     bool remove_started = false;
+    /// The delete of the source found a generation it had not copied aside and left it in place, so
+    /// `undo` must not restore the copy over it.
+    bool source_was_left_in_place = false;
 
 public:
     MetadataStorageFromPlainObjectStorageUnlinkMetadataFileOperation(
@@ -211,9 +231,15 @@ private:
     std::filesystem::path tmp_remote_path_from;
     std::filesystem::path tmp_remote_path_to;
     std::optional<FileRemoteInfo> file_from_remote_info;
+    /// The source blob, pinned to the generation of it that this move carries.
+    StoredObject source;
     bool moved_existing_source_file{false};
     bool moved_existing_target_file{false};
     bool moved_file{false};
+    /// A delete found a generation of the blob that this move had not copied aside and left it in
+    /// place, so `undo` must not restore the copy of the generation before it.
+    bool source_was_left_in_place{false};
+    bool target_was_left_in_place{false};
 
 public:
     MetadataStorageFromPlainObjectStorageMoveFileOperation(

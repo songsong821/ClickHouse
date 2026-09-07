@@ -25,6 +25,7 @@
 #include <Interpreters/FileCache/FileCacheFactory.h>
 #include <Interpreters/FileCache/FileCacheSettings.h>
 #include <Core/ServerUUID.h>
+#include <Disks/DiskObjectStorage/MetadataStorages/PlainRewritable/MetadataStorageFromPlainRewritableObjectStorageOperations.h>
 #include <Storages/ObjectStorage/Utils.h>
 #include <Storages/ObjectStorageQueue/ObjectStorageQueuePostProcessor.h>
 #include <Storages/ObjectStorageQueue/ObjectStorageQueueSource.h>
@@ -835,6 +836,57 @@ CopyObjectOutcome copyObjectThroughObjectStorage(
     }
 
     return CopyObjectOutcome{.copied = transport->uploadedData(), .error_code = error_code};
+}
+
+/// What the move of a file of a `plain_rewritable` disk left behind at the endpoint.
+struct PlainRewritableMoveOutcome
+{
+    /// The bytes of the source that the copy stored at the destination. A copy between two clients
+    /// of this endpoint goes through a read and a write, so this is what says whether the copy
+    /// happened, and the `If-Match` of its `GET` is what pins it to one generation.
+    std::string copied;
+    /// The generation that each successful `Delete Blob` removed.
+    std::vector<std::string> deleted_generations;
+    /// The error code the move failed with, if it did.
+    std::optional<int> error_code;
+};
+
+/// Drives the sequence a `plain_rewritable` metadata operation performs when it moves a file: name
+/// the generation of the source blob (`pinToTheGenerationThatIsThereNow`, the production helper),
+/// copy that generation aside, then delete the source. With `overwrite_between_copy_and_delete`,
+/// somebody else overwrites the source blob after the copy and before the delete. With `pin`
+/// disabled, the copy and the delete address the blob by path only, the way the operation did
+/// before it pinned them - the endpoint holds `send_etag` and honours `If-Match` in both cases.
+PlainRewritableMoveOutcome movePlainRewritableFile(
+    bool overwrite_between_copy_and_delete, bool pin = true, bool send_etag = true)
+{
+    auto transport = std::make_shared<MisbehavingRangeTransport>(
+        100, 100, 100, send_etag, /* reported_length */ std::nullopt, /* ignore_range */ false,
+        ETagBehaviour{.etag = ETagBehaviour::first_generation, .etag_after_first = "", .honour_if_match = true});
+    auto object_storage = objectStorageOver(transport);
+
+    std::optional<int> error_code;
+    try
+    {
+        const DB::StoredObject source
+            = pin ? DB::pinToTheGenerationThatIsThereNow(*object_storage, "blob") : DB::StoredObject("blob");
+
+        object_storage->copyObject(source, DB::StoredObject("moved/blob"), DB::ReadSettings{}, DB::WriteSettings{});
+
+        if (overwrite_between_copy_and_delete)
+            transport->overwriteObject(ETagBehaviour::second_generation);
+
+        object_storage->removeObjectIfExists(source);
+    }
+    catch (const DB::Exception & e)
+    {
+        error_code = e.code();
+    }
+
+    return PlainRewritableMoveOutcome{
+        .copied = transport->uploadedData(),
+        .deleted_generations = transport->deletedGenerations(),
+        .error_code = error_code};
 }
 
 }
@@ -2579,6 +2631,57 @@ TEST(AzureStaleSizeThroughCreateReadBuffer, FilesystemCacheDoesNotCutBackAnUnpin
     ASSERT_NO_THROW(DB::readStringUntilEOF(data, *buffer));
     ASSERT_EQ(data.size(), static_cast<size_t>(200));
     assertCountsUpFromZero(data);
+}
+
+/// A move of a file of a `plain_rewritable` disk copies the blob of the file and then deletes it.
+/// Nothing happens to the blob in between here, so the move goes through and the generation that
+/// was copied is the generation that was deleted.
+TEST(AzurePlainRewritableMove, DeletesTheGenerationItCopied)
+{
+    const auto outcome = movePlainRewritableFile(/* overwrite_between_copy_and_delete */ false);
+
+    ASSERT_FALSE(outcome.error_code.has_value());
+    ASSERT_EQ(outcome.copied.size(), static_cast<size_t>(100));
+    assertCountsUpFromZero(outcome.copied);
+    ASSERT_EQ(outcome.deleted_generations, std::vector<std::string>{ETagBehaviour::first_generation});
+}
+
+/// Somebody overwrites the file between the copy and the delete. The delete is pinned to the
+/// generation that was copied, so it removes nothing: the new generation of the file stays where it
+/// is, and the move is reported as failed instead of taking away content nobody has moved.
+TEST(AzurePlainRewritableMove, DoesNotDeleteAGenerationItDidNotCopy)
+{
+    const auto outcome = movePlainRewritableFile(/* overwrite_between_copy_and_delete */ true);
+
+    ASSERT_TRUE(outcome.error_code.has_value());
+    ASSERT_EQ(*outcome.error_code, DB::ErrorCodes::FILE_CHANGED_DURING_READ);
+    ASSERT_EQ(outcome.copied.size(), static_cast<size_t>(100));
+    ASSERT_TRUE(outcome.deleted_generations.empty());
+}
+
+/// The same overwrite when the two requests address the blob by path alone, as they did before the
+/// move was pinned: the delete succeeds and takes away the generation that was never copied. This
+/// is the data loss the pinning prevents, and it keeps the test above from being vacuous.
+TEST(AzurePlainRewritableMove, AnUnpinnedMoveDeletesTheNewGeneration)
+{
+    const auto outcome = movePlainRewritableFile(/* overwrite_between_copy_and_delete */ true, /* pin */ false);
+
+    ASSERT_FALSE(outcome.error_code.has_value());
+    ASSERT_EQ(outcome.copied.size(), static_cast<size_t>(100));
+    ASSERT_EQ(outcome.deleted_generations, std::vector<std::string>{ETagBehaviour::second_generation});
+}
+
+/// An endpoint that reports no `ETag` for the blob leaves the move nothing to pin to. It is refused
+/// before anything is copied or deleted, rather than performed blind.
+TEST(AzurePlainRewritableMove, ASourceWithoutAnETagIsRefused)
+{
+    const auto outcome
+        = movePlainRewritableFile(/* overwrite_between_copy_and_delete */ false, /* pin */ true, /* send_etag */ false);
+
+    ASSERT_TRUE(outcome.error_code.has_value());
+    ASSERT_EQ(*outcome.error_code, DB::ErrorCodes::AZURE_BLOB_STORAGE_ERROR);
+    ASSERT_TRUE(outcome.copied.empty());
+    ASSERT_TRUE(outcome.deleted_generations.empty());
 }
 
 #endif

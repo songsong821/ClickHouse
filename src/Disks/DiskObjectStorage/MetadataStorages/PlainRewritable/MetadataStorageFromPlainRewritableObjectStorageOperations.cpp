@@ -3,6 +3,7 @@
 #include <Disks/DiskObjectStorage/MetadataStorages/PlainRewritable/PlainRewritableLayout.h>
 #include <Disks/DiskObjectStorage/MetadataStorages/PlainRewritable/Transactions/Preconditions.h>
 #include <Disks/DiskObjectStorage/MetadataStorages/NormalizedPath.h>
+#include <Disks/DiskObjectStorage/ObjectStorages/IObjectStorage.h>
 #include <Disks/DiskObjectStorage/ObjectStorages/StoredObject.h>
 #include <IO/ReadSettings.h>
 #include <IO/WriteSettings.h>
@@ -34,6 +35,8 @@ namespace ErrorCodes
     extern const int LOGICAL_ERROR;
     extern const int CANNOT_RMDIR;
     extern const int CANNOT_CREATE_DIRECTORY;
+    extern const int AZURE_BLOB_STORAGE_ERROR;
+    extern const int FILE_CHANGED_DURING_READ;
 };
 
 namespace FailPoints
@@ -43,6 +46,35 @@ namespace FailPoints
     extern const char plain_object_storage_copy_fail_on_file_move[];
     extern const char plain_object_storage_copy_temp_source_file_fail_on_file_move[];
     extern const char plain_object_storage_copy_temp_target_file_fail_on_file_move[];
+}
+
+StoredObject pinToTheGenerationThatIsThereNow(IObjectStorage & object_storage, const std::filesystem::path & remote_path)
+{
+    StoredObject object(remote_path);
+
+    if (object_storage.getType() != ObjectStorageType::Azure)
+        return object;
+
+    auto metadata = object_storage.tryGetObjectMetadata(remote_path, /*with_tags=*/ false);
+    /// The blob is not there at all. The copy that follows reports that, as it did before there was
+    /// anything to pin, and the delete of the source never runs.
+    if (!metadata)
+        return object;
+
+    /// The endpoint reports no generation for the blob, so nothing here can be pinned: the copy
+    /// would take whatever is there when it runs and the delete would remove whatever is there when
+    /// it runs. Refuse the move instead of losing a rewritten file, the same way `copyObject` and
+    /// the `ObjectStorageQueue` post-processing refuse an unpinnable Azure object.
+    if (metadata->etag.empty())
+        throw Exception(
+            ErrorCodes::AZURE_BLOB_STORAGE_ERROR,
+            "Blob {} was not moved: the endpoint reports no `ETag` for it, so the move cannot be "
+            "pinned to the generation of the blob that is being moved",
+            remote_path.string());
+
+    object.bytes_size = metadata->size_bytes;
+    object.etag = metadata->etag;
+    return object;
 }
 
 MetadataStorageFromPlainObjectStorageValidatePreconditionsOperation::MetadataStorageFromPlainObjectStorageValidatePreconditionsOperation(
@@ -386,11 +418,27 @@ void MetadataStorageFromPlainObjectStorageUnlinkMetadataFileOperation::execute()
     remote_source_path = layout->constructFileObjectKey(directory_remote_path_from, normalized_path_from.filename());
     remote_tmp_path = layout->constructFileObjectKey(PlainRewritableLayout::ROOT_DIRECTORY_TOKEN, getRandomASCIIString(16));
 
+    /// The blob is copied aside and then deleted: both requests must be about the same generation
+    /// of it, or the delete would take away content that was never copied.
+    const StoredObject source = pinToTheGenerationThatIsThereNow(*object_storage, remote_source_path);
+
     copy_started = true;
-    object_storage->copyObject(StoredObject(remote_source_path), StoredObject(remote_tmp_path), getReadSettings(), getWriteSettings());
+    object_storage->copyObject(source, StoredObject(remote_tmp_path), getReadSettings(), getWriteSettings());
 
     remove_started = true;
-    object_storage->removeObjectIfExists(StoredObject(remote_source_path));
+    try
+    {
+        object_storage->removeObjectIfExists(source);
+    }
+    catch (...)
+    {
+        /// The blob is not the generation that was copied aside any more, so it was left in place:
+        /// the file still holds content that this operation has never seen, and restoring the copy
+        /// over it would be the very loss the pinning prevents.
+        if (getCurrentExceptionCode() == ErrorCodes::FILE_CHANGED_DURING_READ)
+            source_was_left_in_place = true;
+        throw;
+    }
 
     fs_tree->removeFile(path);
 }
@@ -400,7 +448,7 @@ void MetadataStorageFromPlainObjectStorageUnlinkMetadataFileOperation::undo()
     if (!copy_started)
         return;
 
-    if (remove_started)
+    if (remove_started && !source_was_left_in_place)
         object_storage->copyObject(StoredObject(remote_tmp_path), StoredObject(remote_source_path), getReadSettings(), getWriteSettings());
 
     object_storage->removeObjectIfExists(StoredObject(remote_tmp_path));
@@ -530,8 +578,12 @@ void MetadataStorageFromPlainObjectStorageMoveFileOperation::execute()
             throw Exception(ErrorCodes::FAULT_INJECTED, "Injecting fault when moving from '{}' to '{}'", path_from, path_to);
         });
 
+        /// The blob of the target is copied aside and then deleted; both requests must be about
+        /// the same generation of it (see `pinToTheGenerationThatIsThereNow`).
+        const StoredObject target = pinToTheGenerationThatIsThereNow(*object_storage, remote_path_to);
+
         object_storage->copyObject(
-            /*object_from=*/StoredObject(remote_path_to),
+            /*object_from=*/target,
             /*object_to=*/StoredObject(tmp_remote_path_to),
             read_settings,
             write_settings);
@@ -540,7 +592,19 @@ void MetadataStorageFromPlainObjectStorageMoveFileOperation::execute()
         fs_tree->removeFile(path_to);
         fs_tree->recordFile(path_to, file_from_remote_info.value());
 
-        object_storage->removeObjectIfExists(StoredObject(remote_path_to));
+        try
+        {
+            object_storage->removeObjectIfExists(target);
+        }
+        catch (...)
+        {
+            /// The target blob is a generation this operation has never copied aside, so it was
+            /// left in place and must not be overwritten by the copy that was made of the
+            /// generation before it.
+            if (getCurrentExceptionCode() == ErrorCodes::FILE_CHANGED_DURING_READ)
+                target_was_left_in_place = true;
+            throw;
+        }
     }
     else
     {
@@ -552,8 +616,13 @@ void MetadataStorageFromPlainObjectStorageMoveFileOperation::execute()
             throw Exception(ErrorCodes::FAULT_INJECTED, "Injecting fault when moving from '{}' to '{}'", path_from, path_to);
         });
 
+        /// Every request that touches the blob of the source - the copy aside, the copy to the
+        /// destination and the delete - is pinned to the generation named here, so the move carries
+        /// one generation of the file and deletes exactly the one it carried.
+        source = pinToTheGenerationThatIsThereNow(*object_storage, remote_path_from);
+
         object_storage->copyObject(
-            /*object_from=*/StoredObject(remote_path_from),
+            /*object_from=*/source,
             /*object_to=*/StoredObject(tmp_remote_path_from),
             read_settings,
             write_settings);
@@ -565,8 +634,19 @@ void MetadataStorageFromPlainObjectStorageMoveFileOperation::execute()
             throw Exception(ErrorCodes::FAULT_INJECTED, "Injecting fault when moving from '{}' to '{}'", path_from, path_to);
         });
         object_storage->copyObject(
-            /*object_from=*/StoredObject(remote_path_from), /*object_to=*/StoredObject(remote_path_to), read_settings, write_settings);
-        object_storage->removeObjectIfExists(StoredObject(remote_path_from));
+            /*object_from=*/source, /*object_to=*/StoredObject(remote_path_to), read_settings, write_settings);
+        try
+        {
+            object_storage->removeObjectIfExists(source);
+        }
+        catch (...)
+        {
+            /// The source blob holds a generation that was never moved, so it stayed where it is
+            /// and the copy of the previous generation must not be restored over it.
+            if (getCurrentExceptionCode() == ErrorCodes::FILE_CHANGED_DURING_READ)
+                source_was_left_in_place = true;
+            throw;
+        }
         moved_file = true;
     }
 
@@ -592,22 +672,24 @@ void MetadataStorageFromPlainObjectStorageMoveFileOperation::undo()
 
     if (moved_existing_source_file)
     {
-        object_storage->copyObject(
-            /*object_from=*/StoredObject(tmp_remote_path_from),
-            /*object_to=*/StoredObject(remote_path_from),
-            read_settings,
-            write_settings);
+        if (!source_was_left_in_place)
+            object_storage->copyObject(
+                /*object_from=*/StoredObject(tmp_remote_path_from),
+                /*object_to=*/StoredObject(remote_path_from),
+                read_settings,
+                write_settings);
 
         object_storage->removeObjectIfExists(StoredObject(tmp_remote_path_from));
     }
 
     if (moved_existing_target_file)
     {
-        object_storage->copyObject(
-            /*object_from=*/StoredObject(tmp_remote_path_to),
-            /*object_to=*/StoredObject(remote_path_to),
-            read_settings,
-            write_settings);
+        if (!target_was_left_in_place)
+            object_storage->copyObject(
+                /*object_from=*/StoredObject(tmp_remote_path_to),
+                /*object_to=*/StoredObject(remote_path_to),
+                read_settings,
+                write_settings);
 
         object_storage->removeObjectIfExists(StoredObject(tmp_remote_path_to));
     }
