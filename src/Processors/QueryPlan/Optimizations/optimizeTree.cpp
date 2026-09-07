@@ -395,6 +395,19 @@ void optimizeTreeSecondPass(
             {
                 optimizePrewhere(frame_node, optimization_settings.remove_unused_columns);
             });
+
+        /// A filter fully moved into PREWHERE leaves an `Expression` in the `Filter`'s place, and
+        /// expression merging has already run by now - so the plan can end up with two neighbouring
+        /// `Expression` steps, which no plan built any other way has. That difference is not only
+        /// cosmetic: `calculateHashTableCacheKeys` hashes a step's child through it even when the step
+        /// itself contributes nothing, so one extra step renumbers every node above it and the
+        /// automatic-parallel-replicas decision can no longer find its counterpart in the other plan.
+        if (optimization_settings.merge_expressions)
+            traverseQueryPlan(stack, root,
+                [&](auto & frame_node)
+                {
+                    tryMergeExpressions(&frame_node, nodes, extra_settings);
+                });
     }
 
     /// Some plans are optimized more than once (e.g. StorageMerge child plans, set subplans). The
