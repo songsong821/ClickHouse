@@ -1,4 +1,5 @@
 #include <Processors/QueryPlan/Optimizations/Utils.h>
+#include <Processors/QueryPlan/BuildRuntimeFilterStep.h>
 
 #include <Columns/ColumnConst.h>
 #include <Columns/ColumnSet.h>
@@ -89,6 +90,21 @@ bool dagContainsNonReadySet(const ActionsDAG & dag)
     return false;
 }
 
+bool canHoistGatherThroughStep(const IQueryPlanStep & step)
+{
+    const ActionsDAG * dag = nullptr;
+    if (const auto * expression = typeid_cast<const ExpressionStep *>(&step))
+        dag = &expression->getExpression();
+    else if (const auto * filter = typeid_cast<const FilterStep *>(&step))
+        dag = &filter->getExpression();
+    else if (!typeid_cast<const BuildRuntimeFilterStep *>(&step))
+        return false;
+
+    /// Per-block functions (rowNumberInAllBlocks, blockNumber, nowInBlock, ...) depend on the whole block
+    /// stream; below a gather they would run per shard and produce different values.
+    return !(dag && dagContainsNonDeterministicFunction(*dag));
+}
+
 bool dagContainsNonDeterministicFunction(const ActionsDAG & dag)
 {
     /// We are interested in functions that are non-deterministic *within* a single query --
@@ -100,8 +116,12 @@ bool dagContainsNonDeterministicFunction(const ActionsDAG & dag)
     /// the optimizer can soundly use their plan-time value and they should NOT block the
     /// JOIN-conversion rewrite.
     /// The walk also looks inside the lambdas of the DAG - a non-deterministic call that depends on a
-    /// lambda argument lives in the lambda's own `ActionsDAG`, not in this one.
-    return !dagFunctionsSatisfy(dag, [](const IFunctionBase & f) { return f.isDeterministicInScopeOfQuery(); });
+    /// lambda argument lives in the lambda's own `ActionsDAG`, not in this one - which is what
+    /// `allNodeFunctions` covers, including a lambda that constant folding turned into a `COLUMN` node.
+    for (const auto & node : dag.getNodes())
+        if (!allNodeFunctions(node, [](const IFunctionBase & function) { return function.isDeterministicInScopeOfQuery(); }))
+            return true;
+    return false;
 }
 
 FilterResult filterResultForNotMatchedRows(
