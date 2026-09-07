@@ -3422,6 +3422,12 @@ ReadFromMergeTree::AnalysisResultPtr ReadFromMergeTree::selectRangesToRead(
         .result = result,
     };
 
+    /// `context_` is the read's own context, not the query's. The planner leaves parallel replicas
+    /// enabled only in the context of the table expression that is actually parallelized, so a read
+    /// shipped inside the same fragment but not driven by the coordinator - the broadcast side of a
+    /// JOIN - answers `false` here and analyzes itself. That is what keeps this from skipping the
+    /// analysis of a read whose ranges nobody would assign, which would leave it scanning every mark.
+    /// The condition is therefore equivalent to testing `is_parallel_reading_from_replicas` on the read.
     if (context_->canUseParallelReplicasOnFollower() && settings[Setting::parallel_replicas_local_plan]
         && settings[Setting::parallel_replicas_index_analysis_only_on_coordinator]
         /// If parallel replicas support projection optimization, selected_marks will be used to determine the optimal projection.
