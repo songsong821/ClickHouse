@@ -558,8 +558,22 @@ bool checkCanWriteQueryResultCache(ASTPtr ast, ContextPtr context, bool skip_con
 
     if ((skip_context_check || context->getCanUseQueryResultCache()) && settings[Setting::enable_writes_to_query_cache])
     {
-        const bool ast_contains_nondeterministic_functions = astContainsNonDeterministicFunctions(ast, context);
-        const bool ast_contains_system_tables = astContainsSystemTables(ast, context);
+        /// The filters injected through `additional_table_filters` / `additional_result_filter` are part
+        /// of the query the server runs, so the checks below have to see them too: a non-deterministic
+        /// function or a system table hidden in such a filter makes the result just as unfit for caching
+        /// as one in the query text, and the filter's own text is the same on every run, so an entry
+        /// written from it would be served again.
+        ASTs asts_to_check{ast};
+        if (!parseFilterASTsInjectedFromSettings(context, asts_to_check))
+            return false; /// A filter we cannot parse cannot be checked - fail closed.
+
+        bool ast_contains_nondeterministic_functions = false;
+        bool ast_contains_system_tables = false;
+        for (const auto & ast_to_check : asts_to_check)
+        {
+            ast_contains_nondeterministic_functions |= astContainsNonDeterministicFunctions(ast_to_check, context);
+            ast_contains_system_tables |= astContainsSystemTables(ast_to_check, context);
+        }
 
         const QueryResultCacheNondeterministicFunctionHandling nondeterministic_function_handling
             = settings[Setting::query_cache_nondeterministic_function_handling];

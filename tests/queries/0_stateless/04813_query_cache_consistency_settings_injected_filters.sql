@@ -40,9 +40,13 @@ SELECT x FROM t_04813_main ORDER BY x SETTINGS additional_result_filter = 'x <= 
 
 -- A non-deterministic function inside an injected filter is subject to the same fail-closed rule as
 -- one in the query text: the consistency hash cannot be computed, so the entry is not stored at all.
+-- `query_cache_nondeterministic_function_handling = 'save'` disarms the ordinary query cache gate,
+-- which sees these filters too and would otherwise reject the query before the consistency check runs
+-- (that gate is covered by `05099_query_cache_write_gate_injected_filters`), so what is left here is
+-- the consistency hash alone.
 SELECT 'non-deterministic filters fail closed';
-SELECT count() FROM t_04813_main SETTINGS additional_table_filters = {'t_04813_main': 'x <= 100 + rand() * 0'}, use_query_cache = 1, query_cache_min_query_runs = 0, query_cache_min_query_duration = 0, query_cache_use_only_when_data_was_not_changed = 1;
-SELECT x FROM t_04813_main ORDER BY x SETTINGS additional_result_filter = 'x <= 2 + rand() * 0', use_query_cache = 1, query_cache_min_query_runs = 0, query_cache_min_query_duration = 0, query_cache_use_only_when_data_was_not_changed = 1;
+SELECT count() FROM t_04813_main SETTINGS additional_table_filters = {'t_04813_main': 'x <= 100 + rand() * 0'}, use_query_cache = 1, query_cache_min_query_runs = 0, query_cache_min_query_duration = 0, query_cache_use_only_when_data_was_not_changed = 1, query_cache_nondeterministic_function_handling = 'save';
+SELECT x FROM t_04813_main ORDER BY x SETTINGS additional_result_filter = 'x <= 2 + rand() * 0', use_query_cache = 1, query_cache_min_query_runs = 0, query_cache_min_query_duration = 0, query_cache_use_only_when_data_was_not_changed = 1, query_cache_nondeterministic_function_handling = 'save';
 SELECT count() FROM system.query_cache WHERE query LIKE '%rand()%' AND query LIKE '%t\_04813\_main%';
 
 DROP TABLE t_04813_main;
