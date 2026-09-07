@@ -323,10 +323,18 @@ def test_multi_level_tree_and_memory_bound(started_cluster):
             ],
         )
 
-    # Receive side: a first-level task at N = 32 consumes the full fan-in of 16 states, yet its
-    # peak stays at the same scale as the 2-input root at N = 2 (measured with 2 MiB states:
-    # ~16 MiB vs ~14 MiB), because each arrived state is merged and released immediately.
-    # Retaining the received payloads would put the whole fan-in times the payload on top.
+    # Receive side: the peak is bounded by the fan-in, not by the build task count -- `O(fan_in)`,
+    # as `MergeRuntimeFiltersStep.h` puts it, because each streaming exchange input holds at most
+    # one in-flight packet. So the slack has to cover the whole fan-in, and one in-flight state
+    # costs two payloads, not one: it lands in a `ColumnString`, whose `PaddedPODArray` rounds the
+    # `BLOOM_BYTES + 8` bytes up to the next power of two. Add one payload for the accumulator and
+    # one for the re-serialized union. Compressed packet bodies are a few KiB here -- each state
+    # holds at most 64000/32 keys in 2 MiB, so the array is over 99% zeroes.
+    #
+    # This does NOT test that the transform releases each state after merging: retention's floor
+    # sits below the streaming ceiling, so no constant separates them, and under a sanitizer the
+    # retained forms are invisible to the tracker anyway. That property belongs to
+    # `MergeRuntimeFiltersTransform.PayloadRetentionIndependentOfInputCount`.
     fan_in_receivers = [
         t
         for t in merge_tasks_by_buckets[max_buckets]
@@ -335,16 +343,16 @@ def test_multi_level_tree_and_memory_bound(started_cluster):
     assert fan_in_receivers, merge_tasks_by_buckets[max_buckets]
     two_input_root_peak = max(t["memory_usage"] for t in merge_tasks_by_buckets[2])
     for task in fan_in_receivers:
-        assert task["memory_usage"] <= two_input_root_peak + 8 * BLOOM_BYTES, (
+        assert task["memory_usage"] <= two_input_root_peak + (2 * FAN_IN + 2) * BLOOM_BYTES, (
             task,
             two_input_root_peak,
         )
 
-    # The root's send side does scale with the destination count (one serialized copy buffered
-    # per exchange sink of the broadcast, ~84 MiB at N = 32 with 2 MiB states) -- that is the
-    # replaced topology's per-build-task broadcast cost, now paid once at the root instead of
-    # once per build task. Bound it (destinations x payload plus fan-in slack) so a regression
-    # multiplying it cannot pass unnoticed.
+    # The root's send side does not scale with the destination count: `CopyTransform` clones the
+    # chunk per destination, and cloning shares the payload column, so the 32-destination root at
+    # N = 32 peaks within a couple of KiB of the 2-destination root at N = 2. The bound below is
+    # therefore far looser than what it watches; it still catches a regression that materialized
+    # one copy per destination, which is what the replaced topology paid per build task.
     root_peak = max(t["memory_usage"] for t in merge_tasks_by_buckets[max_buckets])
     assert root_peak <= two_input_root_peak + (max_buckets + FAN_IN) * BLOOM_BYTES, (
         root_peak,
