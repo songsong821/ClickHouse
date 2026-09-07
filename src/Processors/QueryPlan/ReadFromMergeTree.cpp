@@ -248,7 +248,7 @@ namespace Setting
     extern const SettingsUInt64 max_number_of_partitions_for_independent_distinct;
     extern const SettingsUInt64 max_number_of_partitions_for_independent_window;
     extern const SettingsInt64 max_partitions_to_read;
-    extern const SettingsUInt64 max_block_size;
+    extern const SettingsNonZeroUInt64 max_block_size;
     extern const SettingsUInt64 max_rows_to_read;
     extern const SettingsUInt64 max_rows_to_read_leaf;
     extern const SettingsMaxThreads max_final_threads;
