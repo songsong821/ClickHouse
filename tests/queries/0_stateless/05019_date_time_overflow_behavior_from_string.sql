@@ -89,3 +89,14 @@ SELECT 'throw, the range is checked after the timezone offset is applied';
 SELECT parseDateTimeBestEffort('2106-02-07 07:28:15+01:00', 'UTC'), parseDateTimeBestEffort('1969-12-31 23:00:00-01:00', 'UTC');
 SELECT parseDateTimeBestEffortOrNull('2106-02-07 07:28:15+01:00', 'UTC'), toDateTime('2106-02-07 07:28:15+01:00', 'UTC');
 SELECT parseDateTimeBestEffort('2106-02-07 08:28:15+01:00', 'UTC'); -- { serverError VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE }
+
+SELECT 'throw, typed JSON columns are checked like declared ones';
+SELECT j.d FROM format(JSONEachRow, 'j JSON(d Date)', '{"j":{"d":"2150-12-31"}}'); -- { serverError INCORRECT_DATA }
+SELECT j.d FROM format(JSONEachRow, 'j JSON(d DateTime)', '{"j":{"d":"2106-02-07 06:28:16"}}'); -- { serverError INCORRECT_DATA }
+SELECT j.d FROM format(JSONEachRow, 'j JSON(d DateTime)', '{"j":{"d":"2106-02-07 06:28:16"}}') SETTINGS date_time_input_format = 'basic'; -- { serverError INCORRECT_DATA }
+SELECT j.d FROM format(JSONEachRow, 'j JSON(d DateTime)', '{"j":{"d":4294967296}}'); -- { serverError INCORRECT_DATA }
+SELECT j.d FROM format(JSONEachRow, 'j JSON(d Date)', '{"j":{"d":"2149-06-06"}}');
+SELECT j.d FROM format(JSONEachRow, 'j JSON(d DateTime64(3))', '{"j":{"d":"2299-12-31 23:59:59.999"}}');
+
+SELECT 'throw, JSONExtract keeps returning a default or NULL';
+SELECT JSONExtract('{"d":"2150-12-31"}', 'd', 'Date'), JSONExtract('{"d":"2150-12-31"}', 'd', 'Nullable(Date)'), JSONExtract('{"d":"2149-06-06"}', 'd', 'Date');
