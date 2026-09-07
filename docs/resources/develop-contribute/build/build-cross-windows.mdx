@@ -173,6 +173,16 @@ is used at every site that needed it so far, but the codebase keeps relying on t
 the errors. UTF-8 is the answer - `path::string()` is not, it goes through the active code
 page.
 
+**A POSIX call and its Windows counterpart may not accept the same descriptors.** The first
+time the binary was executed rather than merely linked, it threw before printing anything:
+`getTerminalSize` read the console size from standard input, because `ioctl(TIOCGWINSZ)`
+answers on any descriptor of the terminal. Its Windows counterpart does not - the size lives on
+the console's *screen buffer*, which only an output handle has - so it failed with
+`ERROR_INVALID_HANDLE` by construction. Nor is `_isatty` a test for "is a console": it is true
+for every character device, `NUL` and the console input handle included, so the only usable
+predicate was the console call itself succeeding. Expect more of this shape: it compiles, it
+mirrors the POSIX code, and it is wrong.
+
 ## CI {#ci}
 
 The `Build (amd_windows)` job builds `clickhouse` and `clickhouse-windows-ported`. It is
