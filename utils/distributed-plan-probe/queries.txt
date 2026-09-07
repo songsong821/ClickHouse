@@ -1,0 +1,334 @@
+# --- aggregation
+SELECT count() FROM t
+SELECT count() FROM t WHERE k > 5
+SELECT sum(v), uniq(k), any(k) FROM t
+SELECT k, sum(v) FROM t GROUP BY k ORDER BY k
+SELECT k, sum(v) FROM t GROUP BY k HAVING sum(v) > 1000 ORDER BY k
+SELECT count() FROM t HAVING count() > 0
+SELECT k, sum(v) FROM t GROUP BY k WITH TOTALS ORDER BY k
+SELECT k, sum(v) FROM t GROUP BY k WITH ROLLUP ORDER BY k
+SELECT k, sum(v) FROM t GROUP BY k WITH CUBE ORDER BY k
+SELECT k, s, sum(v) FROM t GROUP BY GROUPING SETS ((k), (s)) ORDER BY k, s
+SELECT k, s, sum(v) FROM t GROUP BY k, s WITH TOTALS ORDER BY k, s LIMIT 5
+SELECT k, sum(v) FROM t GROUP BY ALL ORDER BY k
+SELECT k, count() c FROM t GROUP BY k ORDER BY c DESC, k LIMIT 3
+SELECT k, count() c FROM t GROUP BY k ORDER BY c DESC, k LIMIT 3 SETTINGS enable_group_by_top_k_optimization = 1
+SELECT k, count() FROM t GROUP BY k ORDER BY k SETTINGS optimize_aggregation_in_order = 1
+SELECT k, count() FROM t GROUP BY k ORDER BY k SETTINGS optimize_aggregation_in_order = 1, force_aggregation_in_order = 1
+SELECT count() FROM t GROUP BY k WITH TOTALS ORDER BY count() SETTINGS force_aggregation_in_order = 1
+SELECT k, sum(v) FROM t GROUP BY k ORDER BY k SETTINGS max_rows_to_group_by = 100
+SELECT k, sum(v) FROM t GROUP BY k ORDER BY k SETTINGS max_rows_to_group_by = 5, group_by_overflow_mode = 'any'
+SELECT k, sum(v) FROM t GROUP BY k ORDER BY k SETTINGS group_by_two_level_threshold = 1, group_by_two_level_threshold_bytes = 1
+SELECT k, sum(v) FROM t GROUP BY k ORDER BY k SETTINGS max_bytes_before_external_group_by = 1, max_bytes_ratio_before_external_group_by = 0
+SELECT k, sum(v) FROM t GROUP BY k ORDER BY k SETTINGS distributed_aggregation_memory_efficient = 1
+SELECT k, sum(v) FROM t GROUP BY k ORDER BY k SETTINGS distributed_plan_force_shuffle_aggregation = 1
+SELECT k, sum(v) FROM tpart GROUP BY k ORDER BY k LIMIT 5 SETTINGS allow_aggregate_partitions_independently = 1, force_aggregate_partitions_independently = 1
+SELECT k, arraySort(groupArray(v)) FROM t GROUP BY k ORDER BY k LIMIT 2
+SELECT k, quantiles(0.5, 0.9)(v), argMax(s, v), topK(3)(s), uniqExact(v) FROM t GROUP BY k ORDER BY k LIMIT 3
+SELECT sumIf(v, k > 2), countIf(k = 1), avgIf(v, k > 100) FROM t
+SELECT count(DISTINCT k) FROM t
+SELECT k, sumMerge(st), uniqMerge(us) FROM tagg GROUP BY k ORDER BY k LIMIT 3
+SELECT k, finalizeAggregation(st) FROM tagg ORDER BY k LIMIT 3
+SELECT k, sum(v) FROM t GROUP BY k WITH TOTALS HAVING sum(v) > 100000 ORDER BY k
+SELECT k, sum(v) FROM t GROUP BY k ORDER BY k SETTINGS group_by_use_nulls = 1
+SELECT k, n, sum(v) FROM t GROUP BY k, n WITH ROLLUP ORDER BY k, n SETTINGS group_by_use_nulls = 1
+SELECT k FROM t GROUP BY k ORDER BY k LIMIT 3
+SELECT toStartOfMonth(d) AS m, count() FROM t GROUP BY m ORDER BY m
+# --- sorting / limits
+SELECT * FROM t ORDER BY k, v LIMIT 5
+SELECT * FROM t ORDER BY k LIMIT 5
+SELECT k FROM t ORDER BY k LIMIT 5
+SELECT k FROM t ORDER BY k DESC LIMIT 5
+SELECT k FROM t ORDER BY k LIMIT 5 SETTINGS optimize_read_in_order = 0
+SELECT k FROM t ORDER BY k LIMIT 5 SETTINGS optimize_read_in_order = 1, max_threads = 1
+SELECT k, v FROM t ORDER BY v LIMIT 5
+SELECT k, v, s FROM t WHERE k > 3 ORDER BY v LIMIT 5 SETTINGS query_plan_optimize_lazy_materialization = 1, query_plan_max_limit_for_lazy_materialization = 10
+SELECT k, v, s FROM t WHERE k > 3 ORDER BY v LIMIT 5 SETTINGS query_plan_optimize_lazy_materialization = 0
+SELECT * FROM (SELECT * FROM t ORDER BY v DESC LIMIT 100) ORDER BY k, v LIMIT 5
+SELECT k FROM t ORDER BY k LIMIT 3 WITH TIES
+SELECT k, v FROM t ORDER BY k, v LIMIT 2 OFFSET 3
+SELECT k, v FROM t ORDER BY k, v OFFSET 3 ROWS FETCH FIRST 2 ROWS ONLY
+SELECT k, v FROM t ORDER BY k, v LIMIT 2 BY k LIMIT 6
+SELECT k, v FROM t ORDER BY v LIMIT 5 SETTINGS max_bytes_before_external_sort = 1, max_bytes_ratio_before_external_sort = 0
+SELECT DISTINCT k FROM t ORDER BY k
+SELECT DISTINCT k FROM t ORDER BY k SETTINGS optimize_distinct_in_order = 1
+SELECT DISTINCT ON (k) k, v FROM t ORDER BY k, v LIMIT 5
+SELECT k FROM t ORDER BY k WITH FILL FROM 0 TO 25 LIMIT 30
+SELECT k, v FROM t ORDER BY k LIMIT 5 SETTINGS extremes = 1
+SELECT * FROM t LIMIT 3 SETTINGS max_block_size = 1
+SELECT k FROM t ORDER BY k LIMIT 3 SETTINGS enable_analyzer = 0
+SELECT k, sum(v) FROM t GROUP BY k ORDER BY k SETTINGS enable_analyzer = 0
+SELECT k, sum(v) FROM t GROUP BY k WITH TOTALS ORDER BY k SETTINGS enable_analyzer = 0
+SELECT k FROM t WHERE k IN (SELECT k FROM t2) ORDER BY k LIMIT 3 SETTINGS enable_analyzer = 0
+# --- window / array join
+SELECT k, v, row_number() OVER (PARTITION BY k ORDER BY v) AS rn FROM t ORDER BY k, v LIMIT 10
+SELECT k, sum(v) OVER (ORDER BY k, v ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS w FROM t ORDER BY k, v LIMIT 10
+SELECT k, sum(v) OVER (PARTITION BY k) AS w FROM t ORDER BY k, v LIMIT 10 SETTINGS query_plan_enable_multithreading_after_window_functions = 1
+SELECT k, v, rn FROM (SELECT k, v, row_number() OVER (PARTITION BY k ORDER BY v) AS rn FROM t) WHERE rn <= 2 ORDER BY k, v
+SELECT a, count() FROM t ARRAY JOIN arr AS a GROUP BY a ORDER BY a
+SELECT k, a FROM t LEFT ARRAY JOIN arr AS a ORDER BY k, a LIMIT 5
+SELECT arrayJoin(arr) AS a, count() FROM t GROUP BY a ORDER BY a
+SELECT arrayJoin([1, 2]) AS x, count() FROM t GROUP BY x ORDER BY x
+SELECT k, nest.a, nest.b FROM tnested ARRAY JOIN nest ORDER BY k, nest.a LIMIT 5
+SELECT k FROM t WHERE arrayExists(x -> x > 3, arr) ORDER BY k LIMIT 5
+SELECT k, arrayMap(x -> x + 1, arr), arrayFilter(x -> x % 2 = 0, arr), arraySort(x -> -x, arr), arrayReduce('sum', arr) FROM t ORDER BY k, v LIMIT 5
+# --- joins
+SELECT t.k, sum(t2.w) FROM t JOIN t2 ON t.k = t2.k GROUP BY t.k ORDER BY t.k
+SELECT t.k, sum(t2.w) FROM t LEFT JOIN t2 ON t.k = t2.k GROUP BY t.k ORDER BY t.k
+SELECT t2.k, count() FROM t RIGHT JOIN t2 ON t.k = t2.k GROUP BY t2.k ORDER BY t2.k
+SELECT k, count() FROM t FULL JOIN t2 USING k GROUP BY k ORDER BY k
+SELECT count() FROM (SELECT k FROM t LIMIT 10) AS a CROSS JOIN t2
+SELECT t.k, count() FROM t ANY LEFT JOIN t2 ON t.k = t2.k GROUP BY t.k ORDER BY t.k
+SELECT t.k, count() FROM t SEMI LEFT JOIN t2 ON t.k = t2.k GROUP BY t.k ORDER BY t.k
+SELECT t.k, count() FROM t ANTI LEFT JOIN t2 ON t.k = t2.k GROUP BY t.k ORDER BY t.k
+SELECT t.k, t.v, t2.w FROM t ASOF JOIN t2 ON t.k = t2.k AND t.v > t2.w ORDER BY t.k, t.v LIMIT 5
+SELECT t.k, t2.w FROM t JOIN t2 ON t.k = t2.k AND t.v < t2.w ORDER BY t.k, t.v, t2.w LIMIT 5
+SELECT t.k, count() FROM t JOIN t2 ON t.k = t2.k GROUP BY t.k ORDER BY t.k SETTINGS join_use_nulls = 1
+SELECT t.k, count() FROM t JOIN t2 ON t.k = t2.k GROUP BY t.k ORDER BY t.k SETTINGS join_algorithm = 'grace_hash'
+SELECT t.k, count() FROM t JOIN t2 ON t.k = t2.k GROUP BY t.k ORDER BY t.k SETTINGS join_algorithm = 'partial_merge'
+SELECT t.k, count() FROM t JOIN t2 ON t.k = t2.k GROUP BY t.k ORDER BY t.k SETTINGS join_algorithm = 'full_sorting_merge'
+SELECT t.k, count() FROM t JOIN t2 ON t.k = t2.k GROUP BY t.k ORDER BY t.k SETTINGS join_algorithm = 'parallel_hash'
+SELECT t.k, count() FROM t JOIN t2 ON t.k = t2.k GROUP BY t.k ORDER BY t.k SETTINGS enable_join_runtime_filters = 1
+SELECT t.k, count() FROM t JOIN t2 ON t.k = t2.k GROUP BY t.k ORDER BY t.k SETTINGS enable_join_runtime_filters = 0
+SELECT t.k, t.v, tj.w FROM t ANY LEFT JOIN tj ON t.k = tj.k ORDER BY t.k, t.v LIMIT 5
+SELECT t.k, t.v, tj.w FROM t ANY LEFT JOIN tj ON t.k = tj.k ORDER BY t.k, t.v LIMIT 5 SETTINGS join_algorithm = 'direct'
+SELECT t.k, t.v, dict.w FROM t JOIN dict ON t.k = dict.k ORDER BY t.k, t.v LIMIT 5
+SELECT t.k, t.v, dict.w FROM t JOIN dict ON t.k = dict.k ORDER BY t.k, t.v LIMIT 5 SETTINGS join_algorithm = 'direct'
+SELECT t.k, count() FROM t GLOBAL JOIN t2 ON t.k = t2.k GROUP BY t.k ORDER BY t.k
+SELECT a.k, b.w FROM (SELECT k, v FROM t ORDER BY k, v LIMIT 5) AS a PASTE JOIN (SELECT k, w FROM t2 ORDER BY k, w LIMIT 5) AS b
+SELECT a.k, count() FROM t AS a JOIN t AS b ON a.k = b.k GROUP BY a.k ORDER BY a.k
+SELECT t.k, count() FROM t JOIN t2 ON t.k = t2.k JOIN tp ON t.k = tp.k GROUP BY t.k ORDER BY t.k
+SELECT t.k, count() FROM t JOIN (SELECT k, sum(w) sw FROM t2 GROUP BY k) AS agg ON t.k = agg.k GROUP BY t.k ORDER BY t.k
+SELECT t.k, sum(t2.w) FROM t JOIN t2 ON t.k = t2.k GROUP BY t.k ORDER BY t.k SETTINGS query_plan_join_swap_table = 'true'
+SELECT t.k, sum(t2.w) FROM t JOIN t2 ON t.k = t2.k GROUP BY t.k ORDER BY t.k SETTINGS distributed_plan_max_rows_to_broadcast = 100000000
+SELECT t.k, a, count() FROM t ARRAY JOIN arr AS a JOIN t2 ON t.k = t2.k GROUP BY t.k, a ORDER BY t.k, a LIMIT 5
+# --- IN / sets / subqueries
+SELECT count() FROM t WHERE k IN (SELECT k FROM t2)
+SELECT count() FROM t WHERE k IN (SELECT k FROM t2) SETTINGS use_index_for_in_with_subqueries = 1
+SELECT count() FROM t WHERE k IN (SELECT k FROM t2) SETTINGS use_index_for_in_with_subqueries = 0
+SELECT count() FROM t WHERE k GLOBAL IN (SELECT k FROM t2)
+SELECT count() FROM t WHERE k NOT IN (SELECT k FROM t2 WHERE w > 100)
+SELECT count() FROM t WHERE k IN (1, 2, 3)
+SELECT count() FROM t WHERE (k, v) IN (SELECT k, w FROM t2)
+SELECT count() FROM t WHERE k IN tset
+SELECT count() FROM t WHERE k IN (SELECT number FROM numbers(3))
+SELECT count() FROM t WHERE k IN (SELECT k FROM tm)
+SELECT count() FROM t WHERE k IN (SELECT k FROM t2 GROUP BY k WITH TOTALS)
+SELECT count() FROM t WHERE k IN (SELECT k FROM t2 WHERE w IN (SELECT number * 10 FROM numbers(30)))
+SELECT count() FROM t WHERE k IN (SELECT k FROM t2) AND v IN (SELECT w FROM t2)
+SELECT count() FROM t WHERE k IN (SELECT k FROM t2) OR v IN (SELECT w FROM t2)
+SELECT count() FROM t WHERE k IN (SELECT k FROM t WHERE k IN (SELECT k FROM t2 WHERE w < 50))
+SELECT count() FROM t WHERE k IN (SELECT k FROM t2) SETTINGS transform_null_in = 1
+SELECT count() FROM t WHERE n IN (SELECT toNullable(k) FROM t2) SETTINGS transform_null_in = 1
+SELECT count() FROM t WHERE k IN (SELECT k FROM tdist)
+SELECT count() FROM t WHERE k IN (SELECT k FROM tdist2)
+SELECT number FROM numbers(10) WHERE number IN (SELECT k FROM t) ORDER BY number
+SELECT count() FROM t WHERE EXISTS (SELECT 1 FROM t2 WHERE t2.k = t.k)
+SELECT count() FROM t WHERE EXISTS (SELECT 1 FROM t2 WHERE w > 100)
+SELECT k FROM t WHERE v > (SELECT avg(w) FROM t2 WHERE t2.k = t.k) ORDER BY k, v LIMIT 5
+SELECT k, (SELECT max(w) FROM t2 WHERE t2.k = t.k) AS mw FROM t ORDER BY k, v LIMIT 5
+SELECT (SELECT max(v) FROM t)
+SELECT (SELECT 1)
+SELECT k FROM t WHERE v = (SELECT max(v) FROM t)
+SELECT k FROM t WHERE k > (SELECT avg(k) FROM t2) ORDER BY k, v LIMIT 5
+WITH (SELECT max(k) FROM t) AS m SELECT count() FROM t WHERE k = m
+SELECT count() FROM (SELECT k FROM t ORDER BY k LIMIT 10)
+SELECT count() FROM (SELECT DISTINCT k FROM t)
+SELECT count() FROM t WHERE k IN (SELECT k FROM t2) SETTINGS max_rows_to_group_by = 100
+SELECT k, sum(v) FROM t WHERE k IN (SELECT k FROM t2) GROUP BY k WITH TOTALS ORDER BY k
+SELECT count(), max(_part_index) >= 0 FROM t WHERE k IN (SELECT k FROM t2)
+SELECT count() FROM t WHERE k IN (SELECT k FROM t2) SETTINGS use_index_for_in_with_subqueries = 1, force_primary_key = 1
+# --- CTE
+WITH c AS (SELECT k, sum(v) AS s FROM t GROUP BY k) SELECT c.k, c.s, c2.s FROM c JOIN c AS c2 USING k ORDER BY c.k
+WITH c AS MATERIALIZED (SELECT k, sum(v) AS s FROM t GROUP BY k) SELECT k, s FROM c ORDER BY k
+WITH c AS MATERIALIZED (SELECT k, sum(v) AS s FROM t GROUP BY k) SELECT c.k, c.s, c2.s FROM c JOIN c AS c2 USING k ORDER BY c.k
+WITH RECURSIVE r AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM r WHERE n < 5) SELECT * FROM r ORDER BY n
+WITH RECURSIVE r AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM r WHERE n < 5) SELECT r.n, count() FROM r JOIN t ON r.n = t.k GROUP BY r.n ORDER BY r.n
+WITH k * 2 AS kk SELECT kk, count() FROM t GROUP BY kk ORDER BY kk LIMIT 3
+# --- set operations
+SELECT k FROM t WHERE k < 2 UNION ALL SELECT k FROM t2 WHERE k > 22 ORDER BY k
+SELECT k FROM t UNION DISTINCT SELECT k FROM t2 ORDER BY k
+SELECT k FROM t INTERSECT SELECT k FROM t2 ORDER BY k
+SELECT k FROM t2 EXCEPT SELECT k FROM t ORDER BY k
+SELECT k FROM (SELECT k FROM t WHERE k < 2 UNION ALL SELECT 100) ORDER BY k
+SELECT k FROM (SELECT k FROM t WHERE k < 2 UNION ALL SELECT number FROM numbers(3)) ORDER BY k
+SELECT count() FROM (SELECT k FROM t UNION ALL SELECT k FROM t2)
+# --- sources
+SELECT * FROM numbers(10) ORDER BY number
+SELECT * FROM system.one
+SELECT 1
+SELECT 1 FROM t LIMIT 1
+SELECT count() FROM system.one
+SELECT k, v FROM tm ORDER BY k LIMIT 3
+SELECT k, v FROM tlog ORDER BY k LIMIT 3
+SELECT count() FROM tbuf
+SELECT count() FROM tnull
+SELECT k, sv FROM tv ORDER BY k LIMIT 3
+SELECT k, v FROM tv_settings ORDER BY k, v LIMIT 3
+SELECT k, sum(sv) FROM tmv GROUP BY k ORDER BY k LIMIT 3
+SELECT k, sum(v) FROM tdist GROUP BY k ORDER BY k LIMIT 3
+SELECT k, sum(v) FROM tdist2 GROUP BY k ORDER BY k LIMIT 3
+SELECT k, sum(v) FROM tdist2 GROUP BY k WITH TOTALS ORDER BY k LIMIT 3
+SELECT k, sum(v) FROM tdist2 GROUP BY k ORDER BY k LIMIT 3 SETTINGS serialize_query_plan = 1
+SELECT k, sum(v) FROM tdist2 GROUP BY k ORDER BY k LIMIT 3 SETTINGS serialize_query_plan = 0
+SELECT count() FROM tdist2 WHERE k IN (SELECT k FROM t2) SETTINGS distributed_product_mode = 'global'
+SELECT count() FROM tdist2 WHERE k GLOBAL IN (SELECT k FROM t2)
+SELECT _shard_num, count() FROM tdist2 GROUP BY _shard_num ORDER BY _shard_num
+SELECT k, sum(v) FROM remote('127.0.0.{1,2}', probe, t) GROUP BY k ORDER BY k LIMIT 3
+SELECT k, sum(v) FROM cluster(test_cluster_two_shards, probe, t) GROUP BY k ORDER BY k LIMIT 3
+SELECT k, sum(v) FROM tmerge GROUP BY k ORDER BY k LIMIT 3
+SELECT k, sum(v) FROM merge(probe, '^t$|^tp$') GROUP BY k ORDER BY k LIMIT 3
+SELECT count() FROM merge(probe, '^t$') WHERE k IN (SELECT k FROM t2)
+SELECT count() FROM merge(probe, '^t$|^tm$') WHERE k IN (SELECT k FROM t2)
+SELECT * FROM values('k UInt32', (1), (2)) ORDER BY k
+SELECT count() FROM (SELECT * FROM generateRandom('k UInt32') LIMIT 3)
+SELECT count() FROM zeros(10)
+SELECT name FROM system.tables WHERE database = 'probe' ORDER BY name LIMIT 3
+SELECT number FROM system.numbers LIMIT 5
+SELECT count() FROM (SELECT k FROM loop(probe, t2) LIMIT 5)
+SELECT count() FROM mergeTreeIndex(probe, t)
+SELECT count() > 0 FROM viewExplain('EXPLAIN', '', 'SELECT 1')
+SELECT * FROM format(CSV, 'k UInt32', '1\n2') ORDER BY k
+SELECT k, w FROM dictionary('probe.dict') ORDER BY k LIMIT 3
+SELECT k, w FROM tj ORDER BY k LIMIT 3
+SELECT count() FROM system.parts WHERE database = 'probe' AND table = 't' AND active
+SELECT count() FROM null('k UInt32')
+SELECT k, sum(v) FROM tp GROUP BY k ORDER BY k
+SELECT k, sum(v) FROM tp GROUP BY k ORDER BY k SETTINGS optimize_use_projections = 1, force_optimize_projection = 1
+SELECT k, sum(v) FROM tp GROUP BY k ORDER BY k SETTINGS optimize_use_projections = 1, force_optimize_projection_name = 'p_agg'
+SELECT k, v FROM tp ORDER BY v LIMIT 3 SETTINGS optimize_use_projections = 1, force_optimize_projection = 1
+SELECT k, v FROM tp WHERE v = 100 SETTINGS optimize_use_projections = 1, force_optimize_projection = 1
+SELECT count() FROM tp SETTINGS optimize_use_implicit_projections = 1, optimize_trivial_count_query = 0
+SELECT min(k), max(k), count() FROM tpart SETTINGS optimize_use_implicit_projections = 1
+SELECT min(k), max(k), count() FROM tpart SETTINGS optimize_use_implicit_projections = 0
+SELECT count() FROM tp SETTINGS optimize_trivial_count_query = 1
+SELECT count() FROM tp SETTINGS optimize_trivial_count_query = 0
+# --- MergeTree read variants
+SELECT k, v FROM tr FINAL ORDER BY k LIMIT 5
+SELECT count(), sum(v) FROM tr FINAL
+SELECT count(), sum(v) FROM tr FINAL WHERE k > 5
+SELECT k, v FROM tr FINAL PREWHERE v > 10 ORDER BY k LIMIT 5
+SELECT k, v FROM tr FINAL PREWHERE v > 10 ORDER BY k LIMIT 5 SETTINGS query_plan_optimize_lazy_materialization = 1
+SELECT k, v FROM tr FINAL WHERE v % 2 = 0 ORDER BY k LIMIT 5 SETTINGS do_not_merge_across_partitions_select_final = 1
+SELECT k, v FROM tr FINAL WHERE v % 2 = 0 ORDER BY k DESC LIMIT 5
+SELECT count(), sum(v) FROM tr FINAL SETTINGS optimize_move_to_prewhere = 0
+SELECT count() FROM tsample SAMPLE 1/2
+SELECT count() FROM tsample SAMPLE 1/2 OFFSET 1/2
+SELECT count() FROM tsample SAMPLE 100
+SELECT k, v FROM t PREWHERE k > 5 WHERE v % 3 = 0 ORDER BY k, v LIMIT 5
+SELECT k, v FROM t WHERE k > 5 AND v % 3 = 0 ORDER BY k, v LIMIT 5 SETTINGS optimize_move_to_prewhere = 1, enable_multiple_prewhere_read_steps = 1
+SELECT count() FROM t WHERE _part LIKE 'all_1_%'
+SELECT count(), max(_part_offset) FROM t
+SELECT count(), max(_part_index) >= 0 FROM t
+SELECT count(), max(_part_starting_offset) >= 0 FROM t
+SELECT count(), sum(_row_exists) FROM tlwd
+SELECT count(), sum(v) FROM tlwd
+SELECT count(), sum(v) FROM tlwd SETTINGS apply_deleted_mask = 0
+SELECT count(), sum(v) FROM trp
+SELECT k, v FROM trp ORDER BY k LIMIT 5
+SELECT count(), sum(v) FROM tr FINAL SETTINGS additional_table_filters = {'tr': 'k % 2 = 0'}
+SELECT count(), sum(v) FROM t SETTINGS additional_table_filters = {'t': 'k % 2 = 0'}
+SELECT k, sum(v) FROM t GROUP BY k ORDER BY k SETTINGS additional_result_filter = 'k > 15'
+SELECT count() FROM t SETTINGS max_rows_to_read = 10
+SELECT count() FROM t SETTINGS max_rows_to_read = 10, read_overflow_mode = 'break'
+SELECT count() FROM t WHERE k > 5 SETTINGS max_rows_to_read = 10
+SELECT count() FROM t SETTINGS select_sequential_consistency = 1
+SELECT count() FROM t WHERE k = 1 SETTINGS force_primary_key = 1
+SELECT count() FROM t WHERE v = 5 SETTINGS force_data_skipping_indices = 'idx_v'
+SELECT _partition_id, count() FROM tpart GROUP BY _partition_id ORDER BY _partition_id
+SELECT count() FROM tpart WHERE _partition_id = '1'
+SELECT count() FROM tpart WHERE k % 3 = 1 SETTINGS force_index_by_date = 0, optimize_use_implicit_projections = 0
+SELECT count() FROM ttext WHERE hasToken(s, 'foo')
+SELECT count() FROM ttext WHERE hasToken(s, 'foo') SETTINGS query_plan_direct_read_from_text_index = 1
+SELECT k FROM ttext WHERE hasToken(s, 'foo') ORDER BY k LIMIT 3 SETTINGS query_plan_direct_read_from_text_index = 1
+SELECT count() FROM ttext WHERE hasToken(s, 'foo') SETTINGS query_plan_optimize_count_from_text_index = 1
+SELECT count() FROM t SETTINGS max_threads = 1
+SELECT count() FROM t SETTINGS distributed_plan_default_reader_bucket_count = 3
+SELECT k, sum(v) FROM t GROUP BY k ORDER BY k SETTINGS distributed_plan_single_stage = 1
+SELECT k, sum(v) FROM t GROUP BY k ORDER BY k SETTINGS distributed_plan_force_exchange_kind = 'Persisted'
+SELECT k, sum(v) FROM t GROUP BY k ORDER BY k SETTINGS distributed_plan_optimize_exchanges = 0
+SELECT k, sum(v) FROM t GROUP BY k ORDER BY k SETTINGS compile_expressions = 1, min_count_to_compile_expression = 0
+SELECT k, sum(v) FROM t GROUP BY k ORDER BY k SETTINGS use_query_cache = 1
+SELECT count() FROM t WHERE k IN (SELECT k FROM t2) SETTINGS use_query_cache = 1
+# --- types / functions
+SELECT k, j, j.a, j.b.c, dyn, var, m['k'], tup.a, tup.b FROM tjson ORDER BY k LIMIT 3
+SELECT j.b.c, count() FROM tjson GROUP BY j.b.c ORDER BY j.b.c
+SELECT dynamicType(dyn), count() FROM tjson GROUP BY 1 ORDER BY 1
+SELECT variantType(var), count() FROM tjson GROUP BY 1 ORDER BY 1
+SELECT k, lc, n, toTypeName(lc), toTypeName(n) FROM t ORDER BY k, v LIMIT 3
+SELECT lc, count() FROM t GROUP BY lc ORDER BY lc
+SELECT n, count() FROM t GROUP BY n ORDER BY n
+SELECT k, transform(k, [1, 2], ['a', 'b'], 'z'), multiIf(k > 5, 'x', k > 2, 'y', 'z'), CAST(k AS String), if(k > 5, s, 'x'), assumeNotNull(n), coalesce(n, 0), nullIf(k, 1) FROM t ORDER BY k, v LIMIT 5
+SELECT k, dictGet('probe.dict', 'w', toUInt64(k)), dictHas('probe.dict', toUInt64(k)) FROM t ORDER BY k, v LIMIT 5
+SELECT count() FROM t WHERE dictGet('probe.dict', 'w', toUInt64(k)) > 50
+SELECT count() FROM t WHERE now() > toDateTime('2020-01-01')
+SELECT count() FROM t WHERE rand() >= 0
+SELECT count() FROM t WHERE hostName() != ''
+SELECT count() FROM t WHERE currentDatabase() = 'probe'
+SELECT count(DISTINCT randConstant()) <= 1 FROM t
+SELECT uniqExact(generateUUIDv4()) = count() FROM t
+SELECT sum(sipHash64(k, v, s)) FROM t
+SELECT * EXCEPT (arr, d) FROM t ORDER BY k, v LIMIT 3
+SELECT COLUMNS('^k|v$') APPLY (max) FROM t
+SELECT k, toDateTime(v, 'Asia/Tokyo') FROM t ORDER BY k, v LIMIT 3
+SELECT count() FROM t WHERE s LIKE '%1%'
+SELECT count() FROM t WHERE match(s, '^s[12]$')
+SELECT k, tuple(k, v).1, CASE WHEN k > 5 THEN 1 ELSE 0 END FROM t ORDER BY k, v LIMIT 3
+SELECT k FROM t WHERE k IN (1, 2) ORDER BY k, v LIMIT 3
+SELECT count() FROM t WHERE (k, v) IN ((1, 1), (2, 2))
+SELECT k, formatRow('CSV', k, v) FROM t ORDER BY k, v LIMIT 3
+SELECT sum(ignore(k, v)) FROM t
+SELECT k, v FROM t ORDER BY k, v LIMIT 3 SETTINGS max_block_size = 7
+SELECT count() FROM t WHERE k IN (SELECT k FROM t2 WHERE dictGet('probe.dict', 'w', toUInt64(k)) > 0)
+SELECT k, v FROM t WHERE k = {p:UInt32} ORDER BY v LIMIT 3
+# --- EXPLAIN
+EXPLAIN SELECT k, sum(v) FROM t GROUP BY k ORDER BY k
+EXPLAIN SELECT k, sum(v) FROM t GROUP BY k WITH TOTALS ORDER BY k
+EXPLAIN distributed = 1 SELECT k, sum(v) FROM t GROUP BY k ORDER BY k
+EXPLAIN distributed = 1 SELECT k, sum(v) FROM t GROUP BY k WITH TOTALS ORDER BY k
+EXPLAIN PIPELINE SELECT k, sum(v) FROM t GROUP BY k ORDER BY k
+EXPLAIN PIPELINE SELECT k, sum(v) FROM t GROUP BY k WITH TOTALS ORDER BY k
+EXPLAIN ESTIMATE SELECT k, sum(v) FROM t GROUP BY k ORDER BY k
+EXPLAIN ESTIMATE SELECT k, sum(v) FROM t GROUP BY k WITH TOTALS ORDER BY k
+EXPLAIN ANALYZE SELECT k, sum(v) FROM t GROUP BY k ORDER BY k
+EXPLAIN ANALYZE SELECT k, sum(v) FROM t GROUP BY k WITH TOTALS ORDER BY k
+EXPLAIN optimize = 0 SELECT k, sum(v) FROM t GROUP BY k WITH TOTALS ORDER BY k
+EXPLAIN SYNTAX SELECT k, sum(v) FROM t GROUP BY k WITH TOTALS ORDER BY k
+EXPLAIN QUERY TREE SELECT k, sum(v) FROM t GROUP BY k WITH TOTALS ORDER BY k
+EXPLAIN SELECT count() FROM t WHERE k IN (SELECT k FROM t2) SETTINGS use_index_for_in_with_subqueries = 1
+EXPLAIN indexes = 1 SELECT count() FROM t WHERE k IN (SELECT k FROM t2) SETTINGS use_index_for_in_with_subqueries = 1
+EXPLAIN indexes = 1 SELECT count(), max(_part_index) FROM t WHERE k IN (SELECT k FROM t2) SETTINGS use_index_for_in_with_subqueries = 1
+# --- settings scoping
+SELECT * FROM (SELECT k FROM t SETTINGS make_distributed_plan = 1, distributed_plan_execute_locally = 1) ORDER BY k LIMIT 3
+SELECT * FROM (SELECT k FROM t SETTINGS make_distributed_plan = 0) ORDER BY k LIMIT 3
+SELECT count() FROM t WHERE k IN (SELECT k FROM t2 SETTINGS make_distributed_plan = 0)
+SELECT count() FROM t WHERE k IN (SELECT k FROM t2 SETTINGS make_distributed_plan = 1, distributed_plan_execute_locally = 1)
+SELECT k, sum(v) FROM t GROUP BY k WITH TOTALS ORDER BY k SETTINGS distributed_plan_fallback_to_local_execution = 0
+SELECT count() FROM (SELECT k FROM t GROUP BY k WITH TOTALS SETTINGS distributed_plan_fallback_to_local_execution = 0)
+SELECT count() FROM t WHERE k IN (SELECT k FROM t2 GROUP BY k WITH TOTALS SETTINGS distributed_plan_fallback_to_local_execution = 0)
+# --- DML / DDL
+INSERT INTO ins_target SELECT k, v FROM t WHERE k < 3
+INSERT INTO ins_target SELECT k, sum(v) FROM t GROUP BY k WITH TOTALS
+INSERT INTO ins_target_proj SELECT k, v FROM t WHERE k < 3
+INSERT INTO ins_target_mem SELECT k, v FROM t WHERE k < 3
+INSERT INTO ins_target SELECT number, number FROM numbers(10)
+INSERT INTO ins_target VALUES (1, 1)
+INSERT INTO ins_target_proj VALUES (1, 1)
+INSERT INTO ins_target SELECT k, v FROM t WHERE k IN (SELECT k FROM t2 WHERE w < 50)
+CREATE TABLE ctas ENGINE = MergeTree ORDER BY k AS SELECT k, sum(v) AS v FROM t GROUP BY k
+DROP TABLE IF EXISTS ctas
+ALTER TABLE tmut UPDATE v = v + 1 WHERE k < 10 SETTINGS mutations_sync = 2
+ALTER TABLE tmut UPDATE v = v + 1 WHERE k IN (SELECT k FROM t2 WHERE w < 50) SETTINGS mutations_sync = 2
+ALTER TABLE tmut DELETE WHERE k = 999 SETTINGS mutations_sync = 2
+DELETE FROM tmut WHERE k = 998
+UPDATE tmut SET v = v + 1 WHERE k = 5 SETTINGS allow_experimental_lightweight_update = 1
+OPTIMIZE TABLE ins_target_proj FINAL
+OPTIMIZE TABLE tp FINAL
+CREATE MATERIALIZED VIEW mv_pop ENGINE = MergeTree ORDER BY k POPULATE AS SELECT k, sum(v) AS sv FROM t GROUP BY k
+DROP TABLE IF EXISTS mv_pop
+SELECT count() FROM ins_target
+SELECT count() FROM ins_target_proj
+SELECT count() FROM ins_target_mem
+TRUNCATE TABLE ins_target
+TRUNCATE TABLE ins_target_proj
+TRUNCATE TABLE ins_target_mem

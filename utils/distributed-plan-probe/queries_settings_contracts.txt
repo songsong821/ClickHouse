@@ -1,0 +1,174 @@
+# ---- force / assert settings
+SELECT count(), sum(v) FROM t WHERE k = 3 SETTINGS force_primary_key = 1
+SELECT count(), sum(v) FROM t WHERE v = 3 SETTINGS force_primary_key = 1
+SELECT count(), sum(v) FROM t WHERE k IN (3, 5) AND v > 10 SETTINGS force_primary_key = 1
+SELECT count(), sum(v) FROM t WHERE d = '2024-01-05' SETTINGS force_index_by_date = 1
+SELECT count(), sum(v) FROM tpart WHERE k % 3 = 1 SETTINGS force_index_by_date = 1
+SELECT count(), sum(v) FROM tpart WHERE k > 100 SETTINGS force_index_by_date = 1
+SELECT count(), sum(v) FROM t WHERE v > 9000 SETTINGS force_data_skipping_indices = 'idx_v'
+SELECT count(), sum(v) FROM t WHERE k > 5 SETTINGS force_data_skipping_indices = 'idx_v'
+SELECT count(), sum(v) FROM t WHERE v > 9000 SETTINGS force_data_skipping_indices = 'idx_v', use_skip_indexes = 0
+SELECT count() FROM tdist2 WHERE k = 1 SETTINGS force_optimize_skip_unused_shards = 1, optimize_skip_unused_shards = 1
+SELECT count() FROM tdist WHERE k = 1 SETTINGS force_optimize_skip_unused_shards = 1, optimize_skip_unused_shards = 1
+SELECT k, sum(v) FROM tp GROUP BY k ORDER BY k SETTINGS force_optimize_projection = 1
+SELECT k, sum(v) FROM tp GROUP BY k ORDER BY k SETTINGS force_optimize_projection_name = 'p_agg'
+SELECT k, v FROM tp WHERE v > 4990 ORDER BY v SETTINGS force_optimize_projection_name = 'p_ord'
+SELECT k, sum(v) FROM t GROUP BY k ORDER BY k SETTINGS force_aggregation_in_order = 1
+SELECT k, grouping(k) AS g, count() FROM t GROUP BY GROUPING SETS ((k), ()) ORDER BY k, g SETTINGS force_grouping_standard_compatibility = 0
+SELECT k, grouping(k) AS g, count() FROM t GROUP BY GROUPING SETS ((k), ()) ORDER BY k, g SETTINGS force_grouping_standard_compatibility = 1
+SELECT k, v FROM t ORDER BY k, v LIMIT 10 SETTINGS optimize_read_in_order = 1, read_in_order_two_level_merge_threshold = 0
+SELECT k, v FROM t ORDER BY k, v LIMIT 10 SETTINGS optimize_read_in_order = 1, read_in_order_two_level_merge_threshold = 1000
+SELECT k, v FROM t ORDER BY k, v LIMIT 10 SETTINGS optimize_read_in_order = 0
+SELECT k, v FROM t ORDER BY k DESC, v DESC LIMIT 10 SETTINGS optimize_read_in_order = 1, read_in_order_use_virtual_row = 1
+# ---- read limits and overflow modes
+SELECT count(), sum(v) FROM t SETTINGS max_rows_to_read = 5000
+SELECT count(), sum(v) FROM t SETTINGS max_rows_to_read = 5000, read_overflow_mode = 'break', max_threads = 1
+SELECT count(), sum(v) FROM t SETTINGS max_rows_to_read = 20000
+SELECT sum(v) FROM t SETTINGS max_bytes_to_read = 20000
+SELECT sum(v) FROM t SETTINGS max_bytes_to_read = 20000, read_overflow_mode = 'break', max_threads = 1
+SELECT count(), sum(v) FROM t SETTINGS max_rows_to_read_leaf = 5000
+SELECT count(), sum(v) FROM t SETTINGS max_rows_to_read_leaf = 5000, read_overflow_mode_leaf = 'break', max_threads = 1
+SELECT count(), sum(v) FROM tdist SETTINGS max_rows_to_read_leaf = 5000
+SELECT count(), sum(v) FROM t WHERE k = 3 SETTINGS max_rows_to_read = 600
+SELECT count(), sum(v) FROM t WHERE k = 3 SETTINGS max_rows_to_read = 100
+SELECT k, v FROM t ORDER BY k, v SETTINGS max_result_rows = 100, result_overflow_mode = 'break'
+SELECT k, v FROM t ORDER BY k, v SETTINGS max_result_rows = 100, result_overflow_mode = 'throw'
+SELECT k, v FROM t ORDER BY k, v SETTINGS max_result_bytes = 1000, result_overflow_mode = 'throw'
+SELECT k, count() FROM t GROUP BY k ORDER BY k SETTINGS max_rows_to_group_by = 5, group_by_overflow_mode = 'any'
+SELECT k, count() FROM t GROUP BY k ORDER BY k SETTINGS max_rows_to_group_by = 5, group_by_overflow_mode = 'break'
+SELECT k, count() FROM t GROUP BY k ORDER BY k SETTINGS max_rows_to_group_by = 5, group_by_overflow_mode = 'throw'
+SELECT v FROM t ORDER BY v LIMIT 3 SETTINGS max_rows_to_sort = 5000, sort_overflow_mode = 'throw', use_skip_indexes_for_top_k = 0
+SELECT count() FROM (SELECT v FROM t ORDER BY v SETTINGS max_rows_to_sort = 5000, sort_overflow_mode = 'break')
+SELECT v FROM t ORDER BY v SETTINGS max_rows_to_sort = 5000, sort_overflow_mode = 'throw'
+SELECT sum(v) FROM t ORDER BY sum(v) SETTINGS max_bytes_to_sort = 1000, sort_overflow_mode = 'throw'
+SELECT v, s FROM t ORDER BY s, v SETTINGS max_bytes_to_sort = 10000, sort_overflow_mode = 'throw'
+SELECT DISTINCT k FROM t ORDER BY k SETTINGS max_rows_in_distinct = 10, distinct_overflow_mode = 'throw'
+SELECT count() FROM (SELECT DISTINCT k FROM t SETTINGS max_rows_in_distinct = 10, distinct_overflow_mode = 'break', max_threads = 1)
+SELECT DISTINCT k, s FROM t ORDER BY k, s SETTINGS max_rows_in_distinct = 50, distinct_overflow_mode = 'throw'
+SELECT count() FROM t WHERE k IN (SELECT k FROM t2) SETTINGS max_rows_in_set = 10, set_overflow_mode = 'throw'
+SELECT count() FROM t WHERE k IN (SELECT k FROM t2) SETTINGS max_rows_in_set = 10, set_overflow_mode = 'break'
+SELECT count() FROM t JOIN t2 ON t.k = t2.k SETTINGS max_rows_in_join = 10, join_overflow_mode = 'throw'
+SELECT count() FROM t JOIN t2 ON t.k = t2.k SETTINGS max_rows_in_join = 500, join_overflow_mode = 'throw'
+SELECT count() FROM t JOIN t2 ON t.k = t2.k SETTINGS max_rows_in_join = 500, join_overflow_mode = 'break', max_threads = 1
+SELECT count() FROM t JOIN t2 ON t.k = t2.k SETTINGS max_bytes_in_join = 5000, join_overflow_mode = 'throw'
+SELECT count() FROM t JOIN t2 ON t.k = t2.k SETTINGS max_rows_in_join = 500, join_overflow_mode = 'throw', join_algorithm = 'parallel_hash'
+SELECT count() FROM t JOIN t2 ON t.k = t2.k SETTINGS max_rows_in_join = 500, join_overflow_mode = 'throw', join_algorithm = 'grace_hash'
+SELECT count() FROM t WHERE k IN (SELECT k FROM t2) SETTINGS max_rows_to_transfer = 10
+SELECT count() FROM t WHERE k GLOBAL IN (SELECT k FROM t2) SETTINGS max_rows_to_transfer = 10
+SELECT count() FROM t WHERE k IN (SELECT k FROM t2) SETTINGS max_bytes_to_transfer = 10, transfer_overflow_mode = 'break'
+SELECT sum(w) FROM t2 SETTINGS max_execution_speed = 400
+SELECT sum(w) FROM t2 SETTINGS max_execution_speed_bytes = 4000
+SELECT sum(v) FROM t SETTINGS min_execution_speed = 100000000000, timeout_before_checking_execution_speed = 0.0001
+SELECT sum(v) FROM t SETTINGS min_execution_speed = 100000000000, timeout_before_checking_execution_speed = 0
+SELECT count() FROM t WHERE NOT ignore(sleepEachRow(0.001)) SETTINGS max_execution_time = 1, timeout_overflow_mode = 'throw', max_block_size = 100
+SELECT count() FROM t WHERE NOT ignore(sleepEachRow(0.001)) SETTINGS max_execution_time = 1, timeout_overflow_mode = 'break', max_block_size = 100
+SELECT length(groupArray(s)), sum(v) FROM t SETTINGS max_memory_usage = 3000000
+SELECT k, uniqExact(v) FROM t GROUP BY k ORDER BY k SETTINGS max_memory_usage = 1000000
+SELECT k, sum(v) FROM t GROUP BY k ORDER BY k SETTINGS max_bytes_before_external_group_by = 1, max_bytes_ratio_before_external_group_by = 0
+SELECT v FROM t ORDER BY v LIMIT 5 SETTINGS max_bytes_before_external_sort = 1, max_bytes_ratio_before_external_sort = 0, use_skip_indexes_for_top_k = 0
+SELECT k, v FROM t ORDER BY k, v LIMIT 3 OFFSET 5 SETTINGS max_block_size = 7
+SELECT count(), sum(v) FROM t SETTINGS max_block_size = 7
+SELECT count(), sum(v), uniq(k) FROM t SETTINGS max_threads = 1
+SELECT count(), sum(v), uniq(k) FROM t SETTINGS max_threads = 1, max_streams_to_max_threads_ratio = 0.5
+SELECT count(), sum(v), uniq(k) FROM t SETTINGS max_streams_to_max_threads_ratio = 4
+SELECT count(), sum(v) FROM t SETTINGS max_rows_to_read = 5000, enable_cascades_optimizer = 1, distributed_plan_workers_num = 2
+# ---- result shape
+SELECT k, sum(v) FROM t GROUP BY k ORDER BY k SETTINGS extremes = 1
+SELECT k, v FROM t ORDER BY k, v LIMIT 5 SETTINGS extremes = 1
+SELECT k, sum(v) FROM t GROUP BY k WITH TOTALS HAVING sum(v) > 100 ORDER BY k SETTINGS totals_mode = 'after_having_exclusive'
+SELECT k, sum(v) FROM t GROUP BY k WITH TOTALS HAVING sum(v) > 100 ORDER BY k SETTINGS totals_mode = 'after_having_auto', totals_auto_threshold = 0.1, max_rows_to_group_by = 5, group_by_overflow_mode = 'any'
+SELECT k, sum(v) FROM t GROUP BY k WITH TOTALS ORDER BY k SETTINGS totals_mode = 'before_having'
+SELECT k, v FROM t ORDER BY k, v SETTINGS limit = 5, offset = 2
+SELECT k, v FROM t ORDER BY k, v LIMIT 3 SETTINGS limit = 5, offset = 2
+SELECT if(k % 2 = 0, k, s) AS x FROM t ORDER BY k, v LIMIT 5 SETTINGS use_variant_as_common_type = 1
+SELECT k % 3 AS a, k % 2 AS b, count() FROM t GROUP BY a, b WITH ROLLUP ORDER BY a, b SETTINGS group_by_use_nulls = 1
+SELECT k % 3 AS a, k % 2 AS b, count() FROM t GROUP BY a, b WITH CUBE ORDER BY a, b SETTINGS group_by_use_nulls = 1
+SELECT k, n, count() FROM t GROUP BY GROUPING SETS ((k), (n)) ORDER BY k, n SETTINGS group_by_use_nulls = 1
+SELECT k, n, count() FROM t GROUP BY GROUPING SETS ((k), (n)) ORDER BY k, n SETTINGS group_by_use_nulls = 0
+SELECT sum(v), count(), max(k) FROM t WHERE k > 100 SETTINGS aggregate_functions_null_for_empty = 1
+SELECT sum(v), count(), max(k) FROM t SETTINGS aggregate_functions_null_for_empty = 1
+SELECT sum(v) FROM t WHERE k > 100 SETTINGS empty_result_for_aggregation_by_empty_set = 1
+SELECT sum(v) FROM t WHERE k = 3 AND v < 100 SETTINGS empty_result_for_aggregation_by_empty_set = 1
+SELECT sum(v) FROM t WHERE k > 100 SETTINGS empty_result_for_aggregation_by_empty_set = 0
+SELECT k, max(k), min(k), any(k) FROM t GROUP BY k ORDER BY k SETTINGS optimize_aggregators_of_group_by_keys = 1
+SELECT k, max(k), min(k), any(k) FROM t GROUP BY k ORDER BY k SETTINGS optimize_aggregators_of_group_by_keys = 0
+SELECT t2.k, t.k AS tk, count() FROM t2 LEFT JOIN t ON t.k = t2.k GROUP BY t2.k, tk ORDER BY t2.k, tk SETTINGS join_use_nulls = 1
+SELECT t2.k, t.k AS tk, count() FROM t2 LEFT JOIN t ON t.k = t2.k GROUP BY t2.k, tk ORDER BY t2.k, tk SETTINGS join_use_nulls = 0
+SELECT t2.k, t.k AS tk, count() FROM t2 FULL JOIN t ON t.k = t2.k GROUP BY t2.k, tk ORDER BY t2.k, tk SETTINGS join_use_nulls = 1
+SELECT t2.k, count() FROM t ANY INNER JOIN t2 ON t.k = t2.k GROUP BY t2.k ORDER BY t2.k SETTINGS any_join_distinct_right_table_keys = 1
+SELECT t2.k, count() FROM t ANY RIGHT JOIN t2 ON t.k = t2.k GROUP BY t2.k ORDER BY t2.k SETTINGS any_join_distinct_right_table_keys = 1
+SELECT count(), sum(v) FROM tr SETTINGS final = 1
+SELECT count() FROM tr SETTINGS final = 1, optimize_trivial_count_query = 1
+SELECT count(), sum(v) FROM tr SETTINGS final = 0
+SELECT count(), sum(v) FROM t SETTINGS additional_table_filters = {'t' : 'k < 5'}
+SELECT count(), sum(v) FROM t AS x SETTINGS additional_table_filters = {'x' : 'k < 5'}
+SELECT count(), sum(v) FROM t JOIN t2 ON t.k = t2.k SETTINGS additional_table_filters = {'t' : 'k < 5', 't2' : 'w > 100'}
+SELECT k, sum(v) FROM t GROUP BY k ORDER BY k SETTINGS additional_result_filter = 'k < 3'
+SELECT count(), sum(v) FROM t SETTINGS additional_result_filter = 'count() > 100000'
+SELECT k, v, s, arr FROM t ORDER BY s, v LIMIT 5 SETTINGS query_plan_optimize_lazy_materialization = 1, query_plan_max_limit_for_lazy_materialization = 10
+SELECT k, v, s, arr FROM t ORDER BY s, v LIMIT 5 SETTINGS query_plan_optimize_lazy_materialization = 0
+SELECT DISTINCT k FROM t ORDER BY k SETTINGS optimize_distinct_in_order = 1
+SELECT DISTINCT k FROM t ORDER BY k SETTINGS optimize_distinct_in_order = 0
+SELECT k FROM t ORDER BY k LIMIT 10 SETTINGS optimize_sorting_by_input_stream_properties = 1
+SELECT k FROM t ORDER BY k LIMIT 10 SETTINGS optimize_sorting_by_input_stream_properties = 0
+SELECT k, v FROM t ORDER BY k, v LIMIT 5 SETTINGS read_in_order_use_virtual_row = 1, optimize_read_in_order = 1
+SELECT count() FROM t SETTINGS optimize_trivial_count_query = 0
+SELECT count() FROM t SETTINGS optimize_trivial_count_query = 1
+SELECT count() FROM tpart WHERE k % 3 = 1 SETTINGS optimize_trivial_count_query = 1
+SELECT count() FROM t WHERE k > 5 SETTINGS optimize_use_implicit_projections = 1, optimize_trivial_count_query = 0
+SELECT count() FROM t WHERE k > 5 SETTINGS optimize_use_implicit_projections = 0, optimize_trivial_count_query = 0
+SELECT min(k), max(k), count() FROM t SETTINGS optimize_use_implicit_projections = 1
+SELECT min(k), max(k), count() FROM tpart WHERE k % 3 = 1 SETTINGS optimize_use_implicit_projections = 1
+SELECT count(), sum(v) FROM tp WHERE v > 4000 SETTINGS optimize_use_projection_filtering = 1
+SELECT count(), sum(v) FROM tp WHERE v > 4000 SETTINGS optimize_use_projection_filtering = 0
+SELECT k, sum(v) FROM tp GROUP BY k ORDER BY k SETTINGS optimize_use_projections = 1
+SELECT k, sum(v) FROM tp GROUP BY k ORDER BY k SETTINGS optimize_use_projections = 0
+SELECT count(), sum(v) FROM t WHERE v > 9000 SETTINGS use_query_condition_cache = 1
+SELECT count(), sum(v) FROM t WHERE v > 9000 SETTINGS use_query_condition_cache = 1
+SELECT count(), sum(v) FROM t WHERE v BETWEEN 100 AND 200 SETTINGS use_skip_indexes = 1
+SELECT count(), sum(v) FROM t WHERE v BETWEEN 100 AND 200 SETTINGS use_skip_indexes = 0
+SELECT count(), sum(v) FROM t WHERE v BETWEEN 100 AND 200 SETTINGS use_skip_indexes_on_data_read = 1
+SELECT count(), sum(v) FROM t WHERE v BETWEEN 100 AND 200 SETTINGS use_skip_indexes_on_data_read = 0
+SELECT count(), sum(v) FROM t WHERE v BETWEEN 100 AND 200 SETTINGS secondary_indices_enable_bulk_filtering = 1
+SELECT count(), sum(v) FROM t WHERE v BETWEEN 100 AND 200 SETTINGS secondary_indices_enable_bulk_filtering = 0
+SELECT count(), sum(v) FROM tr FINAL WHERE v > 100 SETTINGS use_skip_indexes_if_final = 1, use_skip_indexes_if_final_exact_mode = 1
+SELECT count(), sum(v) FROM tr FINAL WHERE v > 100 SETTINGS optimize_move_to_prewhere_if_final = 1
+SELECT count(), sum(v) FROM tr FINAL WHERE v > 100 SETTINGS optimize_move_to_prewhere_if_final = 0
+SELECT count() FROM tjson WHERE j.a > 500 SETTINGS merge_tree_use_deserialization_prefixes_cache = 1
+SELECT count() FROM tjson WHERE j.a > 500 SETTINGS merge_tree_use_deserialization_prefixes_cache = 0
+SELECT count() FROM ttext WHERE hasToken(s, 'foo') SETTINGS allow_experimental_full_text_index = 1
+SELECT count() FROM ttext WHERE hasToken(s, 'foo') SETTINGS allow_experimental_full_text_index = 1, text_index_use_bloom_filter = 0
+SELECT count() FROM ttext WHERE searchAny(s, ['foo']) SETTINGS allow_experimental_full_text_index = 1
+SELECT count() FROM ttext WHERE searchAny(s, ['foo']) SETTINGS allow_experimental_full_text_index = 1, query_plan_direct_read_from_text_index = 1
+SELECT count() FROM ttext WHERE hasToken(s, 'foo') SETTINGS allow_experimental_full_text_index = 1, use_skip_indexes_on_data_read = 1
+SELECT k FROM ttext WHERE hasToken(s, 'foo') ORDER BY k LIMIT 3 SETTINGS allow_experimental_full_text_index = 1, query_plan_direct_read_from_text_index = 1
+SELECT count(), sum(v) FROM t WHERE v > 100 AND s = 's1' AND k < 10 SETTINGS enable_multiple_prewhere_read_steps = 1, move_all_conditions_to_prewhere = 1
+SELECT count(), sum(v) FROM t WHERE v > 100 AND s = 's1' AND k < 10 SETTINGS enable_multiple_prewhere_read_steps = 0, move_all_conditions_to_prewhere = 0
+SELECT count(), sum(v) FROM t WHERE v > 100 AND s = 's1' AND k < 10 SETTINGS query_plan_optimize_prewhere = 0
+SELECT count(), sum(v) FROM t WHERE v > 100 AND s = 's1' AND k < 10 SETTINGS optimize_move_to_prewhere = 0
+SELECT count(), sum(v) FROM t PREWHERE s = 's1' WHERE v > 100 SETTINGS optimize_move_to_prewhere = 0
+SELECT count(), sum(v) FROM t SETTINGS enable_parallel_replicas = 1, max_parallel_replicas = 2, cluster_for_parallel_replicas = 'test_cluster_one_shard_two_replicas', parallel_replicas_for_non_replicated_merge_tree = 1
+SELECT count(), sum(v) FROM t SETTINGS enable_parallel_replicas = 1, max_parallel_replicas = 2, cluster_for_parallel_replicas = 'test_cluster_one_shard_two_replicas', parallel_replicas_for_non_replicated_merge_tree = 1, parallel_replicas_local_plan = 1
+SELECT count(), sum(v) FROM tdist SETTINGS prefer_localhost_replica = 0
+SELECT count(), sum(v) FROM tdist SETTINGS prefer_localhost_replica = 1
+SELECT count() FROM tdist WHERE k IN (SELECT k FROM tdist WHERE k < 3) SETTINGS distributed_product_mode = 'global'
+SELECT count() FROM tdist WHERE k IN (SELECT k FROM tdist WHERE k < 3) SETTINGS distributed_product_mode = 'local'
+SELECT count() FROM tdist WHERE k IN (SELECT k FROM tdist WHERE k < 3) SETTINGS distributed_product_mode = 'allow'
+SELECT count() FROM t WHERE k IN (SELECT k FROM t2 WHERE k < 3) SETTINGS prefer_global_in_and_join = 1
+SELECT count() FROM t JOIN t2 ON t.k = t2.k SETTINGS prefer_global_in_and_join = 1
+SELECT count() FROM t WHERE n IN (NULL, 1, 2) SETTINGS transform_null_in = 1
+SELECT count() FROM t WHERE n IN (NULL, 1, 2) SETTINGS transform_null_in = 0
+SELECT count() FROM t WHERE n IN (SELECT if(number % 2 = 0, NULL, number) FROM numbers(10)) SETTINGS transform_null_in = 1
+SELECT count() FROM t WHERE n NOT IN (SELECT if(number % 2 = 0, NULL, number) FROM numbers(10)) SETTINGS transform_null_in = 1
+SELECT count() FROM tdist2 WHERE k = 1 SETTINGS optimize_skip_unused_shards = 1
+SELECT count(), sum(v) FROM t SETTINGS apply_settings_from_server = 0
+SELECT count(), sum(v) FROM t SETTINGS readonly = 2
+SELECT count(), sum(v) FROM t SETTINGS readonly = 1
+SELECT k, sum(v) FROM t GROUP BY k ORDER BY k SETTINGS readonly = 2
+SELECT count() FROM t JOIN t2 ON t.k = t2.k SETTINGS readonly = 2
+SELECT count() FROM t WHERE k IN (SELECT k FROM t2 WHERE k < 3) SETTINGS readonly = 2
+SELECT k FROM t ORDER BY k LIMIT 3 SETTINGS readonly = 2, query_plan_optimize_lazy_materialization = 1
+SELECT count(), sum(v) FROM t SETTINGS max_threads = 1, readonly = 2
+SELECT count(), sum(v) FROM t SETTINGS exact_rows_before_limit = 1
+SELECT k FROM t ORDER BY k LIMIT 3 SETTINGS exact_rows_before_limit = 1
+SELECT k, count() FROM t GROUP BY k ORDER BY k LIMIT 3 SETTINGS rows_before_aggregation = 1

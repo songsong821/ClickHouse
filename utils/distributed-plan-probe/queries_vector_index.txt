@@ -1,0 +1,4 @@
+# WARNING: these queries hit a LOGICAL_ERROR on builds without the vector-search fix; a debug server aborts. Run against a throwaway server.
+SELECT k FROM tvec ORDER BY L2Distance(vec, [1.0, 2.0]) LIMIT 3
+SELECT k FROM tvec ORDER BY L2Distance(vec, [1.0, 2.0]) LIMIT 3 SETTINGS vector_search_with_rescoring = 0
+SELECT k FROM tvec ORDER BY L2Distance(vec, [1.0, 2.0]) LIMIT 3 SETTINGS vector_search_with_rescoring = 1

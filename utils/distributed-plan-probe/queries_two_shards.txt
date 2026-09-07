@@ -1,0 +1,10 @@
+SELECT count() FROM t WHERE k IN (SELECT k FROM tdist2)
+SELECT k, sum(v) FROM tdist2 GROUP BY k ORDER BY k LIMIT 3
+SELECT k, sum(v) FROM tdist2 GROUP BY k WITH TOTALS ORDER BY k LIMIT 3
+SELECT k, sum(v) FROM tdist2 GROUP BY k ORDER BY k LIMIT 3 SETTINGS serialize_query_plan = 1
+SELECT k, sum(v) FROM tdist2 GROUP BY k ORDER BY k LIMIT 3 SETTINGS serialize_query_plan = 0
+SELECT count() FROM tdist2 WHERE k IN (SELECT k FROM t2) SETTINGS distributed_product_mode = 'global'
+SELECT count() FROM tdist2 WHERE k GLOBAL IN (SELECT k FROM t2)
+SELECT _shard_num, count() FROM tdist2 GROUP BY _shard_num ORDER BY _shard_num
+SELECT k, sum(v) FROM remote('127.0.0.{1,2}', probe, t) GROUP BY k ORDER BY k LIMIT 3
+SELECT k, sum(v) FROM cluster(test_cluster_two_shards, probe, t) GROUP BY k ORDER BY k LIMIT 3
