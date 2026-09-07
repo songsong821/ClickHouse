@@ -98,18 +98,35 @@ bool afterProcessingNeedsIngestedGeneration(ObjectStorageType storage_type, Obje
 
 bool learnIngestedGeneration(const IObjectStorage & object_storage, RelativePathWithMetadata & object_info)
 {
+    /// The read of this object has to serve the generation named below, independently of
+    /// `s3_validate_etag_on_read`: that setting decides whether a plain read is protected from a
+    /// torn read, while here the generation the read serves is the generation the move or the
+    /// delete acts on afterwards.
+    object_info.require_read_pinned_to_generation = true;
+
     if (object_info.metadata && !object_info.metadata->etag.empty())
         return true;
 
     object_info.metadata = object_storage.getObjectMetadata(object_info.getPath(), /* with_tags */ false);
-    return !object_info.metadata->etag.empty();
+    if (!object_info.metadata->etag.empty())
+        return true;
+
+    /// Nothing to pin the read to. The caller fails the file instead of reading it, so leave the
+    /// flag off rather than let an unpinned read be opened.
+    object_info.require_read_pinned_to_generation = false;
+    return false;
 }
 
 ObjectStorageQueueSource::ObjectStorageQueueObjectInfo::ObjectStorageQueueObjectInfo(
     const ObjectInfo & object_info, ObjectStorageQueueMetadata::FileMetadataPtr file_metadata_)
-    : ObjectInfo(RelativePathWithMetadata{object_info.getPath(), object_info.getObjectMetadata()})
+    /// Copies the whole carrier, so that everything the iterator learned about the object - its
+    /// generation and the requirement to pin the read to it - reaches `createReadBuffer`.
+    : ObjectInfo(object_info.relative_path_with_metadata)
     , file_metadata(file_metadata_)
 {
+    /// The path the queue tracks the file by is the rendered one (an archive renders it out of the
+    /// carrier's own `relative_path`), as it was before the whole carrier was copied.
+    relative_path_with_metadata.relative_path = object_info.getPath();
 }
 
 ObjectStorageQueueSource::FileIterator::FileIterator(

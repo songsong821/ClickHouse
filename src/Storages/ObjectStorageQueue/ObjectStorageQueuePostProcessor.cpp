@@ -57,6 +57,7 @@ namespace S3AuthSetting
 
 namespace ErrorCodes
 {
+    extern const int AZURE_BLOB_STORAGE_ERROR;
     extern const int BAD_ARGUMENTS;
     extern const int LOGICAL_ERROR;
     extern const int FAULT_INJECTED;
@@ -114,7 +115,7 @@ void ObjectStorageQueuePostProcessor::process(const StoredObjects & objects) con
             {
                 if (object.etag.empty())
                     throw Exception(
-                        ErrorCodes::LOGICAL_ERROR,
+                        ErrorCodes::AZURE_BLOB_STORAGE_ERROR,
                         "Cannot delete Azure blob {}: the generation that was ingested is not known",
                         object.remote_path);
             }
@@ -302,7 +303,7 @@ void ObjectStorageQueuePostProcessor::moveWithinBucket(const StoredObjects & obj
                         /// hands over an untagged Azure object.
                         if (type == ObjectStorageType::Azure && object_from.etag.empty())
                             throw Exception(
-                                ErrorCodes::LOGICAL_ERROR,
+                                ErrorCodes::AZURE_BLOB_STORAGE_ERROR,
                                 "Cannot move Azure blob {}: the generation that was ingested is not known",
                                 object_from.remote_path);
 
@@ -523,7 +524,7 @@ void ObjectStorageQueuePostProcessor::moveAzureBlobs(const StoredObjects & objec
                         const String & src_etag = object_from.etag;
                         if (src_etag.empty())
                             throw Exception(
-                                ErrorCodes::LOGICAL_ERROR,
+                                ErrorCodes::AZURE_BLOB_STORAGE_ERROR,
                                 "Cannot move Azure blob {}: the generation that was ingested is not known",
                                 object_from.remote_path);
 

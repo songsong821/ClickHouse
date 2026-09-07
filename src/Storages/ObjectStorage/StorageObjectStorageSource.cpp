@@ -1838,8 +1838,22 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBuffer(
     /// Pin the read to the object generation seen here (etag from the LIST/HEAD): a GET with a
     /// different ETag means an in-place overwrite, reported as S3_OBJECT_CHANGED_DURING_READ
     /// instead of torn cross-generation data.
-    if (settings[Setting::s3_validate_etag_on_read] && object_info.metadata.has_value())
+    ///
+    /// `s3_validate_etag_on_read` chooses whether a plain read is protected from a torn read.
+    /// It does not govern `require_read_pinned_to_generation`: the caller that sets that flag acts
+    /// on the ingested generation after the read, so reading a different generation would lose a
+    /// file no matter how the setting is configured (and it can be turned off directly or through
+    /// `compatibility`).
+    if (object_info.metadata.has_value()
+        && (settings[Setting::s3_validate_etag_on_read] || object_info.require_read_pinned_to_generation))
         stored_object.etag = object_info.metadata->etag;
+
+    if (object_info.require_read_pinned_to_generation && stored_object.etag.empty())
+        throw Exception(
+            ErrorCodes::LOGICAL_ERROR,
+            "Cannot read object {}: its read must be pinned to the generation that is processed "
+            "after it, but that generation is not known",
+            object_info.getPath());
     pipeline.setSource(object_storage, StoredObjects{stored_object}, modified_read_settings);
 
     /// Filesystem cache

@@ -32,7 +32,9 @@ bool afterProcessingNeedsIngestedGeneration(ObjectStorageType storage_type, Obje
 /// to (see `StorageObjectStorageSource::createReadBuffer`), so that the generation the read
 /// verified and the generation the post-processing acts on are one and the same. The listing
 /// normally reports it; when the listing entry carries none, one `HEAD` supplies the `etag`
-/// together with the size and modification time of that same generation. Returns whether the
+/// together with the size and modification time of that same generation. The read is pinned
+/// through `RelativePathWithMetadata::require_read_pinned_to_generation`, so it does not depend on
+/// `s3_validate_etag_on_read`, which only governs plain reads. Returns whether the
 /// generation is known afterwards: it is not when the endpoint reports no `ETag` at all, and a
 /// table whose post-processing needs it must then refuse the file rather than read it.
 bool learnIngestedGeneration(const IObjectStorage & object_storage, RelativePathWithMetadata & object_info);

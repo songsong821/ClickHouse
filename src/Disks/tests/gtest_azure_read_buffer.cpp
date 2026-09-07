@@ -18,6 +18,8 @@
 #include <IO/AzureBlobStorage/copyAzureBlobStorageFile.h>
 #include <IO/ReadHelpers.h>
 #include <IO/SharedThreadPools.h>
+#include <Interpreters/Context.h>
+#include <Storages/ObjectStorage/Utils.h>
 #include <Storages/ObjectStorageQueue/ObjectStorageQueuePostProcessor.h>
 #include <Storages/ObjectStorageQueue/ObjectStorageQueueSource.h>
 #include <Storages/ObjectStorageQueue/ObjectStorageQueueTableMetadata.h>
@@ -36,7 +38,6 @@ namespace DB::ErrorCodes
     extern const int FILE_CHANGED_DURING_READ;
     extern const int BACKUP_DAMAGED;
     extern const int AZURE_BLOB_STORAGE_ERROR;
-    extern const int LOGICAL_ERROR;
 }
 
 namespace
@@ -2193,13 +2194,75 @@ TEST(AzurePostProcessing, MoveOfOverwrittenGenerationAbortsTheCommit)
 
 /// An Azure `DELETE` acts on the ingested generation as well, so the source never hands over an
 /// object whose generation is unknown; if one did arrive, deleting it by path could delete a
-/// generation that was never ingested. That is a logical error, and nothing is deleted.
+/// generation that was never ingested. The step refuses it, and nothing is deleted.
 TEST(AzurePostProcessing, DeleteOfUntaggedObjectIsRefused)
 {
     const auto outcome = postProcess("delete", {ingestedGeneration("")}, ETagBehaviour::first_generation);
 
-    ASSERT_EQ(outcome.error_code, DB::ErrorCodes::LOGICAL_ERROR);
+    ASSERT_EQ(outcome.error_code, DB::ErrorCodes::AZURE_BLOB_STORAGE_ERROR);
     ASSERT_TRUE(outcome.deleted_generations.empty());
+}
+
+/// The read that `ObjectStorageQueue` opens goes through `createReadBuffer`, which pins a plain read
+/// to the generation of its `ObjectInfo` only while `s3_validate_etag_on_read` is on. That setting
+/// is about torn reads and can be turned off, directly or through `compatibility`, so a queue whose
+/// post-processing acts on the ingested generation cannot depend on it: the generation the read
+/// serves has to be the generation the move or the delete acts on afterwards. These two tests read
+/// through `createReadBuffer` with the setting off, against an endpoint that replaces the blob
+/// between the metadata probe and the `GET`.
+
+/// With the requirement recorded by `learnIngestedGeneration`, the read is pinned even though the
+/// setting is off: the newer generation is refused instead of being ingested behind the move.
+TEST(AzureQueueReadPinning, PinnedWithValidateETagOnReadDisabled)
+{
+    auto transport = std::make_shared<MisbehavingRangeTransport>(
+        100, 100, 100, /* send_etag */ true, /* reported_length */ std::nullopt, /* ignore_range */ false,
+        ETagBehaviour{.etag = ETagBehaviour::first_generation, .etag_after_first = ETagBehaviour::second_generation, .honour_if_match = true});
+    DB::ObjectStoragePtr object_storage = objectStorageOver(transport);
+
+    auto context = DB::Context::createCopy(getContext().context);
+    context->setSetting("s3_validate_etag_on_read", false);
+
+    auto entry = listingEntry("");
+    ASSERT_TRUE(DB::learnIngestedGeneration(*object_storage, entry));
+    ASSERT_TRUE(entry.require_read_pinned_to_generation);
+
+    auto buffer = DB::createReadBuffer(entry, object_storage, context, getLogger("AzureQueueReadPinning"));
+
+    std::string data;
+    try
+    {
+        DB::readStringUntilEOF(data, *buffer);
+        FAIL() << "the read of a generation other than the ingested one must fail";
+    }
+    catch (const DB::Exception & e)
+    {
+        ASSERT_EQ(e.code(), DB::ErrorCodes::FILE_CHANGED_DURING_READ);
+    }
+}
+
+/// The same read without that requirement: with the setting off nothing pins it, and the endpoint
+/// serves whatever generation it holds. This is what a plain read of the table does, and what the
+/// queue must not do.
+TEST(AzureQueueReadPinning, PlainReadIsNotPinnedWhenTheSettingIsDisabled)
+{
+    auto transport = std::make_shared<MisbehavingRangeTransport>(
+        100, 100, 100, /* send_etag */ true, /* reported_length */ std::nullopt, /* ignore_range */ false,
+        ETagBehaviour{.etag = ETagBehaviour::first_generation, .etag_after_first = ETagBehaviour::second_generation, .honour_if_match = true});
+    DB::ObjectStoragePtr object_storage = objectStorageOver(transport);
+
+    auto context = DB::Context::createCopy(getContext().context);
+    context->setSetting("s3_validate_etag_on_read", false);
+
+    auto entry = listingEntry("");
+    ASSERT_TRUE(DB::learnIngestedGeneration(*object_storage, entry));
+    entry.require_read_pinned_to_generation = false;
+
+    auto buffer = DB::createReadBuffer(entry, object_storage, context, getLogger("AzureQueueReadPinning"));
+
+    std::string data;
+    ASSERT_NO_THROW(DB::readStringUntilEOF(data, *buffer));
+    ASSERT_EQ(data.size(), 100u);
 }
 
 #endif
