@@ -68,7 +68,7 @@ FROM
 -- 2. Lazy `FINAL`. Its pipeline is not visible in `EXPLAIN PIPELINE`: the deduplicating
 -- aggregation is built by the source at run time, hence the introspection through
 -- `processors_profile_log`.
--- The optimization itself is planned only for the new analyzer
+-- The optimization itself is planned only for the analyzer
 -- (`QueryPlanOptimizationSettings::optimize_lazy_final` is conjoined with `allow_experimental_analyzer`),
 -- so this half of the test asks for it explicitly instead of following the lane default.
 SET enable_analyzer = 1;
