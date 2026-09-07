@@ -5,6 +5,12 @@
 -- itself still prunes. Asserted through `read_rows`, since the worker's index analysis shows up
 -- neither in the result nor in `EXPLAIN`.
 --
+-- `system.query_log` keeps every past run, and `SYSTEM FLUSH LOGS` does not clear it, so the probes
+-- are read with `argMax` over the event time rather than an aggregate over the whole history: on a
+-- server where the test ran before, a stale row would otherwise answer for this run and hide a
+-- regression. The time fence covers the other direction, where this run's row is missing entirely
+-- and only stale ones match - that then reports no rows instead of a stale verdict.
+--
 -- Parallel replicas are pinned off rather than tagged away: under `automatic_parallel_replicas_mode`
 -- the read is planned elsewhere and the set the query owns stops pruning too, which would leave the
 -- comparison below with nothing to say. Pinning keeps the test running in the parallel-replicas run.
@@ -39,15 +45,17 @@ SETTINGS serialize_query_plan = 1, enable_parallel_replicas = 0, automatic_paral
 SYSTEM FLUSH LOGS query_log;
 
 SELECT '-- every granule is read for a set that lives in a table';
-SELECT max(read_rows) = 3
+SELECT argMax(read_rows, event_time_microseconds) = 3
 FROM system.query_log
 WHERE current_database = currentDatabase() AND type = 'QueryFinish' AND is_initial_query
+  AND event_time >= now() - INTERVAL 5 MINUTE
   AND query LIKE '%text\_index\_mutable\_set%' AND query NOT LIKE '%system.query\_log%';
 
 SELECT '-- and the index still prunes for a set the query owns';
-SELECT max(read_rows) < 3
+SELECT argMax(read_rows, event_time_microseconds) < 3
 FROM system.query_log
 WHERE current_database = currentDatabase() AND type = 'QueryFinish' AND is_initial_query
+  AND event_time >= now() - INTERVAL 5 MINUTE
   AND query LIKE '%text\_index\_owned\_set%' AND query NOT LIKE '%system.query\_log%';
 
 DROP TABLE t_map_text_index;
