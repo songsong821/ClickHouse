@@ -1,5 +1,6 @@
 -- Tags: no-old-analyzer
 -- no-old-analyzer: make_distributed_plan requires the analyzer.
+-- Tracked in https://github.com/ClickHouse/ClickHouse/issues/118534
 
 -- `rows_before_limit_at_least` is part of the JSON output whenever the query has a LIMIT, and
 -- `exact_rows_before_limit = 1` makes it exact. In a distributed plan the final `Limit` runs inside a

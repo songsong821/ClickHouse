@@ -1,5 +1,6 @@
 -- Tags: no-old-analyzer
 -- no-old-analyzer: make_distributed_plan requires the analyzer.
+-- Tracked in https://github.com/ClickHouse/ClickHouse/issues/118534
 
 -- A set truncated by `set_overflow_mode = 'break'` cannot be shipped to the worker tasks. `serializeSets`
 -- correctly refuses it, but only when the tasks are sent, after the fallback decision was made, so the

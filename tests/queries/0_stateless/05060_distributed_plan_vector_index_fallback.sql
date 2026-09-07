@@ -1,6 +1,7 @@
 -- Tags: no-fasttest, no-old-analyzer
 -- no-fasttest: the vector similarity index needs the usearch library, which is not in the fast test build.
 -- no-old-analyzer: make_distributed_plan requires the analyzer.
+-- Tracked in https://github.com/ClickHouse/ClickHouse/issues/118534
 
 -- A vector similarity index with `ORDER BY distance LIMIT` under `make_distributed_plan`.
 -- The index-only-scan rewrite (`optimizeVectorSearchWithVectorIndexSecondPass`) used to run on the

@@ -1,5 +1,6 @@
 -- Tags: no-old-analyzer
 -- no-old-analyzer: make_distributed_plan requires the analyzer.
+-- Tracked in https://github.com/ClickHouse/ClickHouse/issues/118534
 
 -- `max_rows_in_join` is a limit on the whole right side of the join. A distributed shuffle join splits
 -- the right side across `distributed_plan_default_shuffle_join_bucket_count` buckets, and every bucket's

@@ -1,3 +1,4 @@
+-- Tracked in https://github.com/ClickHouse/ClickHouse/issues/118534
 -- `EXPLAIN ESTIMATE` of a query that `make_distributed_plan` distributes must still report the
 -- parts, rows and marks of the `MergeTree` read. Today the estimate is empty: the `ReadFromMergeTree`
 -- is hidden inside the distributed fragments (`ReadFromDistributedPlanSource`) and

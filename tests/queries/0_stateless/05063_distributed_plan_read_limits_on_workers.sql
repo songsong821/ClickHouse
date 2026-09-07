@@ -1,5 +1,6 @@
 -- Tags: no-old-analyzer
 -- no-old-analyzer: make_distributed_plan requires the analyzer.
+-- Tracked in https://github.com/ClickHouse/ClickHouse/issues/118534
 
 -- Read-time limits are attached to the read step as storage limits. A distributed-plan worker rebuilds
 -- its `ReadFromMergeTree` from the serialized fragment without them (`ReadFromMergeTree::deserialize`

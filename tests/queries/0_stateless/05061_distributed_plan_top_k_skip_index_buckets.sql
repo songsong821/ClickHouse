@@ -1,5 +1,6 @@
 -- Tags: no-old-analyzer
 -- no-old-analyzer: make_distributed_plan requires the analyzer.
+-- Tracked in https://github.com/ClickHouse/ClickHouse/issues/118534
 
 -- `ORDER BY <non-key column> LIMIT n` over a table with a minmax skip index on the sort column, read
 -- as a bucketed distributed read. The coordinator plans without the top-K optimization (`tryOptimizeTopK`
