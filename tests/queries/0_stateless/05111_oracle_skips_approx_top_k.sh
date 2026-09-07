@@ -47,50 +47,62 @@ run_fuzzed()
     " >/dev/null 2>/dev/null
 }
 
-# One fuzzer iteration per round, over four unsafe aggregates at once. The swap path replaces
-# one aggregate node in 30 and most names it can pick are themselves oracle-unsafe, so a round
-# that loses every `approx_top_*` is vanishingly unlikely - across all rounds the gate must
-# reject the query every time and the counter must not budge.
-before=$(get_counter)
-for _ in $(seq 1 20)
-do
-    run_fuzzed "SELECT approx_top_k(v), approx_top_k(v + 1), approx_top_k(v * 2), approx_top_sum(v, 1) FROM oracle_approx_top WHERE v > 5;"
-done
-after=$(get_counter)
+# One probe per spelling: each query names exactly ONE of the aggregates under test, so a
+# probe fails on its own the moment that spelling stops being rejected - a query mixing
+# several unsafe aggregates would stay oracle-unsafe (and the test green) even if all but
+# one of them were dropped from the denylist.
+# The spelling is repeated three times within the query because `QueryFuzzer` replaces an
+# aggregate node with a random name from its swap list once in 30 nodes: with a single
+# occurrence a swap to a deterministic aggregate would let the oracle run and turn the
+# assertion into a false failure, while losing all three occurrences in one round is
+# vanishingly unlikely. Aliases are not swapped at all (the swap list matches on the
+# canonical prefix), so for them the repetition is merely harmless.
+probe()
+{
+    local label="$1"
+    local aggregates="$2"
+    local before
+    local after
 
-if [[ "$after" -eq "$before" ]]
-then
-    echo "approx_top not checked"
-else
-    echo "approx_top checked $((after - before)) times"
-fi
+    before=$(get_counter)
+    for _ in $(seq 1 8)
+    do
+        run_fuzzed "SELECT $aggregates FROM oracle_approx_top WHERE v > 5;"
+    done
+    after=$(get_counter)
+
+    if [[ "$after" -eq "$before" ]]
+    then
+        echo "$label not checked"
+    else
+        echo "$label checked $((after - before)) times"
+    fi
+}
+
+probe "approx_top_k" "approx_top_k(v), approx_top_k(v + 1), approx_top_k(v * 2)"
+probe "approx_top_sum" "approx_top_sum(v, 1), approx_top_sum(v + 1, 1), approx_top_sum(v * 2, 1)"
 
 # Alias spellings resolve to the same unsafe aggregates and must be rejected as well:
 # `approx_top_count` is an alias of `approx_top_k`, `min_by` of `argMin`, `array_agg` of
-# `groupArray`, `medianExact` of `quantileExact`, and `array_concat_agg` of `groupArrayArray`
-# - which is itself `groupArray` plus an `Array` combinator, so the expansion has to be
-# stripped in turn. The backstop set names none of these under its alias, so this only holds
-# once the name is resolved through the aggregate function factory.
-before=$after
-for _ in $(seq 1 20)
-do
-    run_fuzzed "SELECT approx_top_count(v), min_by(v, v), array_agg(v), medianExact(v), array_concat_agg([v]) FROM oracle_approx_top WHERE v > 5;"
-done
-after=$(get_counter)
-
-if [[ "$after" -eq "$before" ]]
-then
-    echo "alias spellings not checked"
-else
-    echo "alias spellings checked $((after - before)) times"
-fi
+# `groupArray`, `medianTDigest` of the approximate `quantileTDigest`, `anova` of
+# `analysisOfVariance`, and `array_concat_agg` of `groupArrayArray` - which is itself
+# `groupArray` plus an `Array` combinator, so the expansion has to be stripped in turn.
+# The backstop set names none of these under its alias, so this only holds once the name is
+# resolved through the aggregate function factory.
+probe "approx_top_count" "approx_top_count(v), approx_top_count(v + 1), approx_top_count(v * 2)"
+probe "min_by" "min_by(v, v), min_by(v + 1, v), min_by(v * 2, v)"
+probe "array_agg" "array_agg(v), array_agg(v + 1), array_agg(v * 2)"
+probe "array_concat_agg" "array_concat_agg([v]), array_concat_agg([v + 1]), array_concat_agg([v * 2])"
+probe "medianTDigest" "medianTDigest(v), medianTDigest(v + 1), medianTDigest(v * 2)"
+probe "anova" "anova(v, (v % 3)::UInt8), anova(v + 1, (v % 3)::UInt8), anova(v * 2, (v % 3)::UInt8)"
 
 # Positive control: the same query shape over exact, merge-order-independent aggregates IS
-# checked. This proves the counter is live under these settings, so the two results above are
-# the gate rejecting the unsafe aggregates and not the oracle ignoring this query shape
+# checked. This proves the counter is live under these settings, so every probe above is
+# the gate rejecting one unsafe spelling and not the oracle ignoring this query shape
 # altogether. Retried until the counter moves, because a single mutation can occasionally
 # break oracle eligibility for an unrelated reason (see 04658).
-before=$after
+before=$(get_counter)
+after=$before
 for _ in $(seq 1 100)
 do
     run_fuzzed "SELECT count(), min(v), max(v) FROM oracle_approx_top WHERE v > 5;"
