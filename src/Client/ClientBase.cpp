@@ -1682,7 +1682,13 @@ void ClientBase::pinOutboundDialect(const String & outbound_query)
         /// `SETTINGS dialect = 'kusto'` on a ClickHouse SQL `INSERT` would have it parsed as KQL. Keep
         /// the transport dialect on the one the text was accepted with; a `SET dialect = ...` is a
         /// statement of its own and still reaches the session.
-        if (client_context->getSettingsRef().get("dialect") != current_query_parse_dialect)
+        ///
+        /// Only that change is undone, which is why it is tracked rather than found by comparing the
+        /// value: the settings of the session also reach the client context between the two points
+        /// (`apply_settings_from_server`, applied after `connect`), and the `dialect` among them is
+        /// the one the server is going to parse with - a settings profile selecting a foreign dialect
+        /// must keep working, not be overridden by the client for every query.
+        if (current_query_settings_changed_dialect)
             client_context->setSetting("dialect", current_query_parse_dialect);
         return;
     }
@@ -3033,6 +3039,7 @@ void ClientBase::processParsedSingleQuery(
         current_query_parse_dialect = client_context->getSettingsRef().get("dialect");
         current_query_parsed_as_json_dialect = client_context->getSettingsRef()[Setting::dialect] == Dialect::clickhouse_json;
         InterpreterSetQuery::applySettingsFromQuery(parsed_query, client_context);
+        current_query_settings_changed_dialect = client_context->getSettingsRef().get("dialect") != current_query_parse_dialect;
         connection->setFormatSettings(getFormatSettings(client_context));
 
         /// Deliberately without a round trip: this runs before every query. The only case that needs

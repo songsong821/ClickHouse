@@ -341,10 +341,11 @@ String AIServerFunctionTransport::renderConversationWithinBudget(const ai::Messa
         {
             truncateToUTF8Boundary(part, budget - CONVERSATION_CUT.size());
             part += CONVERSATION_CUT;
-            budget -= part.size();
             kept.push_back(std::move(part));
             --next;
         }
+        /// Whatever is left of the budget after this message is of no use: everything older than it
+        /// is dropped, so there is nothing left to fit.
         break;
     }
 

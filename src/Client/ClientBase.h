@@ -704,6 +704,11 @@ protected:
     /// outbound transport dialect consistent with the outbound text even if the query changed it.
     Field current_query_parse_dialect;
     bool current_query_parsed_as_json_dialect = false;
+    /// Whether the `SETTINGS` clause of the current query is what changed the `dialect`. Only that
+    /// change is undone for the transport: the `dialect` of the session, which the server sends to
+    /// the client for it to know (`apply_settings_from_server`), is the one the server parses with
+    /// and must not be overridden - see `pinOutboundDialect`.
+    bool current_query_settings_changed_dialect = false;
 
     std::atomic_bool cancelled = false;
     std::atomic_bool cancelled_printed = false;
