@@ -2271,6 +2271,23 @@ static BlockIO executeQueryImpl(
     chassert(internal || CurrentThread::get().tryGetQueryContext());
     chassert(internal || CurrentThread::get().tryGetQueryContext()->getCurrentQueryId() == CurrentThread::getQueryId());
 
+    /// `enable_analyzer` (canonically `allow_experimental_analyzer`) is obsolete since v26.9: the
+    /// analyzer is mandatory and the old query analysis is no longer supported. A change that would
+    /// disable it is refused where the settings constraints are consulted, but a settings profile from
+    /// the server configuration is applied without them, and so is a setting given to
+    /// `clickhouse-local` on the command line, so a value from before the deprecation can still reach
+    /// a query. Ignore it here, the way the value of an obsolete setting is ignored, rather than
+    /// quietly analyzing the query the retired way; `system.warnings` reports the changed obsolete
+    /// setting, pointing at the configuration that still carries it.
+    ///
+    /// A query that another server sent to this one keeps the value it was sent with: a few internal
+    /// code paths still turn the analyzer off for a whole query on the initiator (`EXPLAIN AST`, a
+    /// view read by the old interpreter), and the servers of a cluster have to agree on how one query
+    /// is analyzed.
+    if (!context->getSettingsRef()[Setting::allow_experimental_analyzer]
+        && client_info.query_kind != ClientInfo::QueryKind::SECONDARY_QUERY)
+        context->setSetting("allow_experimental_analyzer", true);
+
     const Settings & settings = context->getSettingsRef();
 
     size_t max_query_size = settings[Setting::max_query_size];
