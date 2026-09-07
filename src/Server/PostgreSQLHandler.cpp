@@ -445,7 +445,6 @@ void PostgreSQLHandler::run()
                     break;
                 case PostgreSQLProtocol::Messaging::FrontMessageType::SYNC:
                     /// `Sync` ends the cycle and produces one `ReadyForQuery`.
-                    ignore_until_sync = false;
                     processSyncQuery();
                     need_ready_for_query = true;
                     message_transport->flush();
@@ -1230,6 +1229,7 @@ void PostgreSQLHandler::processSyncQuery()
         /// (see `attachBindQuery`), so resetting the single bind slot is
         /// equivalent — the next Parse/Bind/Execute pair starts from a clean state.
         prepared_statements_manager.resetBindQuery();
+        ignore_until_sync = false;
     }
     catch (const Exception & e)
     {
@@ -1304,29 +1304,45 @@ SELECT * FROM VALUES(
     (1114, 11, 'timestamp', 0, 0, 'b', 253, 0, 0, 'D')
 ))");
 
-    execute_query(R"(CREATE TEMPORARY VIEW IF NOT EXISTS pg_namespace AS
+    /// Fixed rows are the namespaces PostgreSQL clients expect to always exist.
+    /// The rest are real databases visible to the session user.
+    execute_query(R"(CREATE TEMPORARY VIEW IF NOT EXISTS pg_namespace SQL SECURITY INVOKER AS
 SELECT * FROM VALUES(
     'oid UInt32, nspname String',
     (11,    'pg_catalog'),
     (2200,  'public'),
-    (132,   'information_schema'),
     (11519, 'pg_toast'),
     (99,    'pg_temp_1'),
     (100,   'pg_toast_temp_1')
-))");
+)
+UNION ALL
+SELECT toUInt32(16384 + sipHash64(name) % 4294900000) AS oid, name AS nspname
+FROM system.databases)");
 
-    execute_query(R"(CREATE TEMPORARY VIEW IF NOT EXISTS pg_class AS
+    /// Fixed rows preserve the catalog shape expected by PostgreSQL clients.
+    /// Tables from the current database make the `pg_class` view useful to clients such as psql.
+    execute_query(R"(CREATE TEMPORARY VIEW IF NOT EXISTS pg_class SQL SECURITY INVOKER AS
 SELECT * FROM VALUES(
-    'oid UInt32, relkind String',
-    (1259, 'r'),
-    (2615, 'i'),
-    (1247, 'r'),
-    (3079, 'v'),
-    (1260, 'c'),
-    (1255, 'f'),
-    (3476, 'm'),
-    (3074, 'S')
-))");
+    'oid UInt32, relname String, relnamespace UInt32, relowner UInt32, relam UInt32, relkind String',
+    (1259, '', 11, 10, 2, 'r'),
+    (2615, '', 11, 10, 2, 'i'),
+    (1247, '', 11, 10, 2, 'r'),
+    (3079, '', 11, 10, 2, 'v'),
+    (1260, '', 11, 10, 2, 'c'),
+    (1255, '', 11, 10, 2, 'f'),
+    (3476, '', 11, 10, 2, 'm'),
+    (3074, '', 11, 10, 2, 'S')
+)
+UNION ALL
+SELECT
+    toUInt32(16384 + sipHash64(database, name) % 4294900000) AS oid,
+    name AS relname,
+    toUInt32(16384 + sipHash64(database) % 4294900000) AS relnamespace,
+    toUInt32(10) AS relowner,
+    toUInt32(if(endsWith(engine, 'View'), 0, 2)) AS relam,
+    multiIf(engine = 'MaterializedView', 'm', endsWith(engine, 'View'), 'v', 'r') AS relkind
+FROM system.tables
+WHERE database = currentDatabase() AND NOT is_temporary)");
 
     execute_query(R"(CREATE TEMPORARY VIEW IF NOT EXISTS pg_proc AS
 SELECT * FROM VALUES(
