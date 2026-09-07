@@ -2464,6 +2464,81 @@ struct ConvertImpl
             else
                 return col_to;
         }
+        /// Rescaling a `DateTime64` to a finer scale can leave the representable window: the ticks are an `Int64`,
+        /// so a scale-0 value in the year 2299 has no scale-9 representation at all. Plain `convertDecimals` reports
+        /// that as `DECIMAL_OVERFLOW`, which neither honours `date_time_overflow_behavior` nor lets
+        /// `accurateCastOrNull` report the value as `NULL`, so the rescaling follows the same rules as the other
+        /// conversions to `DateTime64` here: the accurate casts reject an unrepresentable value, and the overflow
+        /// modes throw or clamp to the extreme tick of the target.
+        else if constexpr (std::is_same_v<FromDataType, DataTypeDateTime64>
+                        && std::is_same_v<ToDataType, DataTypeDateTime64>)
+        {
+            using ToFieldType = typename ToDataType::FieldType;
+            using ColVecFrom = typename FromDataType::ColumnType;
+            using ColVecTo = typename ToDataType::ColumnType;
+
+            const ColVecFrom * col_from = checkAndGetColumn<ColVecFrom>(named_from.column.get());
+
+            UInt32 scale = 0;
+            if constexpr (std::is_same_v<Additions, AccurateConvertStrategyAdditions>
+                        || std::is_same_v<Additions, AccurateOrNullConvertStrategyAdditions>)
+                scale = additions.scale;
+            else
+                scale = additions;
+
+            auto col_to = ColVecTo::create(0, scale);
+            const auto & vec_from = col_from->getData();
+            auto & vec_to = col_to->getData();
+            vec_to.resize(input_rows_count);
+
+            ColumnUInt8::MutablePtr col_null_map_to;
+            ColumnUInt8::Container * vec_null_map_to = nullptr;
+            if constexpr (std::is_same_v<Additions, AccurateOrNullConvertStrategyAdditions>)
+            {
+                col_null_map_to = ColumnUInt8::create(input_rows_count, false);
+                vec_null_map_to = &col_null_map_to->getData();
+            }
+
+            const Int64 to_scale_multiplier = DecimalUtils::scaleMultiplier<DateTime64::NativeType>(col_to->getScale());
+            [[maybe_unused]] const Int64 max_ticks = maxTicksForDateTime64(to_scale_multiplier);
+            [[maybe_unused]] const Int64 min_ticks = minTicksForDateTime64(to_scale_multiplier);
+
+            for (size_t i = 0; i < input_rows_count; ++i)
+            {
+                ToFieldType result{};
+                if (tryConvertDecimals<FromDataType, ToDataType>(vec_from[i], col_from->getScale(), col_to->getScale(), result))
+                {
+                    vec_to[i] = result;
+                    continue;
+                }
+
+                if constexpr (std::is_same_v<Additions, AccurateOrNullConvertStrategyAdditions>)
+                {
+                    vec_to[i] = static_cast<ToFieldType>(0);
+                    (*vec_null_map_to)[i] = true;
+                }
+                else if constexpr (std::is_same_v<Additions, AccurateConvertStrategyAdditions>)
+                {
+                    throw Exception(ErrorCodes::CANNOT_CONVERT_TYPE, "Value {} cannot be safely converted into type {}",
+                        vec_from[i].value, ToDataType::family_name);
+                }
+                else if constexpr (date_time_overflow_behavior == FormatSettings::DateTimeOverflowBehavior::Throw)
+                {
+                    throw Exception(ErrorCodes::VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE,
+                        "Value {} is out of bounds of type DateTime64 with scale {}", vec_from[i].value, col_to->getScale());
+                }
+                else
+                {
+                    /// Both the `saturate` and the (default) `ignore` mode clamp instead of failing.
+                    vec_to[i] = static_cast<ToFieldType>(vec_from[i].value > 0 ? max_ticks : min_ticks);
+                }
+            }
+
+            if constexpr (std::is_same_v<Additions, AccurateOrNullConvertStrategyAdditions>)
+                return ColumnNullable::create(std::move(col_to), std::move(col_null_map_to));
+            else
+                return col_to;
+        }
         else if constexpr (IsDataTypeDateOrDateTimeOrTime<FromDataType>
             && std::is_same_v<ToDataType, DataTypeString>)
         {

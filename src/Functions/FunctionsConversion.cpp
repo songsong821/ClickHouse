@@ -715,13 +715,16 @@ FunctionCast::WrapperType FunctionCast::createDecimalWrapper(const DataTypePtr &
                 /// reach the transform - unlike the other branches here, which cannot lose a value and therefore use
                 /// the default mode.
                 if constexpr (IsDataTypeNumber<LeftDataType>
-                    || (std::is_same_v<LeftDataType, DataTypeDate32> && std::is_same_v<RightDataType, DataTypeDateTime64>))
+                    || (std::is_same_v<LeftDataType, DataTypeDate32> && std::is_same_v<RightDataType, DataTypeDateTime64>)
+                    || (std::is_same_v<LeftDataType, DataTypeDateTime64> && std::is_same_v<RightDataType, DataTypeDateTime64>))
                 {
                     /// `accurateCast` rejects an unrepresentable value regardless of the overflow mode, and
                     /// `accurateCastOrNull` reports it as NULL, so neither of them may reach the mode-specific
                     /// transform, which would throw or clamp: the accurate additions check the range up front.
-                    /// `Date32` is the only date or time source that can overflow the target - the others stay
-                    /// inside the representable window of every scale - so it needs the same treatment.
+                    /// `Date32` is the only whole-day or whole-second source that can overflow the target - the
+                    /// others stay inside the representable window of every scale - so it needs the same treatment.
+                    /// A `DateTime64` source needs it as well: widening the scale of a value outside the target's
+                    /// window (a scale-0 value in the year 2299 has no scale-9 representation) overflows the ticks.
                     if (cast_type == CastType::accurate)
                     {
                         AccurateConvertStrategyAdditions additions;

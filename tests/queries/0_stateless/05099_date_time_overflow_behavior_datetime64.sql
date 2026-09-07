@@ -80,3 +80,17 @@ SELECT accurateCast(1.25::Float64, 'DateTime64(1)'), accurateCastOrNull(1.25::Fl
 
 -- The same holds for a block of values, where only the unrepresentable rows become NULL.
 SELECT number, accurateCastOrNull(number * 100000000000::UInt64, 'DateTime64(3)'), accurateCastOrNull(toInt64(number) * 1000000 - 2000000, 'Time64(3)') FROM numbers(5) SETTINGS date_time_overflow_behavior = 'ignore';
+
+-- Widening the scale of a `DateTime64` can leave the representable window of the target as well - a scale-0 value
+-- in the year 2299 has no scale-9 representation - and that is reported through `date_time_overflow_behavior` and
+-- the accurate casts instead of failing with `DECIMAL_OVERFLOW`.
+SELECT CAST(toDateTime64('2299-12-31 00:00:00', 0, 'UTC'), 'DateTime64(9, \'UTC\')') SETTINGS date_time_overflow_behavior = 'saturate';
+SELECT CAST(toDateTime64('2299-12-31 00:00:00', 0, 'UTC'), 'DateTime64(9, \'UTC\')') SETTINGS date_time_overflow_behavior = 'ignore';
+SELECT CAST(toDateTime64('2299-12-31 00:00:00', 0, 'UTC'), 'DateTime64(9, \'UTC\')') SETTINGS date_time_overflow_behavior = 'throw'; -- { serverError VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE }
+SELECT CAST(toDateTime64('1000-01-01 00:00:00', 0, 'UTC'), 'DateTime64(9, \'UTC\')') SETTINGS date_time_overflow_behavior = 'saturate';
+SELECT toDateTime64(toDateTime64('2299-12-31 00:00:00', 0, 'UTC'), 9, 'UTC') SETTINGS date_time_overflow_behavior = 'saturate';
+SELECT accurateCastOrNull(toDateTime64('2299-12-31 00:00:00', 0, 'UTC'), 'DateTime64(9, \'UTC\')'), accurateCastOrNull(toDateTime64('2200-01-01 00:00:00', 0, 'UTC'), 'DateTime64(3, \'UTC\')');
+SELECT accurateCast(toDateTime64('2299-12-31 00:00:00', 0, 'UTC'), 'DateTime64(9, \'UTC\')'); -- { serverError CANNOT_CONVERT_TYPE }
+SELECT accurateCastOrDefault(toDateTime64('2299-12-31 00:00:00', 0, 'UTC'), 'DateTime64(9, \'UTC\')', toDateTime64('2025-01-01 00:00:00', 9, 'UTC'));
+-- The boundaries of the scale-9 window round-trip, and narrowing the scale never overflows.
+SELECT CAST(toDateTime64('2262-04-11 00:00:00', 0, 'UTC'), 'DateTime64(9, \'UTC\')'), CAST(toDateTime64('2262-04-11 00:00:00', 9, 'UTC'), 'DateTime64(0, \'UTC\')');
