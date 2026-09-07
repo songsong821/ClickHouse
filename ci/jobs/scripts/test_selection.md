@@ -6,7 +6,8 @@ retries and all selected/targeted configurations consume the same artifact.
 Missing, mismatched, stale, or incompatible manifests fail selection. No keyword
 or broad-only replacement is used. Changed tests and previous failures remain
 mandatory even when they exceed the temporary ceiling; the manifest reports the
-overflow explicitly.
+overflow explicitly. Changes to CI scripts do not add a fixed smoke-test list
+to the selection.
 
 The query admits regions no wider than 40 lines with at most 150 distinct test
 owners. These are conservative initial limits, not a validated recall claim.
