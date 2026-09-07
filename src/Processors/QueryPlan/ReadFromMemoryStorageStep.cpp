@@ -146,7 +146,8 @@ protected:
                     return std::move(*chunk);
 
                 /// Every row of this block was filtered out; move on to the next block
-                /// without reading the rest of its columns.
+                /// without reading the rest of its columns. `generateFiltered` has already
+                /// reported the block's rows as read.
                 if (isCancelled())
                     return {};
                 continue;
@@ -194,6 +195,12 @@ private:
     /// Applies the filter steps (row-level security filter, PREWHERE) to one stored block.
     /// Returns std::nullopt when no row passes.
     ///
+    /// Reports the read progress explicitly, because the automatic accounting of `ISource` uses
+    /// the returned chunk, which here holds only the rows that passed the filter - and nothing at
+    /// all for a block that the filter eliminated completely. The reported number of rows is the
+    /// number of rows scanned, the same as what `ReadFromMergeTree` reports for its `PREWHERE`,
+    /// so `max_rows_to_read`, read quotas and `SelectedRows` still see the whole scan.
+    ///
     /// The block is assembled with an entry for every requested column, in the requested order,
     /// because the layout `ExpressionActions::execute` produces (outputs first, then the input
     /// columns it did not consume, in their block order) depends on which named entries are
@@ -205,6 +212,9 @@ private:
     {
         const size_t num_src_rows = src.rows();
 
+        /// The size of the columns materialized from this block, accumulated as they are read.
+        size_t num_read_bytes = 0;
+
         Block block;
         {
             Columns filter_columns;
@@ -213,6 +223,9 @@ private:
                 filter_columns.emplace_back(readColumn(src, name_and_type));
 
             fillMissingColumns(filter_columns, num_src_rows, filter->filter_input_columns, filter->filter_input_columns, {}, nullptr);
+
+            for (const auto & column : filter_columns)
+                num_read_bytes += column->byteSize();
 
             auto filter_column_it = filter_columns.begin();
             auto filter_input_it = filter->filter_input_columns.begin();
@@ -247,14 +260,20 @@ private:
 
             ConstantFilterDescription constant_filter(*filter_column);
             if (constant_filter.always_false)
+            {
+                progress(num_src_rows, num_read_bytes);
                 return std::nullopt;
+            }
 
             if (!constant_filter.always_true)
             {
                 FilterDescription filter_description(*filter_column);
                 const size_t num_passed_rows = filter_description.countBytesInFilter();
                 if (num_passed_rows == 0)
+                {
+                    progress(num_src_rows, num_read_bytes);
                     return std::nullopt;
+                }
 
                 if (num_passed_rows != num_rows)
                 {
@@ -300,6 +319,9 @@ private:
 
             fillMissingColumns(deferred_columns, num_src_rows, filter->deferred_columns, filter->deferred_columns, {}, nullptr);
 
+            for (const auto & column : deferred_columns)
+                num_read_bytes += column->byteSize();
+
             auto deferred_it = deferred_columns.begin();
             for (auto & elem : block)
             {
@@ -315,6 +337,7 @@ private:
             chassert(deferred_it == deferred_columns.end());
         }
 
+        progress(num_src_rows, num_read_bytes);
         return Chunk(block.getColumns(), num_rows);
     }
 
