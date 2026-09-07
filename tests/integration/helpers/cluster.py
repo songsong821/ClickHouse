@@ -2771,7 +2771,7 @@ class ClickHouseCluster:
             if detach:
                 # A detached exec is left running, so docker reports `ExitCode: None` for it; a
                 # value here would only mean it happened to finish first, which was not waited for.
-                return exec_id["Id"] if get_exec_id else output
+                return exec_id if get_exec_id else output
 
             exit_code = self.docker_client.api.exec_inspect(exec_id)["ExitCode"]
             if exit_code:
