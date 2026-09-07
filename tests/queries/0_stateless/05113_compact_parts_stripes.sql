@@ -134,7 +134,7 @@ SETTINGS max_threads = 1, log_comment = '05113 single buffer, four columns';
 SYSTEM FLUSH LOGS query_log;
 
 SELECT log_comment, ProfileEvents['CreatedReadBufferOrdinary'] FROM system.query_log
-WHERE current_database = currentDatabase() AND type = 'QueryFinish' AND log_comment LIKE '05113%'
+WHERE current_database = currentDatabase() AND type = 'QueryFinish' AND log_comment LIKE '05113 %'
 ORDER BY event_time_microseconds;
 
 DROP TABLE t_compact_stripes;
