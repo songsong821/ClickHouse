@@ -16,9 +16,14 @@ namespace DB
 class StorageTableProxy final : public StorageProxy
 {
 public:
-    StorageTableProxy(const StorageID & table_id_, std::function<StoragePtr()> get_nested_, ColumnsDescription cached_columns)
+    StorageTableProxy(
+        const StorageID & table_id_,
+        std::function<StoragePtr()> get_nested_,
+        ColumnsDescription cached_columns,
+        std::function<bool()> may_need_database_rename_guard_)
         : StorageProxy(table_id_)
         , get_nested(std::move(get_nested_))
+        , may_need_database_rename_guard(std::move(may_need_database_rename_guard_))
         , log(getLogger("StorageTableProxy (" + table_id_.getFullTableName() + ")"))
     {
         StorageInMemoryMetadata cached_metadata;
@@ -202,11 +207,29 @@ public:
         getNested()->checkTableCanBeRenamed(new_name);
     }
 
-    /// Same reasoning as `checkTableCanBeRenamed`: materialize the nested storage so a
-    /// `RENAME DATABASE` cannot bypass the nested-storage guard (the `leader_election`
-    /// rejection) for a lazily loaded on-disk table.
+    /// Same reasoning as `checkTableCanBeRenamed`: the nested-storage guard (the
+    /// `leader_election` rejection) must not be bypassed for a lazily loaded on-disk table.
+    /// Materializing unconditionally is too blunt here, though: unlike `checkTableCanBeRenamed`,
+    /// which runs for the single table being renamed, `RENAME DATABASE` calls this for *every*
+    /// table, so it would run the load factory and `startup()` across the whole database. An
+    /// otherwise-allowed rename would then depend on each unrelated table starting successfully
+    /// — an unloaded `ReplicatedMergeTree` would have to reach Keeper — and a rename ultimately
+    /// rejected because of one `leader_election` table would still have started every table
+    /// before it.
+    ///
+    /// `IStorage::checkTableCanBeRenamedByDatabaseRename` is a no-op everywhere except
+    /// `StorageMergeTree`, where it only throws under `leader_election`, so the settings-only
+    /// predicate below decides it exactly: it resolves `leader_election` the same way the
+    /// storage would — from the table's own `CREATE` query, falling back to the server-wide
+    /// `merge_tree` default — and when it is off the nested call is a no-op by construction,
+    /// so skipping it changes nothing.
     void checkTableCanBeRenamedByDatabaseRename() const override
     {
+        {
+            std::lock_guard lock{nested_mutex};
+            if (!nested && !may_need_database_rename_guard())
+                return;
+        }
         getNested()->checkTableCanBeRenamedByDatabaseRename();
     }
 
@@ -269,6 +292,11 @@ private:
     mutable std::function<StoragePtr()> get_nested; /// Factory that creates the real storage. Cleared after first use.
     mutable StoragePtr nested; /// The materialized real storage, set on first access.
     bool drop_load_failed = false; /// `drop()` could not load the lazy table; force fail-closed cleanup decision.
+    /// Storage-free answer to "could `checkTableCanBeRenamedByDatabaseRename` reject this
+    /// table?", resolved from the `CREATE` query's settings and the server-wide `merge_tree`
+    /// defaults. Lets `RENAME DATABASE` skip materializing tables that cannot carry the
+    /// `leader_election` guard. Never `nullptr`.
+    std::function<bool()> may_need_database_rename_guard;
     LoggerPtr log;
 };
 

@@ -4,6 +4,7 @@
 #include <Core/Defines.h>
 #include <Core/ServerSettings.h>
 #include <Core/Settings.h>
+#include <Core/SettingsFields.h>
 #include <Core/UUID.h>
 #include <Databases/DDLDependencyVisitor.h>
 #include <Databases/DDLLoadingDependencyVisitor.h>
@@ -60,6 +61,7 @@ namespace Setting
 namespace MergeTreeSetting
 {
     extern const MergeTreeSettingsString storage_policy;
+    extern const MergeTreeSettingsBool leader_election;
 }
 
 namespace ServerSetting
@@ -525,8 +527,34 @@ void DatabaseOrdinary::loadTableLazy(
         return table;
     };
 
+    /// `RENAME DATABASE` asks every table whether it forbids the rename, via
+    /// `checkTableCanBeRenamedByDatabaseRename`. That hook is overridden only by
+    /// `StorageMergeTree` and only throws under `leader_election`, so answering it for a lazy
+    /// table needs nothing from the storage — only the effective value of that one `MergeTree`
+    /// setting. Read it from the `CREATE` query here, which costs nothing, and leave the
+    /// server-wide `merge_tree` default to be consulted at check time so a config reload that
+    /// turns the default on is still honoured. Without this the proxy would have to
+    /// materialize (and `startup()`) every table in the database on each rename.
+    std::optional<bool> leader_election_in_query;
+    if (query.storage && query.storage->settings)
+    {
+        for (const auto & change : query.storage->settings->changes)
+        {
+            if (change.name == "leader_election")
+                leader_election_in_query = static_cast<bool>(SettingFieldBool{change.value});
+        }
+    }
+
+    auto may_need_database_rename_guard
+        = [leader_election_in_query, global_context = local_context->getGlobalContext()]
+    {
+        if (leader_election_in_query.has_value())
+            return *leader_election_in_query;
+        return static_cast<bool>(global_context->getMergeTreeSettings()[MergeTreeSetting::leader_election]);
+    };
+
     auto proxy = std::make_shared<StorageTableProxy>(
-        table_id, std::move(get_nested), std::move(columns));
+        table_id, std::move(get_nested), std::move(columns), std::move(may_need_database_rename_guard));
 
     attachTable(local_context, query.getTable(), proxy, table_data_path);
 }
