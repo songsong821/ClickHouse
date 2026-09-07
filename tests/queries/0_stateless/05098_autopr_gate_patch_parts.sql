@@ -27,6 +27,10 @@ SET enable_parallel_replicas = 1, automatic_parallel_replicas_mode = 1, parallel
     automatic_parallel_replicas_min_bytes_per_replica = 1048576,
     cluster_for_parallel_replicas = 'test_cluster_one_shard_three_replicas_localhost';
 SET enable_analyzer = 1;
+-- The gate declines to size any read while the range-split fault injection is armed, and it checks
+-- that before the patch-parts guard under test - so a randomized non-zero value would make this pass
+-- even with that guard removed. `clickhouse-test` randomizes it, so pin it off.
+SET merge_tree_read_split_ranges_into_intersecting_and_non_intersecting_injection_probability = 0;
 
 -- Reads `val`, the column the patch holds, so the patch part is actually read.
 SELECT key, val FROM t_autopr_patch FORMAT Null SETTINGS log_comment = '05098_autopr_gate_patch_parts';

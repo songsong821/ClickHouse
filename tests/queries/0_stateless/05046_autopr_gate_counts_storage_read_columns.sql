@@ -21,6 +21,10 @@ SET max_threads=4;
 SET max_bytes_before_external_group_by=0, max_bytes_ratio_before_external_group_by=0;
 SET automatic_parallel_replicas_min_bytes_per_replica=1048576;
 SET optimize_move_to_prewhere=1;
+-- The gate declines to size any read while the range-split fault injection is armed, which happens
+-- before it accounts for columns at all - so a randomized non-zero value would make both cases below
+-- pass even with the accounting under test removed. `clickhouse-test` randomizes it, so pin it off.
+SET merge_tree_read_split_ranges_into_intersecting_and_non_intersecting_injection_probability=0;
 
 -- The read is worth distributing because of the PREWHERE column, so the plan is built and statistics
 -- are collected. Sizing this read by `small` alone would give 8 KB per replica and reject it.
