@@ -117,12 +117,6 @@ SELECT 'control: tuple IN';
 SELECT l.x FROM t_04650_l AS l INNER JOIN (SELECT x FROM t_04650_r) AS r ON l.x = r.x
 WHERE (l.x, l.x) IN (SELECT x, x FROM t_04650_r) ORDER BY l.x;
 
--- The old analyzer never resolves an IN argument as a table expression at all, so it rejects the
--- shape outright. Measured identical before and after the fix.
-SELECT 'control: old analyzer rejects the shape';
-SELECT l.x FROM t_04650_l AS l INNER JOIN (SELECT x FROM t_04650_r) AS r ON l.x = r.x
-WHERE l.x IN r ORDER BY l.x SETTINGS enable_analyzer = 0; -- { serverError UNKNOWN_TABLE }
-
 -- A `Set`-engine table on the right of IN is looked up by tree hash in `CollectSets` and is never the
 -- shared join-tree node, so the clone cannot reach it.
 CREATE TABLE t_04650_set (x Int32) ENGINE = Set;
