@@ -18,6 +18,7 @@
 #include <Common/SignalHandlers.h>
 #include <Common/Stopwatch.h>
 #include <Common/atomicRename.h>
+#include <Common/ZooKeeper/ZooKeeperCommon.h>
 #include <Common/scope_guard_safe.h>
 
 #include <Interpreters/AsynchronousInsertQueue.h>
@@ -2947,6 +2948,13 @@ void collectTablesInQuery(const ASTPtr & ast, CollectTablesData & data, std::uno
 
 static void reattachTablesUsedInQuery(const ASTPtr & query, ContextMutablePtr context)
 {
+    /// Both halves of this hook can reach Keeper, and neither goes through an interpreter that would have
+    /// named the component itself: the preflight probes a database directly (`checkMetadataFilenameAvailability`,
+    /// `isTableExist`, ...), and the internal `DETACH`/`ATTACH` pair runs before the statement's own
+    /// interpreter does. With `zookeeper_enforce_component_name` on, an unnamed request is a `LOGICAL_ERROR`,
+    /// so name the whole hook here; the nested guards the internal statements set restore this one on exit.
+    auto component_guard = Coordination::setCurrentComponent("reattachTablesUsedInQuery");
+
     CollectTablesData data(context);
     /// The aliases of the outermost scope — the one a statement that is not a `SELECT` carries its
     /// expressions in (`ALTER TABLE t DELETE WHERE ...`, ...). For a `SELECT` this collects nothing, because
