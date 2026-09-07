@@ -652,6 +652,15 @@ TEST(MergeRuntimeFiltersTransform, ForwardModeSingleInputPassesThrough)
 
 TEST(MergeRuntimeFiltersTransform, PayloadRetentionIndependentOfInputCount)
 {
+#if defined(ADDRESS_SANITIZER) || defined(MEMORY_SANITIZER) || defined(THREAD_SANITIZER)
+    /// `BloomFilter` holds its bits in a `std::vector`, so a payload reaches `MemoryTracker` only
+    /// through the global `operator new` in `AllocationInterceptors.cpp`. These sanitizers ship
+    /// their own `operator new`, force-loaded ahead of `libclickhouse_new_delete.a`. The tracking
+    /// one is never linked in, so every payload is invisible and the peak reads 0. This is why
+    /// `00877_memory_limit_for_new_delete.sql` is tagged `no-asan`, `no-msan` and `no-tsan`.
+    /// UBSan keeps the tracking `operator new`, so it still runs there.
+    GTEST_SKIP() << "Payload accounting needs the tracking `operator new`, which asan/msan/tsan replace";
+#else
     /// The transform must merge each arriving state immediately instead of retaining the
     /// serialized payloads: with equally sized bloom states, the peak allocation of the merge
     /// must not grow with the input count. Retaining (or copying) the payloads would add
@@ -714,4 +723,5 @@ TEST(MergeRuntimeFiltersTransform, PayloadRetentionIndependentOfInputCount)
     EXPECT_GE(peak_2, static_cast<Int64>(payload));
     /// 30 extra inputs of 2 MiB each would add ~60 MiB if retained; allow a few payloads of noise.
     EXPECT_LE(peak_32, peak_2 + static_cast<Int64>(3 * payload));
+#endif
 }
