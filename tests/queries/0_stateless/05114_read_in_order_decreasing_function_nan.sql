@@ -15,7 +15,18 @@ SELECT 'under LIMIT, where the wrong order also returns wrong rows';
 SELECT negate(x) AS n FROM t_read_in_order_nan ORDER BY n LIMIT 2;
 SELECT negate(x) AS n FROM t_read_in_order_nan ORDER BY n LIMIT 2 SETTINGS optimize_read_in_order = 0;
 
-SELECT 'the mirror order, which a backward read satisfies exactly';
+-- The order a backward read satisfies exactly: the values ascend and the NaNs come first, which is where
+-- a backward read of the key puts them. The old guard rejected every `nulls_direction = -1` request for a
+-- float key, so this one was sorted; it is now read in order, and the prefix says so.
+SELECT 'the order a backward read satisfies exactly';
+SELECT negate(x) AS n FROM t_read_in_order_nan ORDER BY n ASC NULLS FIRST;
+SELECT negate(x) AS n FROM t_read_in_order_nan ORDER BY n ASC NULLS FIRST SETTINGS optimize_read_in_order = 0;
+SELECT count() > 0 AS read_in_order_used FROM (
+    EXPLAIN actions = 1 SELECT negate(x) AS n FROM t_read_in_order_nan ORDER BY n ASC NULLS FIRST
+    SETTINGS optimize_read_in_order = 1)
+WHERE explain LIKE '%Prefix sort description%';
+
+SELECT 'and the opposite one, which neither read direction satisfies';
 SELECT negate(x) AS n FROM t_read_in_order_nan ORDER BY n DESC NULLS FIRST;
 SELECT negate(x) AS n FROM t_read_in_order_nan ORDER BY n DESC NULLS FIRST SETTINGS optimize_read_in_order = 0;
 

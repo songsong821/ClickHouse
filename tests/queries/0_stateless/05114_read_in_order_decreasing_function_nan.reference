@@ -12,7 +12,17 @@ under LIMIT, where the wrong order also returns wrong rows
 -2
 -3
 -2
-the mirror order, which a backward read satisfies exactly
+the order a backward read satisfies exactly
+nan
+-3
+-2
+-1
+nan
+-3
+-2
+-1
+1
+and the opposite one, which neither read direction satisfies
 nan
 -1
 -2
