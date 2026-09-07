@@ -9,6 +9,7 @@
 
 #include <Common/Exception.h>
 #include <Common/ProfileEvents.h>
+#include <Common/LockMemoryExceptionInThread.h>
 #include <Common/logger_useful.h>
 #include <Common/SipHash.h>
 #include <Common/ZooKeeper/IKeeper.h>
@@ -190,6 +191,11 @@ KeeperMoveResult moveFileBetweenDisks(
     LoggerPtr logger,
     const KeeperContextPtr & keeper_context)
 {
+    /// This is the only work that frees the local disk, and the Raft write path that fills it is
+    /// itself exempt from memory limit exceptions. Refusing the mover under memory pressure turns
+    /// that pressure into a full disk and a fail-stop abort, so it is exempt too.
+    LockMemoryExceptionInThread blocker{VariableContext::Global};
+
     LOG_TRACE(logger, "Moving {} to {} from disk {} to disk {}", path_from, path_to, disk_from->getName(), disk_to->getName());
     const auto from_path = fs::path(path_from);
     const auto tmp_file_name = markerPathForDestination(path_to);
