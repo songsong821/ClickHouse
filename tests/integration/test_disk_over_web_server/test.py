@@ -13,7 +13,6 @@ def cluster():
             "node1",
             main_configs=["configs/storage_conf.xml", "configs/no_async_load.xml"],
             with_nginx=True,
-            use_old_analyzer=True,
         )
         cluster.add_instance(
             "node2",
@@ -21,14 +20,12 @@ def cluster():
             with_nginx=True,
             stay_alive=True,
             with_zookeeper=True,
-            use_old_analyzer=True,
         )
         cluster.add_instance(
             "node3",
             main_configs=["configs/storage_conf_web.xml", "configs/no_async_load.xml"],
             with_nginx=True,
             with_zookeeper=True,
-            use_old_analyzer=True,
         )
 
         cluster.add_instance(
@@ -44,7 +41,6 @@ def cluster():
             "node5",
             main_configs=["configs/storage_conf.xml", "configs/no_async_load.xml"],
             with_nginx=True,
-            use_old_analyzer=True,
         )
 
         cluster.start()

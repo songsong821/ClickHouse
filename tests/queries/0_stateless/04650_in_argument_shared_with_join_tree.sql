@@ -1,4 +1,4 @@
--- Tags: no-old-analyzer, shard, no-parallel-replicas
+-- Tags: shard, no-parallel-replicas
 -- The fix lives in the analyzer; the old analyzer never resolves an IN argument as a table
 -- expression at all, so it rejects these shapes outright and the bug cannot manifest there.
 

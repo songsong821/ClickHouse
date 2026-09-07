@@ -16,7 +16,6 @@ current = cluster.add_instance(
 # Here analyzer is disabled by default
 backward = cluster.add_instance(
     "backward",
-    use_old_analyzer=True,
     main_configs=["configs/remote_servers.xml"],
     image="clickhouse/clickhouse-server",
     tag=CLICKHOUSE_MAX_VERSION_WITH_ANALYZER_DISABLED_BY_DEFAULT,
