@@ -210,9 +210,6 @@ public:
         if (request.GetMethod() == Azure::Core::Http::HttpMethod::Head)
         {
             ++head_requests;
-            /// The blob is gone (another replica deleted it), or the endpoint is having a bad day.
-            if (fail_head)
-                return notFound();
             auto properties = std::make_unique<Azure::Core::Http::RawResponse>(1, 1, Azure::Core::Http::HttpStatusCode::Ok, "OK");
             properties->SetHeader("Content-Length", std::to_string(blob_size));
             if (send_etag)
@@ -320,23 +317,11 @@ public:
     /// of a sequence of requests, such as between the copy and the delete of a move.
     void overwriteObject(const std::string & new_etag) { overwritten_etag = new_etag; }
 
-    /// From now on the endpoint answers every `HEAD` with `404 Not Found`.
-    void failHeadRequests() { fail_head = true; }
-
 private:
     static std::unique_ptr<Azure::Core::Http::RawResponse> preconditionFailed()
     {
         auto failure = std::make_unique<Azure::Core::Http::RawResponse>(
             1, 1, Azure::Core::Http::HttpStatusCode::PreconditionFailed, "The condition specified using HTTP conditional header(s) is not met.");
-        failure->SetHeader("Content-Length", "0");
-        failure->SetBodyStream(std::make_unique<LyingBodyStream>(std::vector<uint8_t>{}, 0));
-        return failure;
-    }
-
-    static std::unique_ptr<Azure::Core::Http::RawResponse> notFound()
-    {
-        auto failure = std::make_unique<Azure::Core::Http::RawResponse>(
-            1, 1, Azure::Core::Http::HttpStatusCode::NotFound, "The specified blob does not exist.");
         failure->SetHeader("Content-Length", "0");
         failure->SetBodyStream(std::make_unique<LyingBodyStream>(std::vector<uint8_t>{}, 0));
         return failure;
@@ -358,7 +343,6 @@ private:
     std::vector<std::string> delete_if_match_headers;
     std::optional<std::string> overwritten_etag;
     size_t head_requests = 0;
-    bool fail_head = false;
 };
 
 /// Reads a blob from an endpoint that answers every ranged request with at most
@@ -411,7 +395,8 @@ std::string readWithoutRightBound(
     size_t max_read_retries = 1,
     std::optional<size_t> served_size = {},
     std::optional<size_t> known_object_size = {},
-    std::optional<size_t> blob_size_after_first = {})
+    std::optional<size_t> blob_size_after_first = {},
+    const std::string & expected_etag = {})
 {
     Azure::Storage::Blobs::BlobClientOptions client_options;
     client_options.Retry.MaxRetries = 0;
@@ -436,7 +421,8 @@ std::string readWithoutRightBound(
         /* read_until_position */ 0,
         /* blob_storage_log */ {},
         /* container_for_logging */ {},
-        known_object_size);
+        known_object_size,
+        expected_etag);
 
     std::string result;
     DB::readStringUntilEOF(result, buffer);
@@ -517,7 +503,11 @@ std::unique_ptr<DB::ReadBufferFromAzureBlobStorage> makeFreshBufferPinnedToETag(
 /// answers every request with `200 OK` and the object from byte 0. `known_object_size` is the size
 /// of the object as it is known locally, from a listing or a `HEAD`, before any read.
 std::unique_ptr<DB::ReadBufferFromAzureBlobStorage> makeFreshBuffer(
-    size_t max_response_size, size_t blob_size, bool ignore_range = false, std::optional<size_t> known_object_size = {})
+    size_t max_response_size,
+    size_t blob_size,
+    bool ignore_range = false,
+    std::optional<size_t> known_object_size = {},
+    const std::string & expected_etag = {})
 {
     Azure::Storage::Blobs::BlobClientOptions client_options;
     client_options.Retry.MaxRetries = 0;
@@ -538,7 +528,8 @@ std::unique_ptr<DB::ReadBufferFromAzureBlobStorage> makeFreshBuffer(
         /* read_until_position */ 0,
         /* blob_storage_log */ DB::BlobStorageLogWriterPtr{},
         /* container_for_logging */ std::string{},
-        known_object_size);
+        known_object_size,
+        expected_etag);
 }
 
 /// Copies a blob of `blob_size` bytes through `copyAzureBlobStorageFile` with the native copy
@@ -968,13 +959,16 @@ TEST(AzureReadBigAt, OnFreshBuffer)
     assertCountsUpFromZero(destination);
 }
 
-/// The object is known locally to be 100 bytes long, but the endpoint holds 128 bytes and answers a
-/// positioned read of bytes 96..111 with all 16 of them (`206 bytes 96-111/128`). Only the 4 bytes
-/// before the locally known end of the object exist, so only those may reach the caller: the local
-/// size is as authoritative for a positioned read as it is for a sequential one.
+/// The object is known locally to be 100 bytes long and the read is pinned to the generation that
+/// size was measured on, but the endpoint holds 128 bytes and answers a positioned read of bytes
+/// 96..111 with all 16 of them (`206 bytes 96-111/128`). Only the 4 bytes before the locally known
+/// end of the object exist, so only those may reach the caller: for a pinned read the local size
+/// bounds a positioned read as much as a sequential one.
 TEST(AzureReadBigAt, OverlongResponseCrossingKnownEndOfObject)
 {
-    auto buffer = makeFreshBuffer(/* max_response_size */ 128, /* blob_size */ 128, /* ignore_range */ false, /* known_object_size */ 100);
+    auto buffer = makeFreshBuffer(
+        /* max_response_size */ 128, /* blob_size */ 128, /* ignore_range */ false, /* known_object_size */ 100,
+        /* expected_etag */ ETagBehaviour::first_generation_bare);
 
     std::string destination(16, '\xAB');
     size_t bytes_read = 0;
@@ -988,11 +982,13 @@ TEST(AzureReadBigAt, OverlongResponseCrossingKnownEndOfObject)
         ASSERT_EQ(static_cast<uint8_t>(destination[i]), 0xAB) << "at position " << i;
 }
 
-/// A positioned read that starts at or past the locally known end of the object is the end of the
-/// file, whatever the endpoint would be willing to serve there.
+/// A positioned pinned read that starts at or past the locally known end of the object is the end
+/// of the file, whatever the endpoint would be willing to serve there.
 TEST(AzureReadBigAt, StartsPastKnownEndOfObject)
 {
-    auto buffer = makeFreshBuffer(/* max_response_size */ 128, /* blob_size */ 128, /* ignore_range */ false, /* known_object_size */ 100);
+    auto buffer = makeFreshBuffer(
+        /* max_response_size */ 128, /* blob_size */ 128, /* ignore_range */ false, /* known_object_size */ 100,
+        /* expected_etag */ ETagBehaviour::first_generation_bare);
 
     std::string destination(16, '\xAB');
     size_t bytes_read = 16;
@@ -1007,7 +1003,9 @@ TEST(AzureReadBigAt, StartsPastKnownEndOfObject)
 /// A positioned read that stays within the locally known object is not affected by the bound.
 TEST(AzureReadBigAt, WithinKnownObject)
 {
-    auto buffer = makeFreshBuffer(/* max_response_size */ 128, /* blob_size */ 128, /* ignore_range */ false, /* known_object_size */ 100);
+    auto buffer = makeFreshBuffer(
+        /* max_response_size */ 128, /* blob_size */ 128, /* ignore_range */ false, /* known_object_size */ 100,
+        /* expected_etag */ ETagBehaviour::first_generation_bare);
 
     std::string destination(16, '\0');
     size_t bytes_read = 0;
@@ -1183,8 +1181,9 @@ TEST(AzureReadUntilPosition, RangeIgnoredOnReopen)
 }
 
 /// The size of the object is known locally, from the `LIST` or `HEAD` that produced the
-/// `StoredObject`, while the endpoint caps every open-ended request to 40 bytes and claims in its
-/// `Content-Range` that the whole object is 40 bytes long. The locally known size wins: the reader
+/// `StoredObject`, and the read is pinned to the generation it was measured on, while the endpoint
+/// caps every open-ended request to 40 bytes and claims in its `Content-Range` that the whole
+/// object is 40 bytes long. The locally known size wins: the reader
 /// must reopen the download and reassemble all 100 bytes instead of accepting the size that the
 /// very response it is validating advertises.
 TEST(AzureReadWithoutRightBound, KnownSizeShortFirstResponse)
@@ -1192,7 +1191,8 @@ TEST(AzureReadWithoutRightBound, KnownSizeShortFirstResponse)
     std::string data;
     ASSERT_NO_THROW(data = readWithoutRightBound(
         /* max_response_size */ 40, /* blob_size */ 40, /* buffer_size */ 64, /* reported_length */ 40,
-        /* max_read_retries */ 4, /* served_size */ 100, /* known_object_size */ 100));
+        /* max_read_retries */ 4, /* served_size */ 100, /* known_object_size */ 100,
+        /* blob_size_after_first */ std::nullopt, /* expected_etag */ ETagBehaviour::first_generation_bare));
 
     ASSERT_EQ(data.size(), static_cast<size_t>(100));
     assertCountsUpFromZero(data);
@@ -1207,7 +1207,8 @@ TEST(AzureReadWithoutRightBound, KnownSizeTruncatedObject)
     {
         readWithoutRightBound(
             /* max_response_size */ 40, /* blob_size */ 40, /* buffer_size */ 64, /* reported_length */ 40,
-            /* max_read_retries */ 3, /* served_size */ 40, /* known_object_size */ 100);
+            /* max_read_retries */ 3, /* served_size */ 40, /* known_object_size */ 100,
+            /* blob_size_after_first */ std::nullopt, /* expected_etag */ ETagBehaviour::first_generation_bare);
         FAIL() << "Expected an exception on a response that ends before the locally known size of the object";
     }
     catch (const DB::Exception & e)
@@ -1765,6 +1766,67 @@ TEST(AzureReadWithoutRightBound, ObjectOfUnknownSize)
     assertCountsUpFromZero(data);
 }
 
+/// A size measured before the read - by the `LIST` or the `HEAD` that produced the `StoredObject` -
+/// describes the generation of the object that was measured. It may end the read only when the read
+/// is pinned to that same generation with `If-Match`. A caller that deliberately leaves the read
+/// unpinned (a plain object-storage read with `s3_validate_etag_on_read = 0`) asked to read whatever
+/// generation exists now, only without protection against a torn read, so a blob that grew from 100
+/// to 200 bytes between the measurement and the `GET` must be delivered whole and not cut back to
+/// the stale 100 bytes.
+TEST(AzureStaleSizeWithoutPinning, UnpinnedReadIsNotCutBackToTheStaleSize)
+{
+    auto transport = std::make_shared<MisbehavingRangeTransport>(
+        /* max_response_size */ 200, /* served_size */ 200, /* blob_size */ 200, /* send_etag */ true);
+    auto object_storage = objectStorageOver(transport);
+
+    DB::StoredObject object("blob", /* local_path */ "", /* bytes_size */ 100);
+    ASSERT_TRUE(object.etag.empty());
+    auto buffer = object_storage->readObject(object, DB::ReadSettings{});
+
+    std::string data;
+    ASSERT_NO_THROW(DB::readStringUntilEOF(data, *buffer));
+    ASSERT_EQ(data.size(), static_cast<size_t>(200));
+    assertCountsUpFromZero(data);
+}
+
+/// The same for a positioned read: the bytes past the stale size belong to the object the endpoint
+/// holds now, and the read that is not pinned to the older generation must get them.
+TEST(AzureStaleSizeWithoutPinning, UnpinnedPositionedReadPastTheStaleSize)
+{
+    auto transport = std::make_shared<MisbehavingRangeTransport>(
+        /* max_response_size */ 200, /* served_size */ 200, /* blob_size */ 200, /* send_etag */ true);
+    auto object_storage = objectStorageOver(transport);
+
+    DB::StoredObject object("blob", /* local_path */ "", /* bytes_size */ 100);
+    auto buffer = object_storage->readObject(object, DB::ReadSettings{});
+
+    std::string data(50, '\0');
+    ASSERT_EQ(buffer->readBigAt(data.data(), data.size(), /* range_begin */ 150, /* progress_callback */ nullptr), static_cast<size_t>(50));
+    for (size_t i = 0; i < data.size(); ++i)
+        ASSERT_EQ(static_cast<unsigned char>(data[i]), static_cast<unsigned char>((150 + i) % 256)) << "at " << i;
+}
+
+/// A read that is pinned to the generation the size was measured on keeps the size as a hard end of
+/// the data: an endpoint answering with more data than that generation holds cannot push bytes past
+/// the end of the object to the caller.
+TEST(AzureStaleSizeWithoutPinning, PinnedReadStopsAtTheSizeOfItsGeneration)
+{
+    auto transport = std::make_shared<MisbehavingRangeTransport>(
+        /* max_response_size */ 200, /* served_size */ 200, /* blob_size */ 200, /* send_etag */ true,
+        /* reported_length */ std::nullopt, /* ignore_range */ false,
+        ETagBehaviour{.etag = ETagBehaviour::first_generation, .etag_after_first = "", .honour_if_match = true});
+    auto object_storage = objectStorageOver(transport);
+
+    DB::StoredObject object("blob", /* local_path */ "", /* bytes_size */ 100);
+    object.etag = ETagBehaviour::first_generation_bare;
+    auto buffer = object_storage->readObject(object, DB::ReadSettings{});
+
+    std::string data;
+    ASSERT_NO_THROW(DB::readStringUntilEOF(data, *buffer));
+    ASSERT_EQ(data.size(), static_cast<size_t>(100));
+    assertCountsUpFromZero(data);
+}
+
 namespace
 {
 /// The connection of a backup kept at the shared endpoint `transport`. The endpoint is addressed with
@@ -2034,23 +2096,27 @@ TEST(AzureIngestedGeneration, AzureMoveAndDeleteNeedIt)
     ASSERT_FALSE(DB::afterProcessingNeedsIngestedGeneration(DB::ObjectStorageType::S3, DB::ObjectStorageQueueAction::DELETE));
 }
 
-/// The listing reported the generation: it is kept as is, and the endpoint is not asked again.
+/// The listing reported the generation: it is used as is, and the endpoint is not asked again.
 TEST(AzureIngestedGeneration, ListingWithETagNeedsNoHead)
 {
     auto transport = std::make_shared<MisbehavingRangeTransport>(100, 100, 100, /* send_etag */ true);
     auto object_storage = objectStorageOver(transport);
 
     auto entry = listingEntry(ETagBehaviour::first_generation_bare);
-    ASSERT_TRUE(DB::learnIngestedGeneration(*object_storage, entry));
+    ASSERT_TRUE(DB::useIngestedGenerationOfTheListedObject(entry));
+    ASSERT_TRUE(entry.require_read_pinned_to_generation);
     ASSERT_EQ(entry.metadata->etag, ETagBehaviour::first_generation_bare);
     ASSERT_EQ(entry.metadata->size_bytes, 100u);
     ASSERT_EQ(transport->headRequests(), 0u);
 }
 
-/// `ListBlobs` omitted the `Etag` element: one `HEAD` supplies the generation, together with the
-/// size of that same generation, and the read pinned to it (the way `StorageObjectStorageSource`
-/// pins every read to the generation of its `ObjectInfo`) serves exactly that generation.
-TEST(AzureIngestedGeneration, ListingWithoutETagLearnedFromHead)
+/// `ListBlobs` omitted the `Etag` element. The generation is not recovered with a `HEAD`: that
+/// `HEAD` would run after the path was listed and claimed in Keeper, so it could name a generation
+/// `B` that replaced the listed generation `A` in the meantime, and the queue - which keys its
+/// state by path - would ingest, move or delete `B` and mark the path processed, skipping `A`
+/// forever. The generation stays unknown, which the source turns into a failed file, and nothing
+/// is asked of the endpoint at all.
+TEST(AzureIngestedGeneration, ListingWithoutETagIsNotRecoveredByAHead)
 {
     auto transport = std::make_shared<MisbehavingRangeTransport>(
         100, 100, 100, /* send_etag */ true, /* reported_length */ std::nullopt, /* ignore_range */ false,
@@ -2058,10 +2124,23 @@ TEST(AzureIngestedGeneration, ListingWithoutETagLearnedFromHead)
     auto object_storage = objectStorageOver(transport);
 
     auto entry = listingEntry("");
-    ASSERT_TRUE(DB::learnIngestedGeneration(*object_storage, entry));
-    ASSERT_EQ(entry.metadata->etag, ETagBehaviour::first_generation);
-    ASSERT_EQ(entry.metadata->size_bytes, 100u);
-    ASSERT_EQ(transport->headRequests(), 1u);
+    ASSERT_FALSE(DB::useIngestedGenerationOfTheListedObject(entry));
+    ASSERT_FALSE(entry.require_read_pinned_to_generation);
+    ASSERT_TRUE(entry.metadata->etag.empty());
+    ASSERT_EQ(transport->headRequests(), 0u);
+}
+
+/// The generation the listing reported is served by the read pinned to it (the way
+/// `StorageObjectStorageSource` pins every read to the generation of its `ObjectInfo`).
+TEST(AzureIngestedGeneration, ListedGenerationIsTheOneRead)
+{
+    auto transport = std::make_shared<MisbehavingRangeTransport>(
+        100, 100, 100, /* send_etag */ true, /* reported_length */ std::nullopt, /* ignore_range */ false,
+        ETagBehaviour{.etag = ETagBehaviour::first_generation, .etag_after_first = "", .honour_if_match = true});
+    auto object_storage = objectStorageOver(transport);
+
+    auto entry = listingEntry(ETagBehaviour::first_generation_bare);
+    ASSERT_TRUE(DB::useIngestedGenerationOfTheListedObject(entry));
 
     DB::StoredObject object("blob", /* local_path */ "", entry.metadata->size_bytes);
     object.etag = entry.metadata->etag;
@@ -2073,19 +2152,20 @@ TEST(AzureIngestedGeneration, ListingWithoutETagLearnedFromHead)
     assertCountsUpFromZero(data);
 }
 
-/// The blob is overwritten between the `HEAD` that supplied the generation and the read: the read
+/// The blob is overwritten between the listing that reported the generation and the read: the read
 /// pinned to that generation is refused by the endpoint, so the generation the post-processing
 /// would later act on is never one that was not ingested.
-TEST(AzureIngestedGeneration, OverwrittenBetweenHeadAndRead)
+TEST(AzureIngestedGeneration, OverwrittenBetweenListingAndRead)
 {
     auto transport = std::make_shared<MisbehavingRangeTransport>(
         100, 100, 100, /* send_etag */ true, /* reported_length */ std::nullopt, /* ignore_range */ false,
-        ETagBehaviour{.etag = ETagBehaviour::first_generation, .etag_after_first = ETagBehaviour::second_generation, .honour_if_match = true});
+        ETagBehaviour{.etag = ETagBehaviour::first_generation, .etag_after_first = "", .honour_if_match = true});
     auto object_storage = objectStorageOver(transport);
 
-    auto entry = listingEntry("");
-    ASSERT_TRUE(DB::learnIngestedGeneration(*object_storage, entry));
-    ASSERT_EQ(entry.metadata->etag, ETagBehaviour::first_generation);
+    auto entry = listingEntry(ETagBehaviour::first_generation_bare);
+    ASSERT_TRUE(DB::useIngestedGenerationOfTheListedObject(entry));
+
+    transport->overwriteObject(ETagBehaviour::second_generation);
 
     DB::StoredObject object("blob", /* local_path */ "", entry.metadata->size_bytes);
     object.etag = entry.metadata->etag;
@@ -2103,41 +2183,19 @@ TEST(AzureIngestedGeneration, OverwrittenBetweenHeadAndRead)
     }
 }
 
-/// The endpoint reports no `ETag` at all, neither in the listing nor for a `HEAD`: the generation
-/// stays unknown, which the queue source turns into a failed file rather than a read.
+/// The endpoint reports no `ETag` in the listing: the generation stays unknown, which the queue
+/// source turns into a failed file rather than a read.
 TEST(AzureIngestedGeneration, EndpointWithoutETag)
 {
     auto transport = std::make_shared<MisbehavingRangeTransport>(100, 100, 100, /* send_etag */ false);
     auto object_storage = objectStorageOver(transport);
 
     auto entry = listingEntry("");
-    ASSERT_FALSE(DB::learnIngestedGeneration(*object_storage, entry));
-    ASSERT_TRUE(entry.metadata->etag.empty());
-    ASSERT_EQ(entry.metadata->size_bytes, 100u);
-    ASSERT_EQ(transport->headRequests(), 1u);
-}
-
-/// The `HEAD` that would supply the generation the listing omitted fails - the blob was deleted by
-/// another replica after the queue claimed the file, or the endpoint answered with an error. The
-/// file is already claimed in Keeper at that point and the failure of one file must not abort the
-/// whole insert or `SELECT`, so it is not propagated: the generation stays unknown, the read stays
-/// unpinned, and the source fails this one file closed, exactly as for an endpoint that reports no
-/// `ETag` at all.
-TEST(AzureIngestedGeneration, FailingHeadFailsOnlyTheFile)
-{
-    auto transport = std::make_shared<MisbehavingRangeTransport>(100, 100, 100, /* send_etag */ true);
-    transport->failHeadRequests();
-    auto object_storage = objectStorageOver(transport);
-
-    auto throwing_entry = listingEntry("");
-    ASSERT_ANY_THROW(DB::learnIngestedGeneration(*object_storage, throwing_entry));
-
-    auto entry = listingEntry("");
-    bool learned = true;
-    ASSERT_NO_THROW(learned = DB::tryLearnIngestedGeneration(*object_storage, entry, getLogger("FailingHeadFailsOnlyTheFile")));
-    ASSERT_FALSE(learned);
+    ASSERT_FALSE(DB::useIngestedGenerationOfTheListedObject(entry));
     ASSERT_FALSE(entry.require_read_pinned_to_generation);
     ASSERT_TRUE(entry.metadata->etag.empty());
+    ASSERT_EQ(entry.metadata->size_bytes, 100u);
+    ASSERT_EQ(transport->headRequests(), 0u);
 }
 
 namespace
@@ -2250,7 +2308,7 @@ TEST(AzurePostProcessing, DeleteOfUntaggedObjectIsRefused)
 /// through `createReadBuffer` with the setting off, against an endpoint that replaces the blob
 /// between the metadata probe and the `GET`.
 
-/// With the requirement recorded by `learnIngestedGeneration`, the read is pinned even though the
+/// With the requirement recorded by `useIngestedGenerationOfTheListedObject`, the read is pinned even though the
 /// setting is off: the newer generation is refused instead of being ingested behind the move.
 TEST(AzureQueueReadPinning, PinnedWithValidateETagOnReadDisabled)
 {
@@ -2262,9 +2320,11 @@ TEST(AzureQueueReadPinning, PinnedWithValidateETagOnReadDisabled)
     auto context = DB::Context::createCopy(getContext().context);
     context->setSetting("s3_validate_etag_on_read", false);
 
-    auto entry = listingEntry("");
-    ASSERT_TRUE(DB::learnIngestedGeneration(*object_storage, entry));
+    auto entry = listingEntry(ETagBehaviour::first_generation_bare);
+    ASSERT_TRUE(DB::useIngestedGenerationOfTheListedObject(entry));
     ASSERT_TRUE(entry.require_read_pinned_to_generation);
+
+    transport->overwriteObject(ETagBehaviour::second_generation);
 
     auto buffer = DB::createReadBuffer(entry, object_storage, context, getLogger("AzureQueueReadPinning"));
 
@@ -2293,9 +2353,11 @@ TEST(AzureQueueReadPinning, PlainReadIsNotPinnedWhenTheSettingIsDisabled)
     auto context = DB::Context::createCopy(getContext().context);
     context->setSetting("s3_validate_etag_on_read", false);
 
-    auto entry = listingEntry("");
-    ASSERT_TRUE(DB::learnIngestedGeneration(*object_storage, entry));
+    auto entry = listingEntry(ETagBehaviour::first_generation_bare);
+    ASSERT_TRUE(DB::useIngestedGenerationOfTheListedObject(entry));
     entry.require_read_pinned_to_generation = false;
+
+    transport->overwriteObject(ETagBehaviour::second_generation);
 
     auto buffer = DB::createReadBuffer(entry, object_storage, context, getLogger("AzureQueueReadPinning"));
 

@@ -96,45 +96,23 @@ bool afterProcessingNeedsIngestedGeneration(ObjectStorageType storage_type, Obje
         && (after_processing == ObjectStorageQueueAction::MOVE || after_processing == ObjectStorageQueueAction::DELETE);
 }
 
-bool learnIngestedGeneration(const IObjectStorage & object_storage, RelativePathWithMetadata & object_info)
+bool useIngestedGenerationOfTheListedObject(RelativePathWithMetadata & object_info)
 {
-    /// The read of this object has to serve the generation named below, independently of
+    /// Only the generation that the listing itself reported may be used. A `HEAD` made here would
+    /// run after the object was listed and claimed in Keeper, so it could return a generation `B`
+    /// that replaced the listed generation `A` in the meantime; the file would then be ingested,
+    /// moved or deleted as `B` and marked processed by path, and `A` - the generation the queue
+    /// actually accepted - would be skipped forever. When the listing carries no generation, the
+    /// caller fails the file closed instead.
+    if (!object_info.metadata || object_info.metadata->etag.empty())
+        return false;
+
+    /// The read of this object has to serve the generation named by the listing, independently of
     /// `s3_validate_etag_on_read`: that setting decides whether a plain read is protected from a
     /// torn read, while here the generation the read serves is the generation the move or the
     /// delete acts on afterwards.
     object_info.require_read_pinned_to_generation = true;
-
-    if (object_info.metadata && !object_info.metadata->etag.empty())
-        return true;
-
-    object_info.metadata = object_storage.getObjectMetadata(object_info.getPath(), /* with_tags */ false);
-    if (!object_info.metadata->etag.empty())
-        return true;
-
-    /// Nothing to pin the read to. The caller fails the file instead of reading it, so leave the
-    /// flag off rather than let an unpinned read be opened.
-    object_info.require_read_pinned_to_generation = false;
-    return false;
-}
-
-bool tryLearnIngestedGeneration(const IObjectStorage & object_storage, RelativePathWithMetadata & object_info, LoggerPtr log)
-{
-    try
-    {
-        return learnIngestedGeneration(object_storage, object_info);
-    }
-    catch (...)
-    {
-        tryLogCurrentException(
-            log,
-            fmt::format("Could not learn the generation (`ETag`) of {}", object_info.getPath()));
-
-        /// Nothing to pin the read to, exactly as when the endpoint reports no `ETag`: leave the
-        /// requirement off, so that no unpinned read is opened, and let the source fail this one
-        /// file closed instead of failing the query.
-        object_info.require_read_pinned_to_generation = false;
-        return false;
-    }
+    return true;
 }
 
 ObjectStorageQueueSource::ObjectStorageQueueObjectInfo::ObjectStorageQueueObjectInfo(
@@ -695,15 +673,13 @@ ObjectInfoPtr ObjectStorageQueueSource::FileIterator::next(size_t processor)
 
         /// An Azure `MOVE` after processing copies and deletes the very generation that was
         /// ingested, and an Azure `DELETE` deletes it, so that generation must be known before the
-        /// read is opened, and the read is then pinned to it. The listing normally reports it; an
-        /// endpoint that omits `Etag` from `ListBlobs` is asked once with a `HEAD`. A file whose
-        /// generation cannot be learned at all - because the endpoint reports none, or because
-        /// that `HEAD` itself failed - is still returned: the source refuses to read it and fails
-        /// it, so that it is never committed as processed and then moved or deleted as whatever
-        /// generation exists by then. The file is already claimed in Keeper here, so a failure of
-        /// the `HEAD` must fail this one file and not the whole query.
+        /// read is opened, and the read is then pinned to it. It is the generation the listing
+        /// reported, and only that one - a `HEAD` made now could name a generation that replaced
+        /// it after it was listed. A file whose listing carries no generation is still returned:
+        /// the source refuses to read it and fails it, so that it is never committed as processed
+        /// and then moved or deleted as whatever generation exists by then.
         if (afterProcessingNeedsIngestedGeneration(object_storage->getType(), metadata->getTableMetadata().after_processing))
-            tryLearnIngestedGeneration(*object_storage, object_info->relative_path_with_metadata, log);
+            useIngestedGenerationOfTheListedObject(object_info->relative_path_with_metadata);
 
         return std::make_shared<ObjectStorageQueueObjectInfo>(*object_info, std::move(file_metadata));
     }
@@ -1354,8 +1330,8 @@ Chunk ObjectStorageQueueSource::generateImpl()
                 processed_files.back().etag = object_metadata->etag;
             }
 
-            /// Fail closed: a file whose generation is unknown (neither the listing nor the `HEAD`
-            /// made by the file iterator reported an `ETag`) is not read when the post-processing
+            /// Fail closed: a file whose generation is unknown (the listing carried no `ETag`)
+            /// is not read when the post-processing
             /// has to act on the ingested generation, because it could then only move or delete
             /// whatever generation exists at post-processing time. It is failed like a file whose
             /// read failed, so it is never committed as processed.
@@ -1364,7 +1340,7 @@ Chunk ObjectStorageQueueSource::generateImpl()
                 && processed_files.back().etag.empty())
             {
                 const auto message = fmt::format(
-                    "The generation (`ETag`) of the object {} is not reported by the endpoint, "
+                    "The generation (`ETag`) of the object {} is not reported by the listing of the endpoint, "
                     "while `after_processing = '{}'` on Azure has to act on exactly the generation that was ingested. "
                     "The file is not read",
                     file_metadata->getPath(), ObjectStorageQueueTableMetadata::actionToString(after_processing));

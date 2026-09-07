@@ -81,6 +81,9 @@ private:
     /// The offset just past the last byte of the data that the read is expected to deliver.
     size_t getEndOfData() const;
 
+    /// The locally known size of the object, when it may be used as a hard end of the data.
+    std::optional<size_t> boundingObjectSize() const;
+
     /// Drops the current response and the bytes buffered from it, so that the next read reopens
     /// the download at the current position. Called when the right bound of the read changes.
     void discardCurrentDownload();
@@ -110,8 +113,9 @@ private:
 
     /// The size of the object as it was known locally before the read started (from the `LIST` or
     /// `HEAD` that produced the `StoredObject`). It does not come from the response that is being
-    /// validated, so - just like `read_until_position` - it is authoritative: when it is set, it,
-    /// and not the size advertised by the download response, decides where an unbounded read ends.
+    /// validated, but it describes the generation of the object that the `LIST` or the `HEAD` saw,
+    /// so it decides where an unbounded read ends only when this read is pinned to that same
+    /// generation - see `boundingObjectSize`.
     std::optional<size_t> known_object_size;
 
     /// The `ETag` of the object generation selected at read setup. When it is not empty, every

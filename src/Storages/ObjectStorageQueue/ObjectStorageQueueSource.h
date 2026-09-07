@@ -30,24 +30,15 @@ bool afterProcessingNeedsIngestedGeneration(ObjectStorageType storage_type, Obje
 
 /// Makes `object_info` carry the generation (`etag`) that the read of the object is then pinned
 /// to (see `StorageObjectStorageSource::createReadBuffer`), so that the generation the read
-/// verified and the generation the post-processing acts on are one and the same. The listing
-/// normally reports it; when the listing entry carries none, one `HEAD` supplies the `etag`
-/// together with the size and modification time of that same generation. The read is pinned
-/// through `RelativePathWithMetadata::require_read_pinned_to_generation`, so it does not depend on
-/// `s3_validate_etag_on_read`, which only governs plain reads. Returns whether the
-/// generation is known afterwards: it is not when the endpoint reports no `ETag` at all, and a
-/// table whose post-processing needs it must then refuse the file rather than read it.
-bool learnIngestedGeneration(const IObjectStorage & object_storage, RelativePathWithMetadata & object_info);
-
-/// Learns the ingested generation the way `learnIngestedGeneration` does, but never lets a failure
-/// of the `HEAD` reach the caller. It runs when the file is already claimed in Keeper, and every
-/// other read-time failure of a single file is accounted per file, so a blob deleted by another
-/// replica after the existence check, or a transient error of the endpoint, must fail this one
-/// file instead of aborting the whole insert or `SELECT` and making the files already read in this
-/// batch be retried. A failure leaves the generation unknown - and the pinning requirement off, so
-/// that no unpinned read is opened - which the source turns into a failed file, like an endpoint
-/// that reports no `ETag` at all.
-bool tryLearnIngestedGeneration(const IObjectStorage & object_storage, RelativePathWithMetadata & object_info, LoggerPtr log);
+/// verified and the generation the post-processing acts on are one and the same. It is the
+/// generation the listing reported: a `HEAD` made after the object was listed and claimed could
+/// name a generation that replaced the listed one, and moving or deleting that one while the path
+/// is marked processed would skip the listed generation forever. The read is pinned through
+/// `RelativePathWithMetadata::require_read_pinned_to_generation`, so it does not depend on
+/// `s3_validate_etag_on_read`, which only governs plain reads. Returns whether the generation is
+/// known: it is not when the listing reports no `ETag`, and a table whose post-processing needs it
+/// must then refuse the file rather than read it.
+bool useIngestedGenerationOfTheListedObject(RelativePathWithMetadata & object_info);
 
 class ObjectStorageQueueSource final : public ISource, WithContext
 {

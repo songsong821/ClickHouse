@@ -356,6 +356,27 @@ off_t ReadBufferFromAzureBlobStorage::getPosition()
     return offset - available();
 }
 
+std::optional<size_t> ReadBufferFromAzureBlobStorage::boundingObjectSize() const
+{
+    if (!known_object_size)
+        return {};
+
+    /// The size was measured on the generation of the object that the `LIST` or the `HEAD` saw. It
+    /// is a hard end of the data only if this read serves that very generation, which is what
+    /// `If-Match` guarantees. Without a generation to pin the read to, the caller asked to read
+    /// whatever generation exists now - only without protection against a torn read - and a blob
+    /// grown from 100 to 200 bytes between the measurement and the `GET` must not be cut back to
+    /// the stale 100 bytes. The size is then not used at all: `getEndOfData` falls back to the
+    /// lower bound reported by the responses of this read.
+    if (expected_etag.empty() && *known_object_size != 0)
+        return {};
+
+    /// An object measured as empty is the one exception: there is no request to make for it, and
+    /// its emptiness is how every object storage reports "no data" for a file that a listing
+    /// already showed.
+    return known_object_size;
+}
+
 size_t ReadBufferFromAzureBlobStorage::getEndOfData() const
 {
     /// `read_until_position` is set locally by the caller, so it is authoritative in both
@@ -364,11 +385,11 @@ size_t ReadBufferFromAzureBlobStorage::getEndOfData() const
         return static_cast<size_t>(read_until_position);
 
     /// For an unbounded read the size that the object had when it was listed or headed - before
-    /// this read started - is the next best bound: it does not come from the response that is
-    /// being validated, and the download is pinned to that same generation of the object with
-    /// `If-Match` whenever an `ETag` is known.
-    if (known_object_size)
-        return *known_object_size;
+    /// this read started - is the next best bound, as long as the download is pinned to that same
+    /// generation of the object with `If-Match`, so that the size and the data describe one and
+    /// the same generation.
+    if (const auto bounding_size = boundingObjectSize())
+        return *bounding_size;
 
     /// Nothing is known locally. The size of the object advertised by the download response
     /// itself (`Content-Range`) is the only statement about where the data ends. It is remote
@@ -501,8 +522,8 @@ void ReadBufferFromAzureBlobStorage::initialize(size_t attempt)
     /// on a premature end of the response instead).
     ///
     /// The size that the object had when it was listed or headed is trustworthy for the same
-    /// reason, and pinning the download to that generation with `If-Match` keeps it applicable to
-    /// every request of the read.
+    /// reason, as long as the download is pinned to that generation with `If-Match` - see
+    /// `boundingObjectSize`.
     ///
     /// When neither is available, the `Content-Length` of the response, chosen by the remote
     /// endpoint, is deliberately not consulted: a length that under-reports the body would
@@ -510,8 +531,8 @@ void ReadBufferFromAzureBlobStorage::initialize(size_t attempt)
     /// of the data is then wherever the response body actually ends.
     if (read_until_position)
         total_size = static_cast<size_t>(read_until_position);
-    else if (known_object_size)
-        total_size = *known_object_size;
+    else if (const auto bounding_size = boundingObjectSize())
+        total_size = *bounding_size;
     else
         total_size = std::numeric_limits<size_t>::max();
 
@@ -552,16 +573,18 @@ size_t copyFromAzureBodyStream(Azure::Core::IO::BodyStream & body_stream, char *
 
 size_t ReadBufferFromAzureBlobStorage::readBigAt(char * to, size_t n, size_t range_begin, const std::function<bool(size_t)> & /*progress_callback*/) const
 {
-    /// The size the object had when it was listed or headed is authoritative for a positioned read
-    /// as much as for a sequential one (see `getEndOfData`). It is applied before the request is
-    /// made, so that an endpoint answering a range that crosses the end of the object with more
-    /// data than the object holds cannot have that data handed to the caller under offsets past the
-    /// end of the object. A read that starts at or past the end is the documented end of file.
-    if (known_object_size)
+    /// The size the object had when it was listed or headed bounds a positioned read as much as a
+    /// sequential one, and under the same condition - the read has to be pinned to the generation
+    /// that size was measured on (see `getEndOfData` and `boundingObjectSize`). It is applied
+    /// before the request is made, so that an endpoint answering a range that crosses the end of
+    /// the object with more data than the object holds cannot have that data handed to the caller
+    /// under offsets past the end of the object. A read that starts at or past the end is the
+    /// documented end of file.
+    if (const auto bounding_size = boundingObjectSize())
     {
-        if (range_begin >= *known_object_size)
+        if (range_begin >= *bounding_size)
             return 0;
-        n = std::min(n, *known_object_size - range_begin);
+        n = std::min(n, *bounding_size - range_begin);
     }
 
     size_t initial_n = n;
