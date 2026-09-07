@@ -9,6 +9,7 @@
 #include <Core/TypeId.h>
 #include <DataTypes/DataTypeArray.h>
 #include <DataTypes/DataTypeCustom.h>
+#include <DataTypes/DataTypeDateTime.h>
 #include <DataTypes/DataTypeDateTime64.h>
 #include <DataTypes/DataTypeMap.h>
 #include <DataTypes/DataTypeNullable.h>
@@ -437,16 +438,16 @@ std::optional<TransformAndArgument> parseTransformAndArgument(const String & tra
     std::string transform_name = Poco::toLower(transform_name_src);
 
     if (transform_name == "year" || transform_name == "years")
-        return TransformAndArgument{"toYearNumSinceEpoch", std::nullopt};
+        return TransformAndArgument{"icebergYear", std::nullopt};
 
     if (transform_name == "month" || transform_name == "months")
-        return TransformAndArgument{"toMonthNumSinceEpoch", std::nullopt};
+        return TransformAndArgument{"icebergMonth", std::nullopt};
 
     if (transform_name == "day" || transform_name == "date" || transform_name == "days" || transform_name == "dates")
-        return TransformAndArgument{"toRelativeDayNum", std::nullopt};
+        return TransformAndArgument{"icebergDay", std::nullopt};
 
     if (transform_name == "hour" || transform_name == "hours")
-        return TransformAndArgument{"toRelativeHourNum", std::nullopt};
+        return TransformAndArgument{"icebergHour", std::nullopt};
 
     if (transform_name == "identity")
         return TransformAndArgument{"identity", std::nullopt};
@@ -580,12 +581,17 @@ std::pair<Poco::Dynamic::Var, bool> getIcebergType(DataTypePtr type, Int32 & ite
 {
     switch (type->getTypeId())
     {
-        case TypeIndex::UInt32:
         case TypeIndex::Int32:
             return {"int", true};
-        case TypeIndex::UInt64:
+        case TypeIndex::UInt32:
         case TypeIndex::Int64:
             return {"long", true};
+        case TypeIndex::UInt64:
+            throw Exception(
+                ErrorCodes::BAD_ARGUMENTS,
+                "Type {} cannot be stored in Iceberg: the widest Iceberg integer type is the signed 64-bit `long`, "
+                "which cannot represent every UInt64 value. Use Int64 or Decimal(20, 0) instead",
+                type->getName());
         case TypeIndex::Float32:
             return {"float", true};
         case TypeIndex::Float64:
@@ -594,10 +600,19 @@ std::pair<Poco::Dynamic::Var, bool> getIcebergType(DataTypePtr type, Int32 & ite
         case TypeIndex::Date32:
             return {"date", true};
         case TypeIndex::DateTime:
+            return {
+                assert_cast<const DataTypeDateTime &>(*type).hasExplicitTimeZone() ? Iceberg::f_timestamptz : Iceberg::f_timestamp, true};
         case TypeIndex::DateTime64:
-            return {"timestamp", true};
+            return {
+                assert_cast<const DataTypeDateTime64 &>(*type).hasExplicitTimeZone() ? Iceberg::f_timestamptz : Iceberg::f_timestamp,
+                true};
         case TypeIndex::Time:
-            return {"time", true};
+        case TypeIndex::Time64:
+            throw Exception(
+                ErrorCodes::BAD_ARGUMENTS,
+                "Type {} cannot be stored in Iceberg: the Iceberg `time` type is microseconds from midnight, which "
+                "neither `Time` (whole seconds) nor `Time64` (unsupported by the data file writer) can be written as",
+                type->getName());
         case TypeIndex::String:
             return {"string", true};
         case TypeIndex::UUID:
@@ -684,12 +699,11 @@ Poco::Dynamic::Var getAvroType(DataTypePtr type, Int32 field_id)
         case TypeIndex::Int8:
         case TypeIndex::UInt16:
         case TypeIndex::Int16:
-        case TypeIndex::UInt32:
         case TypeIndex::Int32:
         case TypeIndex::Date:
         case TypeIndex::Date32:
-        case TypeIndex::Time:
             return "int";
+        case TypeIndex::UInt32:
         case TypeIndex::UInt64:
         case TypeIndex::Int64:
         case TypeIndex::DateTime:
@@ -811,22 +825,22 @@ static Poco::JSON::Object::Ptr getPartitionField(
         result->set(Iceberg::f_transform, "identity");
         return result;
     }
-    else if (partition_function->name == "toYearNumSinceEpoch")
+    else if (partition_function->name == "icebergYear" || partition_function->name == "toYearNumSinceEpoch")
     {
         result->set(Iceberg::f_transform, "year");
         return result;
     }
-    else if (partition_function->name == "toMonthNumSinceEpoch")
+    else if (partition_function->name == "icebergMonth" || partition_function->name == "toMonthNumSinceEpoch")
     {
         result->set(Iceberg::f_transform, "month");
         return result;
     }
-    else if (partition_function->name == "toRelativeDayNum")
+    else if (partition_function->name == "icebergDay" || partition_function->name == "toRelativeDayNum")
     {
         result->set(Iceberg::f_transform, "day");
         return result;
     }
-    else if (partition_function->name == "toRelativeHourNum")
+    else if (partition_function->name == "icebergHour" || partition_function->name == "toRelativeHourNum")
     {
         result->set(Iceberg::f_transform, "hour");
         return result;
@@ -902,6 +916,10 @@ static std::pair<String, String> parseFunction(const ASTPtr & func_object)
             {"identity", "identity"},
             {"icebergBucket", "bucket"},
             {"icebergTruncate", "truncate"},
+            {"icebergYear", "year"},
+            {"icebergMonth", "month"},
+            {"icebergDay", "day"},
+            {"icebergHour", "hour"},
             {"toYearNumSinceEpoch", "year"},
             {"toMonthNumSinceEpoch", "month"},
             {"toRelativeDayNum", "day"},
@@ -1555,10 +1573,6 @@ DataTypePtr getFunctionResultType(const String & iceberg_transform_name, DataTyp
 {
     if (iceberg_transform_name.starts_with("identity") || iceberg_transform_name.starts_with("truncate"))
         return source_type;
-    if (iceberg_transform_name.starts_with("year"))
-        return std::make_shared<DataTypeUInt16>();
-    if (iceberg_transform_name.starts_with("month") || iceberg_transform_name.starts_with("day") || iceberg_transform_name.starts_with("hour"))
-        return std::make_shared<DataTypeUInt32>();
     return std::make_shared<DataTypeInt32>();
 }
 

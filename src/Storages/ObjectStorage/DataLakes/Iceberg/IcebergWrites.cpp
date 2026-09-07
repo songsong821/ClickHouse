@@ -262,19 +262,19 @@ std::vector<uint8_t> dumpFieldToBytes(const Field & field, DataTypePtr type)
         case TypeIndex::Int32:
         case TypeIndex::Date:
         case TypeIndex::Date32:
-            return dumpValue(field.safeGet<Int32>());
+            return dumpValue<Int32>(static_cast<Int32>(field.safeGet<Int32>()));
         case TypeIndex::Int64:
-            return dumpValue(field.safeGet<Int64>());
+            return dumpValue<Int64>(field.safeGet<Int64>());
         case TypeIndex::UInt8:
         case TypeIndex::Int8:
         case TypeIndex::UInt16:
         case TypeIndex::Int16:
+            return dumpValue<Int32>(static_cast<Int32>(applyVisitor(FieldVisitorConvertToNumber<Int64>(), field)));
         case TypeIndex::UInt32:
-            return dumpValue(static_cast<Int32>(applyVisitor(FieldVisitorConvertToNumber<Int64>(), field)));
         case TypeIndex::UInt64:
-            return dumpValue(applyVisitor(FieldVisitorConvertToNumber<Int64>(), field));
+            return dumpValue<Int64>(applyVisitor(FieldVisitorConvertToNumber<Int64>(), field));
         case TypeIndex::DateTime64:
-            return dumpValue(field.safeGet<Decimal64>().getValue().value);
+            return dumpValue<Int64>(field.safeGet<Decimal64>().getValue().value);
         case TypeIndex::String:
         {
             auto value = field.safeGet<String>();
@@ -284,9 +284,9 @@ std::vector<uint8_t> dumpFieldToBytes(const Field & field, DataTypePtr type)
             return bytes;
         }
         case TypeIndex::Float64:
-            return dumpValue(field.safeGet<Float64>());
+            return dumpValue<Float64>(field.safeGet<Float64>());
         case TypeIndex::Float32:
-            return dumpValue(field.safeGet<Float32>());
+            return dumpValue<Float32>(static_cast<Float32>(field.safeGet<Float32>()));
         default:
         {
             throw Exception(ErrorCodes::LOGICAL_ERROR, "Can not dump such stats");

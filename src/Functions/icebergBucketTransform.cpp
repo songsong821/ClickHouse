@@ -10,6 +10,7 @@
 #include <Functions/FunctionsHashing.h>
 #include <Functions/IFunction.h>
 #include <Interpreters/Context.h>
+#include <Interpreters/castColumn.h>
 #include <Columns/ColumnsDateTime.h>
 #include <Core/ColumnWithTypeAndName.h>
 #include <Core/Field.h>
@@ -318,7 +319,7 @@ public:
 
     DataTypePtr getReturnTypeImpl(const DataTypes &) const override
     {
-        return std::make_shared<DataTypeUInt32>();
+        return std::make_shared<DataTypeInt32>();
     }
 
     ColumnPtr executeImpl(const ColumnsWithTypeAndName & arguments, const DataTypePtr & /* result_type */, size_t input_rows_count) const override
@@ -349,12 +350,14 @@ public:
 
         ColumnWithTypeAndName bitand_result_with_type(bitand_result, bitand_result_type, "");
         auto modulo_column = ColumnWithTypeAndName(
-            std::make_shared<DataTypeUInt32>()->createColumnConst(input_rows_count, static_cast<UInt32>(value)),
-            std::make_shared<DataTypeUInt32>(),
+            std::make_shared<DataTypeInt32>()->createColumnConst(input_rows_count, static_cast<Int32>(value)),
+            std::make_shared<DataTypeInt32>(),
             "");
         ColumnsWithTypeAndName modulo_arguments = {bitand_result_with_type, modulo_column};
         auto modulo_func = FunctionFactory::instance().get("positiveModulo", context)->build(modulo_arguments);
-        return modulo_func->execute(modulo_arguments, std::make_shared<DataTypeUInt32>(), input_rows_count, false);
+        auto modulo_result_type = modulo_func->getResultType();
+        auto modulo_result = modulo_func->execute(modulo_arguments, modulo_result_type, input_rows_count, false);
+        return castColumn({modulo_result, modulo_result_type, ""}, std::make_shared<DataTypeInt32>());
     }
 
     bool useDefaultImplementationForConstants() const override { return true; }
