@@ -46,4 +46,26 @@ ATTACH DATABASE {CLICKHOUSE_DATABASE_1:Identifier};
 ALTER TABLE {CLICKHOUSE_DATABASE_1:Identifier}.t DELETE WHERE id = 4 SETTINGS mutations_sync = 2;
 SELECT 'cold alter delete', count() FROM {CLICKHOUSE_DATABASE_1:Identifier}.t;
 
+-- An action lock (`SYSTEM STOP MERGES` and friends) is keyed by the storage it was taken on, so one
+-- taken while the table was still a proxy has to survive the replacement: the matching
+-- `SYSTEM START MERGES` addresses the storage that took the proxy's place.
+-- `max_bytes_to_merge_at_max_space_in_pool` keeps background merges away, so the two parts stay two
+-- until the explicit `OPTIMIZE`, which ignores that limit for `FINAL`.
+CREATE TABLE {CLICKHOUSE_DATABASE_1:Identifier}.t2 (id UInt64) ENGINE = MergeTree ORDER BY id
+    SETTINGS max_bytes_to_merge_at_max_space_in_pool = 1;
+INSERT INTO {CLICKHOUSE_DATABASE_1:Identifier}.t2 VALUES (1);
+INSERT INTO {CLICKHOUSE_DATABASE_1:Identifier}.t2 VALUES (2);
+
+DETACH DATABASE {CLICKHOUSE_DATABASE_1:Identifier};
+ATTACH DATABASE {CLICKHOUSE_DATABASE_1:Identifier};
+USE {CLICKHOUSE_DATABASE_1:Identifier};
+
+SYSTEM STOP MERGES {CLICKHOUSE_DATABASE_1:Identifier}.t2;
+-- Reading `system.parts` replaces the proxy, so the `SYSTEM START MERGES` below no longer addresses
+-- the storage the lock was taken on.
+SELECT 'stopped merges parts', count() FROM system.parts WHERE database = currentDatabase() AND table = 't2' AND active;
+SYSTEM START MERGES {CLICKHOUSE_DATABASE_1:Identifier}.t2;
+OPTIMIZE TABLE {CLICKHOUSE_DATABASE_1:Identifier}.t2 FINAL;
+SELECT 'started merges parts', count() FROM system.parts WHERE database = currentDatabase() AND table = 't2' AND active;
+
 DROP DATABASE {CLICKHOUSE_DATABASE_1:Identifier};

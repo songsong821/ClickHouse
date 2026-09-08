@@ -101,7 +101,7 @@ protected:
     /// real storage instead of the proxy. It has to happen here rather than in the proxy itself,
     /// because the proxy loads the table from under this mutex (`DatabaseAtomic::renameTable` does,
     /// through `tryCreateSymlink`), so it cannot take it.
-    StoragePtr replaceLoadedLazyTableUnlocked(const Tables::iterator & it) const TSA_REQUIRES(mutex);
+    StoragePtr replaceLoadedLazyTableUnlocked(Tables::iterator it) const TSA_REQUIRES(mutex);
 
 private:
     mutable std::atomic<bool> has_deferred_population{false};

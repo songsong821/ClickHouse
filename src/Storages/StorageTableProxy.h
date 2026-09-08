@@ -75,7 +75,13 @@ public:
 
     StoragePtr getLoadedLazyTable() const override
     {
-        std::lock_guard lock{nested_mutex};
+        /// Never wait for the load to finish. This is called by the database with its own mutex
+        /// held, while `getNested` keeps `nested_mutex` for as long as the table takes to load, so
+        /// waiting here would hold the whole database up. Reporting "not loaded yet" is harmless:
+        /// the next lookup replaces the proxy instead.
+        std::unique_lock lock{nested_mutex, std::try_to_lock};
+        if (!lock.owns_lock())
+            return nullptr;
         return nested;
     }
 

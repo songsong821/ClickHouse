@@ -5,6 +5,7 @@
 #include <Backups/RestorerFromBackup.h>
 #include <Core/Settings.h>
 #include <Core/UUID.h>
+#include <Interpreters/ActionLocksManager.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/DatabaseCatalog.h>
 #include <Interpreters/InterpreterCreateQuery.h>
@@ -553,7 +554,7 @@ bool DatabaseWithOwnTablesBase::isTableExist(const String & table_name, ContextP
     return tables.contains(table_name);
 }
 
-StoragePtr DatabaseWithOwnTablesBase::replaceLoadedLazyTableUnlocked(const Tables::iterator & it) const
+StoragePtr DatabaseWithOwnTablesBase::replaceLoadedLazyTableUnlocked(Tables::iterator it) const
 {
     /// By value: the map slot is overwritten below, and the proxy is still needed after that.
     StoragePtr proxy = it->second;
@@ -582,6 +583,12 @@ StoragePtr DatabaseWithOwnTablesBase::replaceLoadedLazyTableUnlocked(const Table
     }
 
     it->second = real_table;
+
+    /// `ActionLocksManager` keys the locks it holds by the storage they were taken on, so a
+    /// `SYSTEM STOP MERGES` issued while the table was still a proxy has to be re-keyed: the
+    /// matching `SYSTEM START MERGES` addresses the storage that just took the proxy's place, and
+    /// would otherwise not find the lock and never lift it.
+    getContext()->getActionLocksManager()->transfer(proxy.get(), real_table);
 
     LOG_TRACE(log, "Replaced the proxy of lazily loaded table {} with the loaded {}",
               table_id.getNameForLogs(), real_table->getName());
