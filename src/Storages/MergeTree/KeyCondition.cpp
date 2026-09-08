@@ -2280,11 +2280,20 @@ static bool applyDeterministicDagToColumn(
             return finalize_output_column_and_type(out_column, out_type);
         };
 
-        if (try_apply_direct_cast_fast_path())
-            return true;
-
+        /// The constant is normalized through the key column's type first: applying the `CAST` of the
+        /// DAG straight to the constant's own type renders it from a different type space. A
+        /// `DateTime64(6)` constant casts to a `String` with six fractional digits, while the key space
+        /// of `ORDER BY d::String` over a `DateTime64(3)` column holds three of them, and the range
+        /// check then misses the value and prunes the part that holds it.
         if (!cast_without_nulls(input_column, input_type, dag.input_type))
+        {
+            /// The round trip is not always possible - `String` -> `Dynamic` -> `String` - and the cast
+            /// above refuses such a target. Apply the `CAST` of the DAG directly then.
+            if (try_apply_direct_cast_fast_path())
+                return true;
+
             return false;
+        }
     }
 
     Block block;
