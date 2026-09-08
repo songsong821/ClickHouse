@@ -132,8 +132,7 @@ struct AggregateFunctionWindowFunnelData
             throw Exception(ErrorCodes::TOO_LARGE_ARRAY_SIZE, "Too large size of the state of windowFunnel");
 
         events_list.clear();
-        /// Reserving is only an optimization here, so it is derived from payload that already arrived.
-        events_list.reserve(std::min(size, buf.available() / (sizeof(T) + sizeof(UInt8))));
+        events_list.reserve(size);
 
         T timestamp{};
         UInt8 event = 0;
@@ -255,8 +254,7 @@ struct AggregateFunctionWindowFunnelStrictOnceData
             throw Exception(ErrorCodes::TOO_LARGE_ARRAY_SIZE, "Too large size of the state of windowFunnel");
 
         events_list.clear();
-        /// Reserving is only an optimization here, so it is derived from payload that already arrived.
-        events_list.reserve(std::min(events_size, buf.available() / (sizeof(T) + sizeof(UInt8) + sizeof(UInt64))));
+        events_list.reserve(events_size);
 
         T timestamp{};
         UInt8 event_type = 0;

@@ -485,8 +485,7 @@ BlockIO InterpreterAlterQuery::executeToTable(const ASTAlterQuery & alter)
         return executeDDLQueryOnCluster(query_ptr, getContext(), params);
     }
 
-    if (!skip_access_check)
-        getContext()->checkAccess(getRequiredAccess(table));
+    getContext()->checkAccess(getRequiredAccess(table));
 
     if (!table_id)
         throw Exception(ErrorCodes::UNKNOWN_DATABASE, "Database {} does not exist", backQuoteIfNeed(alter.getDatabase()));

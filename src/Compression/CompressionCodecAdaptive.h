@@ -1,10 +1,12 @@
 #pragma once
 
 #include <Compression/ICompressionCodec.h>
-#include <DataTypes/IDataType_fwd.h>
 
 namespace DB
 {
+
+class IDataType;
+
 
 /// Decision logic for adaptive CODEC(Default) resolution
 namespace AdaptiveCodec
@@ -13,7 +15,7 @@ namespace AdaptiveCodec
 /// Candidate codecs for `type`, in priority order. [0] is `NONE`: a block that no codec can shrink is stored uncompressed.
 /// [1] is the default codec, thus we get "no worse than the default" compression. Extra candidates come from a per-type table.
 /// Beyond [0] and [1], candidates must be ordered by descending decompression speed as draw in size should resolve to the fastest reads.
-Codecs poolForType(const DataTypePtr & type, const CompressionCodecPtr & deployment_default);
+Codecs poolForType(const IDataType & type, const CompressionCodecPtr & deployment_default);
 
 }
 
@@ -23,7 +25,7 @@ Codecs poolForType(const DataTypePtr & type, const CompressionCodecPtr & deploym
 class CompressionCodecAdaptive final : public ICompressionCodec
 {
 public:
-    CompressionCodecAdaptive(const DataTypePtr & type, const CompressionCodecPtr & deployment_default);
+    CompressionCodecAdaptive(const IDataType & type, const CompressionCodecPtr & deployment_default);
 
     uint8_t getMethodByte() const override;
     void updateHash(SipHash & hash) const override;

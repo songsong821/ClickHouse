@@ -119,7 +119,9 @@ struct AggregateFunctionSequenceMatchData final
         size_t size = 0;
         readBinary(size, buf);
 
-        /// The constant is arbitrary (mirrors `windowFunnel`).
+        /// Guard against allocation bombs (mirrors windowFunnel): a crafted state
+        /// can declare a huge size and make reserve allocate gigabytes before any
+        /// event is read.
         if (size > 100'000'000)
             throw Exception(ErrorCodes::TOO_LARGE_ARRAY_SIZE,
                 "Too large size ({}) of the state of sequenceMatch/sequenceCount", size);
@@ -130,8 +132,7 @@ struct AggregateFunctionSequenceMatchData final
         conditions_met.set();
 
         events_list.clear();
-        /// Reserving is only an optimization here, so it is derived from payload that already arrived.
-        events_list.reserve(std::min(size, buf.available() / (sizeof(Timestamp) + sizeof(UInt64))));
+        events_list.reserve(size);
 
         for (size_t i = 0; i < size; ++i)
         {

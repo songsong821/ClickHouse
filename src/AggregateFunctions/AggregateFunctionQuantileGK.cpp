@@ -273,28 +273,20 @@ public:
 
         size_t sampled_len = 0;
         readBinaryLittleEndian(sampled_len, buf);
-        /// The constant is arbitrary (matches `windowFunnel`).
+        /// Guard against allocation bombs: a crafted state can declare a huge
+        /// length and make resize_exact allocate gigabytes before any data is read.
         if (sampled_len > 100'000'000)
             throw Exception(ErrorCodes::TOO_LARGE_ARRAY_SIZE,
                 "Too large array size ({}) in quantileGK deserialization", sampled_len);
-
-        static constexpr size_t serialized_stats_size = sizeof(T) + sizeof(Int64) + sizeof(Int64);
-        sampled.clear();
-        /// The loop appends, so reserving is only an optimization: derive it from payload that arrived.
-        sampled.reserve_exact(std::min(sampled_len, buf.available() / serialized_stats_size));
+        sampled.resize_exact(sampled_len);
 
         for (size_t i = 0; i < sampled_len; ++i)
         {
-            Stats stats;
+            auto & stats = sampled[i];
             readBinaryLittleEndian(stats.value, buf);
             readBinaryLittleEndian(stats.g, buf);
             readBinaryLittleEndian(stats.delta, buf);
-            if (sampled.size() == sampled.capacity())
-                sampled.reserve_exact(std::min(sampled_len, std::max<size_t>(2 * sampled.capacity(), 1)));
-            sampled.push_back(stats);
         }
-        /// A valid state holds the capacity it serialized, whatever the payload arrived in.
-        chassert(sampled.capacity() <= sampled_len);
     }
 
 private:

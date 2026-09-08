@@ -91,10 +91,6 @@ private:
     /// Create a new column that has another column as a source.
     MutablePtr createView() const;
 
-    /// Whether a state named `state_type_name` can be inserted into this column. The name may differ
-    /// from `type_string` and still denote the same state, see DataTypeAggregateFunction::nameMatchesState.
-    bool acceptsStateTypeName(const String & state_type_name) const;
-
     explicit ColumnAggregateFunction(const AggregateFunctionPtr & func_, std::optional<size_t> version_ = std::nullopt);
 
     ColumnAggregateFunction(const AggregateFunctionPtr & func_, const ConstArenas & arenas_);
@@ -184,6 +180,8 @@ public:
     serializeValueIntoArena(size_t n, Arena & arena, char const *& begin, const IColumn::SerializationSettings * settings) const override;
 
     void deserializeAndInsertFromArena(ReadBuffer & in, const IColumn::SerializationSettings * settings) override;
+
+    void skipSerializedInArena(ReadBuffer & in) const override;
 
     void updateHashWithValue(size_t n, SipHash & hash) const override;
 

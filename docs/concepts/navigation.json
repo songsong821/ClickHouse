@@ -83,7 +83,6 @@
         {
           "group": "Operations",
           "pages": [
-            "concepts/features/operations/background-queries",
             {
               "group": "Insert",
               "pages": [

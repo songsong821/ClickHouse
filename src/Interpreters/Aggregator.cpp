@@ -2476,27 +2476,15 @@ bool Aggregator::executeOnBlock(Columns columns,
     if (!checkLimits(result_size, no_more_keys))
         return false;
 
-    /// The spill below is decided from query-wide memory but can only free this thread's own
-    /// table. The session's shared drain table is memory no sweep writes once it is below the
-    /// part floor, so left resident it keeps every later block over the threshold.
-    Int64 spill_decision_memory = current_memory_usage;
-    if (adaptive && adaptive->isBaseline() && params.max_bytes_before_external_group_by
-        && result.isTwoLevel() && worth_convert_to_two_level
-        && current_memory_usage > static_cast<Int64>(params.max_bytes_before_external_group_by))
-    {
-        if (auto sampled = releaseAdaptiveDrainResidue(*adaptive->session))
-            spill_decision_memory = *sampled;
-    }
-
     /** Flush data to disk if too much RAM is consumed.
       * Data can only be flushed to disk if a two-level aggregation structure is used.
       */
     if (params.max_bytes_before_external_group_by
         && result.isTwoLevel()
-        && spill_decision_memory > static_cast<Int64>(params.max_bytes_before_external_group_by)
+        && current_memory_usage > static_cast<Int64>(params.max_bytes_before_external_group_by)
         && worth_convert_to_two_level)
     {
-        size_t size = spill_decision_memory + params.min_free_disk_space;
+        size_t size = current_memory_usage + params.min_free_disk_space;
         writeToTemporaryFile(result, size);
     }
 
@@ -2678,10 +2666,6 @@ Aggregator::AggregatedChunk Aggregator::convertOneBucketToChunkTopK(
     /// The root is the worst kept candidate, so a new cell only pays the heap when it beats it.
     const auto worse_first = [&](const Candidate & a, const Candidate & b) { return better(a.value, b.value); };
 
-    /// Only the dataflow statistics cache consumes this byte count, so a null counter makes the
-    /// per-group key materialization below dead work.
-    const bool need_full_key_bytes = full_key_bytes != nullptr;
-
     /// Account for the full output using the same conversion as the final result. A serialized
     /// multi-key table stores a length-prefixed arena blob, whose size is not the size of the
     /// materialized key columns (in particular, every String key has an offset column).
@@ -2698,15 +2682,12 @@ Aggregator::AggregatedChunk Aggregator::convertOneBucketToChunkTopK(
     data.forEachValue(
         [&](const auto & key, auto & mapped)
         {
-            if (need_full_key_bytes)
+            method.insertKeyIntoColumns(
+                key, key_size_columns.raw_key_columns, key_size_key_sizes, &key_size_serialization_settings);
+            for (auto * column : key_size_columns.raw_key_columns)
             {
-                method.insertKeyIntoColumns(
-                    key, key_size_columns.raw_key_columns, key_size_key_sizes, &key_size_serialization_settings);
-                for (auto * column : key_size_columns.raw_key_columns)
-                {
-                    key_bytes += column->byteSizeAt(column->size() - 1);
-                    column->popBack(1);
-                }
+                key_bytes += column->byteSizeAt(column->size() - 1);
+                column->popBack(1);
             }
             const UInt64 value = count_of(mapped);
             if (top.size() < params.bucket_top_k)
@@ -2804,9 +2785,8 @@ Aggregator::AggregatedChunk Aggregator::mergeAndConvertOneBucketToChunk(
     auto method = merged_data.type;
     AggregatedChunk agg_chunk;
 
-    /// Filled by the Top-K conversion when the statistics ask for it (zero otherwise): the
-    /// untruncated key bytes to account in the dataflow statistics, because the truncated chunk
-    /// carries only the kept groups.
+    /// Filled by the Top-K conversion (zero otherwise): the untruncated key bytes to account in
+    /// the dataflow statistics, because the truncated chunk carries only the kept groups.
     UInt64 topk_full_key_bytes = 0;
 
     if (false) {} // NOLINT
@@ -2818,7 +2798,7 @@ Aggregator::AggregatedChunk Aggregator::mergeAndConvertOneBucketToChunk(
             updater->recordAggregationStateSizes(merged_data, bucket); \
         if (is_cancelled.load(std::memory_order_seq_cst)) \
             return {}; \
-        agg_chunk = convertOneBucketToChunk(merged_data, *merged_data.NAME, arena, final, bucket, updater ? &topk_full_key_bytes : nullptr, full_group_count); \
+        agg_chunk = convertOneBucketToChunk(merged_data, *merged_data.NAME, arena, final, bucket, &topk_full_key_bytes, full_group_count); \
         if (updater) \
         { \
             if (topk_full_key_bytes) \

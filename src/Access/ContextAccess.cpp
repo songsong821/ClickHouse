@@ -119,7 +119,7 @@ AccessRights ContextAccess::addImplicitAccessRights(const AccessRights & access,
         if (res & drop_table)
             res |= drop_view;
 
-        if (res.contains(alter_table))
+        if (res & alter_table)
             res |= alter_view;
 
         /// CREATE TABLE (on any database/table) => CREATE_TEMPORARY_TABLE (global)

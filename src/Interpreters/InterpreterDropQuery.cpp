@@ -852,9 +852,10 @@ AccessRightsElements InterpreterDropQuery::getRequiredAccessForDDLOnCluster() co
 
     if (!drop.table)
     {
-        /// `DROP`, `DETACH` and `TRUNCATE` of a database are all authorized by `DROP DATABASE`,
-        /// which is the single privilege `executeToDatabaseImpl` requires for each of them.
-        required_access.emplace_back(AccessType::DROP_DATABASE, drop.getDatabase());
+        if (drop.kind == ASTDropQuery::Kind::Detach)
+            required_access.emplace_back(AccessType::DROP_DATABASE, drop.getDatabase());
+        else if (drop.kind == ASTDropQuery::Kind::Drop)
+            required_access.emplace_back(AccessType::DROP_DATABASE, drop.getDatabase());
     }
     else if (drop.is_dictionary)
     {
@@ -878,8 +879,7 @@ AccessRightsElements InterpreterDropQuery::getRequiredAccessForDDLOnCluster() co
 }
 
 void InterpreterDropQuery::executeDropQuery(ASTDropQuery::Kind kind, ContextPtr global_context, ContextPtr current_context,
-                                            const StorageID & target_table_id, bool sync, bool ignore_sync_setting, bool need_ddl_guard,
-                                            bool propagate_metadata_transaction)
+                                            const StorageID & target_table_id, bool sync, bool ignore_sync_setting, bool need_ddl_guard)
 {
     auto ddl_guard = (need_ddl_guard ? DatabaseCatalog::instance().getDDLGuard(target_table_id.database_name, target_table_id.table_name, nullptr) : nullptr);
     if (DatabaseCatalog::instance().tryGetTable(target_table_id, current_context))
@@ -912,8 +912,7 @@ void InterpreterDropQuery::executeDropQuery(ASTDropQuery::Kind kind, ContextPtr 
             /// For Replicated database
             drop_context->setQueryKindReplicatedDatabaseInternal();
             drop_context->setQueryContext(std::const_pointer_cast<Context>(current_context));
-            if (propagate_metadata_transaction)
-                drop_context->initZooKeeperMetadataTransaction(txn, true);
+            drop_context->initZooKeeperMetadataTransaction(txn, true);
         }
         InterpreterDropQuery drop_interpreter(ast_drop_query, drop_context);
         drop_interpreter.execute();

@@ -124,9 +124,7 @@ public:
 
     size_t getNumberOfArguments() const override { return 0; }
 
-    /// Not injective: on any encoding error - most easily, data too long for a valid Bech32 string -
-    /// the function returns an empty string, so arbitrarily many distinct inputs share that result.
-    bool isInjective(const ColumnsWithTypeAndName &) const override { return false; }
+    bool isInjective(const ColumnsWithTypeAndName &) const override { return true; }
 
     bool isSuitableForShortCircuitArgumentsExecution(const DataTypesWithConstInfo & /*arguments*/) const override { return true; }
 

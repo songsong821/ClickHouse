@@ -218,6 +218,11 @@ public:
         ++s;
     }
 
+    void skipSerializedInArena(ReadBuffer & in) const override
+    {
+        data->skipSerializedInArena(in);
+    }
+
     void updateHashWithValue(size_t, SipHash & hash) const override
     {
         data->updateHashWithValue(0, hash);

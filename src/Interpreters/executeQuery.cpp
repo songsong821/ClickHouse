@@ -592,15 +592,16 @@ QueryLogElement logQueryStart(
         else if (interpreter)
             interpreter->extendQueryLogElem(elem, query_ast, context, query_database, query_table);
 
+        if (settings[Setting::log_query_settings])
+            elem.query_settings = context->getSettingsRef().changedToMap();
+
         elem.log_comment = settings[Setting::log_comment];
         if (elem.log_comment.size() > settings[Setting::max_query_size])
             elem.log_comment.resize(settings[Setting::max_query_size]);
 
         if (elem.type >= settings[Setting::log_queries_min_type] && !settings[Setting::log_queries_min_query_duration_ms].totalMilliseconds())
         {
-            if (settings[Setting::log_query_settings])
-                elem.query_settings = settings.changedToFlatMap();
-            else if (settings[Setting::log_query_settings].changed)
+            if (!settings[Setting::log_query_settings] && settings[Setting::log_query_settings].changed)
                 LOG_TRACE(
                     getLogger("executeQuery"),
                     "Not adding query settings to 'system.query_log' since setting `log_query_settings` is false"
@@ -809,11 +810,6 @@ static void logQueryFinishImpl(
         if (log_queries && elem.type >= settings[Setting::log_queries_min_type]
             && static_cast<Int64>(elem.query_duration_ms) >= settings[Setting::log_queries_min_query_duration_ms].totalMilliseconds())
         {
-            /// Unset unless the QUERY_START row was logged and built them already. Settings cannot change
-            /// while the query runs, so building them here gives the same values.
-            if (settings[Setting::log_query_settings] && !elem.query_settings)
-                elem.query_settings = settings.changedToFlatMap();
-
             if (auto query_log = context->getQueryLog())
                 query_log->add([&](QueryLogElement & e) { e = elem; });
         }
@@ -951,9 +947,6 @@ void logQueryException(
     if (log_queries && elem.type >= settings[Setting::log_queries_min_type]
         && static_cast<Int64>(elem.query_duration_ms) >= settings[Setting::log_queries_min_query_duration_ms].totalMilliseconds())
     {
-        if (settings[Setting::log_query_settings] && !elem.query_settings)
-            elem.query_settings = settings.changedToFlatMap();
-
         if (auto query_log = context->getQueryLog())
             query_log->add([&](QueryLogElement & e) { e = elem; });
     }
@@ -1032,7 +1025,7 @@ void logExceptionBeforeStart(
         elem.tid = txn->tid;
 
     if (settings[Setting::log_query_settings])
-        elem.query_settings = settings.changedToFlatMap();
+        elem.query_settings = settings.changedToMap();
 
     if (settings[Setting::calculate_text_stack_trace])
         elem.stack_trace = getExceptionStackTraceString(std::current_exception());
@@ -3508,20 +3501,12 @@ static void executeASTFuzzerQueries(const ASTPtr & ast, const ContextMutablePtr 
         ContextMutablePtr fuzz_session_context;
         ContextMutablePtr fuzz_context;
 
-        /// Everything this iteration owes once the query is over, on either outcome: the fuzzer state
-        /// it has to report the result to, and the transactions it has to release.
-        auto finish_iteration = [&](bool succeeded)
+        auto reset_transactions = [&]()
         {
             if (fuzz_context)
                 fuzz_context->setCurrentTransaction(NO_TRANSACTION_PTR);
             if (fuzz_session_context)
                 fuzz_session_context->setCurrentTransaction(NO_TRANSACTION_PTR);
-
-            if (!succeeded)
-            {
-                auto [fuzzer, lock] = getGlobalASTFuzzer();
-                fuzzer->notifyQueryFailed(fuzzed_ast);
-            }
         };
 
         try
@@ -3665,15 +3650,17 @@ static void executeASTFuzzerQueries(const ASTPtr & ast, const ContextMutablePtr 
                 }
             }
 
-            finish_iteration(/*succeeded=*/true);
+            reset_transactions();
             base_ast = fuzzed_ast;
         }
         catch (const Exception & e)
         {
-            finish_iteration(/*succeeded=*/false);
+            reset_transactions();
             if (e.code() == ErrorCodes::AST_FUZZER_ORACLE_MISMATCH)
                 throw; /// Oracle mismatch — abort the fuzzer to make it visible in CI
             LOG_TRACE(logger, "Fuzzed query failed: {}", getCurrentExceptionMessage(/*with_stacktrace=*/false));
+            auto [fuzzer, lock] = getGlobalASTFuzzer();
+            fuzzer->notifyQueryFailed(fuzzed_ast);
         }
     }
 }

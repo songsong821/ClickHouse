@@ -6334,8 +6334,6 @@ void StorageReplicatedMergeTree::readLocalSequentialConsistencyImpl(
         }
     }
 
-    /// A boundary that binds comes from ZooKeeper and is identical on every replica, so the clamped read can be coordinated.
-    const bool enable_parallel_reading = local_context->canUseParallelReplicasOnFollower();
     auto plan = MergeTreeDataSelectExecutor(*this).read(
         column_names,
         storage_snapshot,
@@ -6344,7 +6342,7 @@ void StorageReplicatedMergeTree::readLocalSequentialConsistencyImpl(
         max_block_size,
         num_streams,
         std::move(max_added_blocks),
-        enable_parallel_reading);
+        /*enable_parallel_reading=*/ false);
 
     if (plan)
         query_plan = std::move(*plan);
@@ -7855,9 +7853,7 @@ void StorageReplicatedMergeTree::waitForLogEntryToBeProcessedIfNecessary(const R
                             "most likely because the replica was shut down.", error_context, entry.znode_name);
         }
     }
-    /// Value 3 (wait only for active replicas) is a `SharedMergeTree` mode that `ReplicatedMergeTree`
-    /// does not have; here it waits for all replicas, like value 2.
-    else if (query_context->getSettingsRef()[Setting::alter_sync] == 2 || query_context->getSettingsRef()[Setting::alter_sync] == 3)
+    else if (query_context->getSettingsRef()[Setting::alter_sync] == 2)
     {
         waitForAllReplicasToProcessLogEntry(zookeeper_path, entry, wait_for_inactive_timeout, watch_events, error_context);
     }
@@ -8701,9 +8697,7 @@ void StorageReplicatedMergeTree::waitMutation(const String & znode_name, size_t 
     /// we have to wait
     auto zookeeper = getZooKeeper();
     Strings replicas;
-    /// Value 3 (wait only for active replicas) is a `SharedMergeTree` mode that `ReplicatedMergeTree`
-    /// does not have; here it waits for all replicas, like value 2.
-    if (mutations_sync == 2 || mutations_sync == 3) /// wait for all replicas
+    if (mutations_sync == 2) /// wait for all replicas
     {
         replicas = zookeeper->getChildren(fs::path(zookeeper_path) / "replicas");
         /// This replica should be first, to ensure that the mutation will be loaded into memory
@@ -11585,7 +11579,7 @@ bool StorageReplicatedMergeTree::createEmptyPartInsteadOfLost(zkutil::ZooKeeperP
         }
         else if (auto parsed_partition = MergeTreePartition::tryParseValueFromID(
                      new_part_info.getPartitionId(),
-                     MergeTreePartition::adjustPartitionKey(table_metadata, getContext()).sample_block))
+                     table_metadata->getPartitionKey().sample_block))
         {
             partition = MergeTreePartition(*parsed_partition);
         }

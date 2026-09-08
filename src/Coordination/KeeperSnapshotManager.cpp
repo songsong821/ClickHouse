@@ -3,7 +3,6 @@
 #include <optional>
 #include <Compression/CompressedReadBuffer.h>
 #include <Compression/CompressedWriteBuffer.h>
-#include <Compression/CompressionFactory.h>
 #include <Coordination/CoordinationSettings.h>
 #include <Coordination/KeeperCommon.h>
 #include <Coordination/KeeperConstants.h>
@@ -714,9 +713,7 @@ nuraft::ptr<nuraft::buffer> KeeperSnapshotManager::serializeSnapshotToBuffer(con
         compressed_writer = wrapWriteBufferWithCompressionMethod(
             std::move(writer), CompressionMethod::Zstd, snapshot_zstd_compression_level);
     else
-        /// Pin `LZ4` explicitly: this is the legacy custom-frame snapshot format, so it must stay `LZ4`
-        /// independently of the server's default compression codec.
-        compressed_writer = std::make_unique<CompressedWriteBuffer>(*writer, CompressionCodecFactory::instance().get("LZ4", {}));
+        compressed_writer = std::make_unique<CompressedWriteBuffer>(*writer);
 
     KeeperStorageSnapshot::serialize(snapshot, *compressed_writer, keeper_context);
     compressed_writer->finalize();
@@ -932,9 +929,7 @@ SnapshotFileInfoPtr KeeperSnapshotManager::writeSnapshotFile(const KeeperStorage
         else
         {
             unowned_file_buffer = writer.get();
-            /// Pin `LZ4` explicitly: this is the legacy custom-frame snapshot format, so it must stay `LZ4`
-            /// independently of the server's default compression codec.
-            compressed_writer = std::make_unique<CompressedWriteBuffer>(*writer, CompressionCodecFactory::instance().get("LZ4", {}));
+            compressed_writer = std::make_unique<CompressedWriteBuffer>(*writer);
         }
 
         const size_t bytes_before = compressed_writer->count();
