@@ -829,7 +829,9 @@ def test_limit_pushdown(started_cluster):
     cursor = started_cluster.postgres_conn.cursor()
     cursor.execute("DROP TABLE IF EXISTS test_limit_pushdown")
     cursor.execute("CREATE TABLE test_limit_pushdown (id integer)")
-    cursor.execute("INSERT INTO test_limit_pushdown SELECT generate_series(1, 100)")
+    cursor.execute(
+        "INSERT INTO test_limit_pushdown SELECT i FROM generate_series(1, 100) as t(i)"
+    )
 
     node1.query("DROP TABLE IF EXISTS pg_limit_pushdown")
     node1.query(
