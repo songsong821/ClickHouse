@@ -56,10 +56,18 @@ StoredObject pinToTheGenerationThatIsThereNow(IObjectStorage & object_storage, c
         return object;
 
     auto metadata = object_storage.tryGetObjectMetadata(remote_path, /*with_tags=*/ false);
-    /// The blob is not there at all. The copy that follows reports that, as it did before there was
-    /// anything to pin, and the delete of the source never runs.
+    /// The blob of a file the metadata says exists is not there. Returning it unpinned would not
+    /// keep the copy from happening: `copyObject` makes a `HEAD` of its own for a source without an
+    /// `ETag`, so a blob recreated between the two probes would be copied as the generation that
+    /// `HEAD` finds, while the delete that follows would still address the blob by path alone and
+    /// take away whatever is there by then. Fail closed, for the same reason the case of an endpoint
+    /// that reports no generation does: this operation may only move a generation it has named.
     if (!metadata)
-        return object;
+        throw Exception(
+            ErrorCodes::FILE_DOESNT_EXIST,
+            "Blob {} was not moved: it does not exist, so the move cannot be pinned to the generation "
+            "of the blob that is being moved",
+            remote_path.string());
 
     /// The endpoint reports no generation for the blob, so nothing here can be pinned: the copy
     /// would take whatever is there when it runs and the delete would remove whatever is there when

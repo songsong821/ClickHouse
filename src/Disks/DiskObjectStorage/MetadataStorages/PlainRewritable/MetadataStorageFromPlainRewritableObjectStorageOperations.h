@@ -28,7 +28,9 @@ namespace DB
 /// (`AzureObjectStorage::removeObjectImpl` sends it as `If-Match`); for the others the object is
 /// returned as it was and not a single extra request is made. An Azure endpoint that reports no
 /// generation for the blob cannot be pinned to one at all, and the move is refused with
-/// `AZURE_BLOB_STORAGE_ERROR` rather than made blind.
+/// `AZURE_BLOB_STORAGE_ERROR` rather than made blind; a blob that the `HEAD` does not find at all
+/// is refused with `FILE_DOESNT_EXIST` for the same reason, because a blob recreated after that
+/// `HEAD` is a generation this operation has never named.
 StoredObject pinToTheGenerationThatIsThereNow(IObjectStorage & object_storage, const std::filesystem::path & remote_path);
 
 class MetadataStorageFromPlainObjectStorageValidatePreconditionsOperation final : public IMetadataOperation
