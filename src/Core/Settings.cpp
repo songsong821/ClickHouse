@@ -17,6 +17,7 @@
 #include <Core/SettingsTierType.h>
 #include <IO/ReadBufferFromString.h>
 #include <IO/S3Defines.h>
+#include <Access/resolveSetting.h>
 #include <Storages/System/MutableColumnsAndConstraints.h>
 #include <base/types.h>
 #include <Common/NamePrompter.h>
@@ -7084,6 +7085,8 @@ Maximum time to read from a pipe for receiving information from the threads when
 
 This setting allows to specify renaming pattern for files processed by `file` table function. When option is set, all files read by `file` table function will be renamed according to specified pattern with placeholders, only if files processing was successful.
 
+Renaming is a write to the source, so a query that reads the files with this option set requires the `WRITE ON FILE` grant in addition to `READ ON FILE`. `DESCRIBE` does not build the data-reading pipeline that renames, and so requires only `READ ON FILE`.
+
 ### Placeholders
 
 - `%a` — Full original filename (e.g., "sample.csv").
@@ -8795,6 +8798,15 @@ Name of the named collection used by `aiEmbed` when the call does not pass `cred
 
 DECLARE_SETTINGS_TRAITS_ALLOW_CUSTOM_SETTINGS(SettingsTraits, LIST_OF_SETTINGS, COMMON_SETTINGS_SUPPORTED_TYPES)
 
+/// A `merge_tree_`-prefixed name is a `MergeTreeSettings` setting kept here as a custom setting, and it can
+/// have two names. Store it under the canonical one, so that a value written under either name is the value
+/// read under either name, instead of the two names holding two values of one setting.
+template <>
+std::string_view resolveCustomSettingName<SettingsTraits>(std::string_view name)
+{
+    return canonicalSettingName(name);
+}
+
 /** Settings of query execution.
   * These settings go to users.xml.
   */
@@ -9332,6 +9344,11 @@ Field Settings::stringToValueUtil(std::string_view name, const String & str)
 bool Settings::hasBuiltin(std::string_view name)
 {
     return SettingsImpl::hasBuiltin(name);
+}
+
+std::optional<SettingsTierType> Settings::tryGetTierOfBuiltin(std::string_view name)
+{
+    return SettingsImpl::tryGetTierOfBuiltin(name);
 }
 
 std::string_view Settings::resolveName(std::string_view name)
