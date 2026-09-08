@@ -1,4 +1,5 @@
-#ifdef OS_LINUX
+#if defined(OS_LINUX) || defined(OS_DARWIN)
+
 #include <Server/DistributedQuery/ExchangeServer.h>
 #include <Server/DistributedQuery/ExchangeConnections.h>
 #include <Server/DistributedQuery/StreamingExchangeProtocol.h>
@@ -262,7 +263,7 @@ void ExchangeServer::handleConnection(Poco::Net::StreamSocket socket, ExchangeCo
     /// so an unauthenticated peer is never rendezvoused with a local sink. A failure
     /// throws and the connection is dropped without a SinkHello.
     if (authenticate)
-        authenticate(source_hello.jwt_token);
+        authenticate(source_hello.auth_token);
 
     send_sink_hello();
 
@@ -270,4 +271,5 @@ void ExchangeServer::handleConnection(Poco::Net::StreamSocket socket, ExchangeCo
 }
 
 }
+
 #endif
