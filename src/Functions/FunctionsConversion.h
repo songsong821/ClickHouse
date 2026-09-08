@@ -500,7 +500,16 @@ struct ToDateTimeTransform64Signed
                 return static_cast<ToType>(MAX_DATETIME_TIMESTAMP);
         }
 
-        return static_cast<ToType>(std::min(time_t(from), time_t(MAX_DATETIME_TIMESTAMP)));
+        if constexpr (is_big_int_v<FromType>)
+        {
+            /// Compared in the source domain: casting a 128- or 256-bit value to `time_t` first
+            /// truncates it, and a value far above the range would pass the clamp as a small timestamp.
+            if (from > FromType(MAX_DATETIME_TIMESTAMP))
+                return static_cast<ToType>(MAX_DATETIME_TIMESTAMP);
+            return static_cast<ToType>(static_cast<time_t>(from));
+        }
+        else
+            return static_cast<ToType>(std::min(time_t(from), time_t(MAX_DATETIME_TIMESTAMP)));
     }
 };
 
@@ -642,7 +651,9 @@ struct ToDateTime64TransformUnsigned
             /// `from` is unsigned: compare in the unsigned domain before any signed cast. Otherwise a value above
             /// `Int64::max` (e.g. `18446744073709551615`) is first converted to a negative `time_t` by `std::min<time_t>`
             /// and the clamp returns a pre-epoch value instead of saturating to `max_whole`.
-            const time_t clamped = static_cast<UInt64>(from) > static_cast<UInt64>(max_whole) ? max_whole : static_cast<time_t>(from);
+            /// A 128- or 256-bit value is compared in its own domain: narrowing it to `UInt64` first
+            /// would let a value far above the range pass the clamp as an in-range timestamp.
+            const time_t clamped = from > FromType(max_whole) ? max_whole : static_cast<time_t>(from);
             return DecimalUtils::decimalFromComponentsWithMultiplier<DateTime64>(clamped, 0, scale_multiplier);
         }
     }
@@ -669,10 +680,20 @@ struct ToDateTime64TransformSigned
             if (from < min_whole || from > max_whole) [[unlikely]]
                 throw Exception(ErrorCodes::VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE, "Timestamp value {} is out of bounds of type DateTime64", from);
         }
-        from = static_cast<FromType>(std::max<time_t>(from, min_whole));
-        from = static_cast<FromType>(std::min<time_t>(from, max_whole));
+        if constexpr (is_big_int_v<FromType>)
+        {
+            /// Clamped in the source domain: casting a 128- or 256-bit value to `time_t` first
+            /// truncates it, and the clamp would then accept a value from far outside the range.
+            const time_t clamped = from < FromType(min_whole) ? min_whole : (from > FromType(max_whole) ? max_whole : static_cast<time_t>(from));
+            return DecimalUtils::decimalFromComponentsWithMultiplier<DateTime64>(clamped, 0, scale_multiplier);
+        }
+        else
+        {
+            from = static_cast<FromType>(std::max<time_t>(from, min_whole));
+            from = static_cast<FromType>(std::min<time_t>(from, max_whole));
 
-        return DecimalUtils::decimalFromComponentsWithMultiplier<DateTime64>(from, 0, scale_multiplier);
+            return DecimalUtils::decimalFromComponentsWithMultiplier<DateTime64>(from, 0, scale_multiplier);
+        }
     }
 };
 
@@ -784,8 +805,15 @@ struct ToTime64TransformUnsigned
                 throw Exception(ErrorCodes::VALUE_IS_OUT_OF_RANGE_OF_DATA_TYPE, "Timestamp value {} is out of bounds of type Time64", from);
         }
 
-        /// clamp in unsigned domain to avoid wrong when casting UInt64 above INT64_MAX to time_t
-        auto clamped = static_cast<time_t>(std::min<UInt64>(from, static_cast<UInt64>(MAX_TIME_TIMESTAMP)));
+        /// Clamped in the source domain when the source is wider than `time_t`: narrowing a 128- or
+        /// 256-bit value first would let a value far above the range pass the clamp as an in-range
+        /// timestamp. The `UInt64` comparison below is unsigned for the same reason.
+        time_t clamped;
+        if constexpr (is_big_int_v<FromType>)
+            clamped = from > FromType(MAX_TIME_TIMESTAMP) ? MAX_TIME_TIMESTAMP : static_cast<time_t>(from);
+        else
+            clamped = static_cast<time_t>(std::min<UInt64>(from, static_cast<UInt64>(MAX_TIME_TIMESTAMP)));
+
         return DecimalUtils::decimalFromComponentsWithMultiplier<Time64>(clamped, 0, scale_multiplier);
     }
 };
@@ -812,7 +840,21 @@ struct ToTime64TransformSigned
         /// For Saturate / Ignore overflow modes the value still has to be clamped to the representable
         /// Time64 range. Otherwise two casts can produce Time64 values that render identically as e.g.
         /// '999:59:59.000' but compare as different, because the underlying decimal stores the raw input.
-        const auto clamped = std::max<Int64>(std::min<Int64>(static_cast<Int64>(from), MAX_TIME_TIMESTAMP), -static_cast<Int64>(MAX_TIME_TIMESTAMP));
+        Int64 clamped;
+        if constexpr (is_big_int_v<FromType>)
+        {
+            /// Compared in the source domain: the cast to `Int64` would otherwise truncate a 128- or
+            /// 256-bit value into the range before the clamp sees it.
+            if (from < -FromType(MAX_TIME_TIMESTAMP))
+                clamped = -MAX_TIME_TIMESTAMP;
+            else if (from > FromType(MAX_TIME_TIMESTAMP))
+                clamped = MAX_TIME_TIMESTAMP;
+            else
+                clamped = static_cast<Int64>(from);
+        }
+        else
+            clamped = std::max<Int64>(std::min<Int64>(static_cast<Int64>(from), MAX_TIME_TIMESTAMP), -static_cast<Int64>(MAX_TIME_TIMESTAMP));
+
         return DecimalUtils::decimalFromComponentsWithMultiplier<Time64>(clamped, 0, scale_multiplier);
     }
 };
@@ -2156,7 +2198,10 @@ struct ConvertImpl
                 return DateTimeTransformImpl<FromDataType, ToDataType, ToTimeTransform64<typename FromDataType::FieldType, Int32, default_date_time_overflow_behavior>, false>::template execute<Additions>(
                     arguments, result_type, input_rows_count);
         }
-        /// Special case of converting Int8, Int16, Int32 or (U)Int64 (and also, for convenience, Float32, Float64, BFloat16) to DateTime.
+        /// Special case of converting Int8, Int16, Int32, (U)Int64, (U)Int128 or (U)Int256 (and also, for
+        /// convenience, Float32, Float64, BFloat16) to DateTime. Without the wide integers here the
+        /// conversion would fall through to the generic numeric path, which narrows to `UInt32` modulo
+        /// 2^32 instead of saturating - and the monotonicity `toDateTime` claims would not hold.
         else if constexpr ((
                 std::is_same_v<FromDataType, DataTypeInt8>
                 || std::is_same_v<FromDataType, DataTypeInt16>
@@ -2166,7 +2211,10 @@ struct ConvertImpl
             return DateTimeTransformImpl<FromDataType, ToDataType, ToDateTimeTransformSigned<typename FromDataType::FieldType, UInt32, default_date_time_overflow_behavior>, false>::template execute<Additions>(
                 arguments, result_type, input_rows_count);
         }
-        else if constexpr (std::is_same_v<FromDataType, DataTypeUInt64>
+        else if constexpr ((
+                std::is_same_v<FromDataType, DataTypeUInt64>
+                || std::is_same_v<FromDataType, DataTypeUInt128>
+                || std::is_same_v<FromDataType, DataTypeUInt256>)
             && std::is_same_v<ToDataType, DataTypeDateTime>)
         {
             return DateTimeTransformImpl<FromDataType, ToDataType, ToDateTimeTransform64<typename FromDataType::FieldType, UInt32, default_date_time_overflow_behavior>, false>::template execute<Additions>(
@@ -2174,6 +2222,8 @@ struct ConvertImpl
         }
         else if constexpr ((
                 std::is_same_v<FromDataType, DataTypeInt64>
+                || std::is_same_v<FromDataType, DataTypeInt128>
+                || std::is_same_v<FromDataType, DataTypeInt256>
                 || std::is_same_v<FromDataType, DataTypeFloat32>
                 || std::is_same_v<FromDataType, DataTypeFloat64>
                 || std::is_same_v<FromDataType, DataTypeBFloat16>)
@@ -2186,7 +2236,9 @@ struct ConvertImpl
                 std::is_same_v<FromDataType, DataTypeInt8>
                 || std::is_same_v<FromDataType, DataTypeInt16>
                 || std::is_same_v<FromDataType, DataTypeInt32>
-                || std::is_same_v<FromDataType, DataTypeInt64>)
+                || std::is_same_v<FromDataType, DataTypeInt64>
+                || std::is_same_v<FromDataType, DataTypeInt128>
+                || std::is_same_v<FromDataType, DataTypeInt256>)
             && (std::is_same_v<ToDataType, DataTypeDateTime64> || std::is_same_v<ToDataType, DataTypeTime64>))
         {
             if constexpr (std::is_same_v<ToDataType, DataTypeDateTime64>)
@@ -2196,14 +2248,17 @@ struct ConvertImpl
                 return DateTimeTransformImpl<FromDataType, ToDataType, ToTime64TransformSigned<typename FromDataType::FieldType, default_date_time_overflow_behavior>, false>::template execute<Additions>(
                     arguments, result_type, input_rows_count, additions);
         }
-        else if constexpr (std::is_same_v<FromDataType, DataTypeUInt64>
+        else if constexpr ((
+                std::is_same_v<FromDataType, DataTypeUInt64>
+                || std::is_same_v<FromDataType, DataTypeUInt128>
+                || std::is_same_v<FromDataType, DataTypeUInt256>)
             && (std::is_same_v<ToDataType, DataTypeDateTime64> || std::is_same_v<ToDataType, DataTypeTime64>))
         {
             if constexpr (std::is_same_v<ToDataType, DataTypeDateTime64>)
-                return DateTimeTransformImpl<FromDataType, ToDataType, ToDateTime64TransformUnsigned<UInt64, default_date_time_overflow_behavior>, false>::template execute<Additions>(
+                return DateTimeTransformImpl<FromDataType, ToDataType, ToDateTime64TransformUnsigned<typename FromDataType::FieldType, default_date_time_overflow_behavior>, false>::template execute<Additions>(
                     arguments, result_type, input_rows_count, additions);
             else
-                return DateTimeTransformImpl<FromDataType, ToDataType, ToTime64TransformUnsigned<UInt64, default_date_time_overflow_behavior>, false>::template execute<Additions>(
+                return DateTimeTransformImpl<FromDataType, ToDataType, ToTime64TransformUnsigned<typename FromDataType::FieldType, default_date_time_overflow_behavior>, false>::template execute<Additions>(
                     arguments, result_type, input_rows_count, additions);
         }
         else if constexpr ((
