@@ -37,6 +37,7 @@
 
 #include <bit>
 #include <cstring>
+#include <limits>
 #include <optional>
 
 namespace DB
@@ -1754,7 +1755,12 @@ ColumnPtr FunctionArrayElement<mode>::executeTuple(const ColumnsWithTypeAndName 
 
             Int64 idx = 0;
             if (index_field.getType() == Field::Types::UInt64)
-                idx = static_cast<Int64>(index_field.safeGet<UInt64>());
+            {
+                const UInt64 value = index_field.safeGet<UInt64>();
+                idx = value > static_cast<UInt64>(std::numeric_limits<Int64>::max())
+                    ? std::numeric_limits<Int64>::max()
+                    : static_cast<Int64>(value);
+            }
             else
                 idx = index_field.safeGet<Int64>();
 
