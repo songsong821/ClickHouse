@@ -7,8 +7,6 @@
 
 #include <fmt/format.h>
 
-#include <tuple>
-
 namespace DB
 {
 
@@ -229,23 +227,33 @@ void AllocationQueue::approveIncrease()
     chassert(increase);
     ResourceAllocation & allocation = increase->allocation;
     SCHED_DBG("{} -- approveIncrease(id={}, size={}, allocated={})", getPath(), allocation.id, increase->size, allocated);
+    // `admitted` is part of the `ByEvictionKey` ordering of `running_allocations`, so it must carry its final
+    // value whenever the allocation is (re)inserted there. `apply` below keys off `increase.kind`, not
+    // `admitted`, so setting the flag first is safe. Mark the allocation admitted so its eventual removal
+    // propagates a matching `removing_allocation` decrease instead of underflowing `allocations`.
     if (allocation.increase.kind == IncreaseRequest::Kind::Pending)
     {
         pending_allocations.erase(pending_allocations.iterator_to(allocation));
         pending_allocations_size -= allocation.increase.size;
         allocation.fair_key = increase->size;
+        allocation.admitted = true;
         running_allocations.insert(allocation);
     }
     else
+    {
         increasing_allocations.erase(increasing_allocations.iterator_to(allocation));
+        // A `Kind::Initial` increase admits an allocation that is already in `running_allocations` (inserted
+        // as a zero-cost, not-admitted allocation). Re-key it: erase, flip `admitted`, re-insert so it lands
+        // at its new `ByEvictionKey` position.
+        if (allocation.increase.kind == IncreaseRequest::Kind::Initial)
+        {
+            running_allocations.erase(running_allocations.iterator_to(allocation));
+            allocation.admitted = true;
+            running_allocations.insert(allocation);
+        }
+    }
     apply(*increase);
     allocation.allocated += increase->size;
-    // `apply` above incremented `allocations` for `Kind::Pending`/`Kind::Initial`. Mark the
-    // allocation as admitted so its eventual removal propagates a matching `removing_allocation`
-    // decrease (instead of underflowing `allocations` in the hierarchy).
-    if (allocation.increase.kind == IncreaseRequest::Kind::Pending
-        || allocation.increase.kind == IncreaseRequest::Kind::Initial)
-        allocation.admitted = true;
 
     // Notify allocation
     increase->allocation.increaseApproved(*increase);
@@ -303,54 +311,17 @@ ResourceAllocation * AllocationQueue::selectAllocationToKill(IncreaseRequest & k
     if (running_allocations.empty())
         return nullptr;
 
-    // If the requester's own reservation already exceeds the workload limit, no eviction of another
-    // allocation can make it admissible; evicting a peer would just lose that query for nothing while the
-    // requester still has to give up. Select the requester itself so a single impossible grow does not
-    // also take a higher-scored peer down with it. `fair_key` is the requester's allocated size plus its
-    // pending increase, so `fair_key > limit` means it cannot fit even with the whole workload freed.
-    // This queue is the least common ancestor of killer and victim (they coincide), so fill in `details`.
-    if (&killer.allocation.queue == this && killer.allocation.fair_key > limit)
-    {
-        details = fmt::format("Evicting allocation of size {} (memory_eviction_score {}) in workload '{}' to satisfy its own increase for {}.",
-            formatReadableCost(killer.allocation.allocated), killer.allocation.memory_eviction_score, getWorkloadName(), formatReadableCost(killer.size));
-        return &killer.allocation;
-    }
+    // The impossible-grow self-kill (the requester's own reservation exceeds the limit, so no eviction can
+    // make it fit) is handled by `AllocationLimit` before it descends to a victim, so it also covers a
+    // cross-workload least common ancestor. Nothing to decide from `limit` at the leaf.
+    UNUSED(limit);
 
-    // Choose the eviction victim among the running allocations.
-    //
-    // Skip never-admitted allocations other than the requester itself. A never-admitted allocation
-    // (e.g. `reserve_memory = 0` before its first non-zero sync) frees nothing when killed and is removed
-    // via the local path in `processActivation` that never propagates a decrease to the parent limit, so
-    // picking such a third party would leave the over-limit increase blocked forever. The requester is
-    // exempt so a never-admitted query can still select itself and fail its own increase cleanly (the
-    // self-kill path handled by `AllocationLimit`).
-    //
-    // Rank the remaining candidates by (frees memory, memory_eviction_score, fair_key, unique_id), highest
-    // first. `frees memory` deprioritizes a third party that holds nothing (an admitted allocation shrunk
-    // back to zero): a real holder is evicted first, yet such an allocation stays evictable when it is the
-    // only candidate, so a lower-precedence workload holding only a shrunk allocation cannot block a
-    // higher-precedence one. The requester is always treated as freeing memory — abandoning its own request
-    // relieves the pressure even when it currently holds nothing — so it never sinks below a third-party
-    // holder on the `allocated` component alone. `memory_eviction_score` (the per-query setting, 0 by
-    // default) then decides, falling back to the largest `fair_key`. At the default score the score has no
-    // effect, so the victim is the largest reservation among the candidates that can free memory — a
-    // zero-byte re-grower is not chosen even when its `fair_key` is the largest.
-    auto rankKey = [&killer](const ResourceAllocation & a)
-    {
-        const bool frees_memory = a.allocated > 0 || &a == &killer.allocation;
-        return std::make_tuple(frees_memory, a.memory_eviction_score, a.fair_key, a.unique_id);
-    };
-    ResourceAllocation * victim_ptr = nullptr;
-    for (ResourceAllocation & candidate : running_allocations)
-    {
-        if (!candidate.admitted && &candidate != &killer.allocation)
-            continue;
-        if (!victim_ptr || rankKey(candidate) > rankKey(*victim_ptr))
-            victim_ptr = &candidate;
-    }
-    if (!victim_ptr)
-        return nullptr; // No admitted allocation to reclaim from in this queue.
-    ResourceAllocation & victim = *victim_ptr;
+    // The victim is the greatest allocation by `ByEvictionKey`: an admitted allocation with the highest
+    // `memory_eviction_score`, then the largest `fair_key`. Not-admitted allocations sort first (killed last),
+    // so a pending/never-admitted allocation is chosen only when no admitted one exists — which cannot happen
+    // under real memory pressure (the memory is held by an admitted allocation), and an impossible grow is
+    // already handled by the self-kill above.
+    ResourceAllocation & victim = *running_allocations.rbegin();
 
     // If this is the least common ancestor of killer and victim - add details
     if (&killer.allocation.queue == this)

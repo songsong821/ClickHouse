@@ -14,6 +14,7 @@ namespace DB
 class ISpaceSharedNode;
 class IAllocationQueue;
 class AllocationQueue;
+class AllocationLimit;
 
 /// Represents a resource allocation that could change its size during its lifetime.
 /// Both increase and decrease of size are done through interaction with IAllocationQueue.
@@ -50,6 +51,7 @@ public:
 
 private:
     friend class AllocationQueue;
+    friend class AllocationLimit; // reads `fair_key` to self-kill a requester whose grow exceeds the limit
 
     ResourceCost allocated = 0; /// Currently allocated.
     bool admitted = false; /// True once `apply(IncreaseRequest)` has incremented `allocations` in the hierarchy for this allocation.
@@ -74,15 +76,23 @@ private:
     size_t unique_id = 0; /// Unique id for tie breaking in ordering.
     ResourceCost fair_key = 0; /// Currently allocated plus pending increase (key for max-min fair ordering).
 
-    /// Ordering by size and unique id for tie breaking
-    /// Used for both running and increasing allocations for consistent ordering
+    /// Ordering by size and unique id for tie breaking.
+    /// Used for `increasing_allocations`: the next increase to process is the one with the smallest `fair_key`.
     /// NOTE: called outside of the scheduler thread and thus requires queue.mutex
     struct ByFairKey { bool operator()(const auto & lhs, const auto & rhs) const noexcept { return std::tie(lhs.fair_key, lhs.unique_id) < std::tie(rhs.fair_key, rhs.unique_id); } };
+
+    /// Ordering for eviction victim selection (`running_allocations`): the victim is `rbegin()` (the greatest
+    /// key). Not-admitted allocations sort first, so they are killed last — a pending/never-admitted allocation
+    /// is never chosen while an admitted one exists. Among admitted allocations a higher `memory_eviction_score`
+    /// is evicted first, then the largest `fair_key`. `admitted` and `fair_key` are mutable keys, so an
+    /// allocation must be erased from the set before either changes and re-inserted afterwards.
+    /// NOTE: called outside of the scheduler thread and thus requires queue.mutex
+    struct ByEvictionKey { bool operator()(const auto & lhs, const auto & rhs) const noexcept { return std::tie(lhs.admitted, lhs.memory_eviction_score, lhs.fair_key, lhs.unique_id) < std::tie(rhs.admitted, rhs.memory_eviction_score, rhs.fair_key, rhs.unique_id); } };
 
     /// Intrusive data structures for managing allocations
     /// We use intrusive structures to avoid allocations during scheduling (we might be under memory pressure)
     using PendingList    = boost::intrusive::list<ResourceAllocation, PendingHook>;
-    using RunningSet     = boost::intrusive::set<ResourceAllocation, RunningHook, boost::intrusive::compare<ByFairKey>>;
+    using RunningSet     = boost::intrusive::set<ResourceAllocation, RunningHook, boost::intrusive::compare<ByEvictionKey>>;
     using IncreasingSet  = boost::intrusive::set<ResourceAllocation, IncreasingHook, boost::intrusive::compare<ByFairKey>>;
     using DecreasingList = boost::intrusive::list<ResourceAllocation, DecreasingHook>;
     using RemovingList   = boost::intrusive::list<ResourceAllocation, RemovingHook>;
