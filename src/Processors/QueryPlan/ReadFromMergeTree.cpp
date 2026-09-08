@@ -2148,16 +2148,17 @@ Pipe ReadFromMergeTree::spreadMarkRangesAmongStreamsWithOrder(
             (can_use_per_part_prefetching || (prefer_multiple_streams && num_streams > 1))
             && parts_with_ranges.size() <= num_streams;
 
-        /// Read-ahead budget shared by the streams of one part, see `PrefetchingConcatProcessor`.
-        /// It is the budget `SortingStep` gives to a single merge input through
-        /// `BufferChunksTransform`, and collapsing a part's streams into one merge input is
-        /// precisely what moves that budget from per-stream to per-part. Sizing the read-ahead
-        /// by the same settings, instead of by a fixed number of chunks, is what keeps all of
-        /// the part's streams reading concurrently: with a fixed window the read parallelism
-        /// would be pinned to the window no matter how many threads the query has, which costs
-        /// throughput whenever the sources are decompression- or latency-bound.
+        /// Read-ahead budget for a stream inside the `PrefetchingConcat` prefetch window: the
+        /// budget `SortingStep` gives to a single merge input through `BufferChunksTransform`,
+        /// which is what the stream had before its part's streams were concatenated. Sizing it
+        /// this way, instead of by a fixed number of chunks, is what keeps reads in flight: a
+        /// stream reads its ranges sequentially, so it only has a request outstanding while it
+        /// still has somewhere to put the result, and two chunks of depth is not enough to hide
+        /// the latency of a read that does not come from the page cache. The total is bounded by
+        /// the window rather than by the number of streams, which is what keeps the read-ahead
+        /// proportional to the number of parts.
         /// `read_in_order_use_buffering = 0` asks for no read-ahead at all; then the budget is
-        /// zero and every source stalls after the one chunk its port holds, as it does today
+        /// zero and every source stalls after the one chunk its port holds, exactly as it does
         /// when the streams are separate merge inputs and buffering is off.
         const bool use_read_ahead = settings[Setting::read_in_order_use_buffering];
         const size_t prefetch_max_rows = use_read_ahead ? settings[Setting::max_block_size] : 0;
