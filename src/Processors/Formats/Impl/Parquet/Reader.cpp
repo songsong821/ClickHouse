@@ -16,6 +16,7 @@
 #include <Formats/FormatFilterInfo.h>
 #include <Functions/FunctionTopKFilter.h>
 #include <Interpreters/castColumn.h>
+#include <Interpreters/convertFieldToType.h>
 #include <Processors/TopKThresholdTracker.h>
 #include <IO/CompressionMethod.h>
 #include <IO/Libdeflate.h>
@@ -406,6 +407,31 @@ std::optional<Range> Reader::getTopKSortColumnRange(const parq::RowGroup & meta)
         column_info.decoder.decodeField(column_meta.statistics.min_value, /*is_max=*/ false, *column_info.decoded_type, output_block_type, range.left);
         column_info.decoder.decodeField(column_meta.statistics.max_value, /*is_max=*/ true, *column_info.decoded_type, output_block_type, range.right);
 
+        /// `decodeField` leaves a bound at the `Range` infinity sentinel when the statistic cannot
+        /// be turned into a usable value (a `nan`, a rescale overflow, a signed/unsigned
+        /// mismatch, ...). One unusable bound invalidates the other one too: a `min_value` that
+        /// the output type cannot hold means the row group stores a value that `castColumn` wraps
+        /// or clamps to an arbitrary place in the output value space, and then the decoded
+        /// `max_value` is no longer an upper bound of what the sort sees. Give up on the whole row
+        /// group rather than on one side of the range.
+        if (range.left.isNull() || range.right.isNull())
+            return std::nullopt;
+
+        /// `decodeField` produces a `Field` in the output block type's value space only where a
+        /// `castColumn` over the values would rescale them (`cast_stats_to_output_type`); under a
+        /// narrowing type hint - an `INT32` column read as `UInt16`, say - it keeps the raw
+        /// physical value, while the values themselves reach the sort wrapped around by
+        /// `castColumn` (https://github.com/ClickHouse/ClickHouse/issues/118383). Comparing such a
+        /// bound against the threshold compares two different value spaces, so require both bounds
+        /// to be exactly representable in the output block type: an interval whose ends both are
+        /// representable holds no value that the cast could move.
+        Field left = tryConvertFieldToType(range.left, output_block_type, /*from_type_hint=*/ nullptr, /*format_settings=*/ {}, /*strict=*/ true);
+        Field right = tryConvertFieldToType(range.right, output_block_type, /*from_type_hint=*/ nullptr, /*format_settings=*/ {}, /*strict=*/ true);
+        if (left.isNull() || right.isNull())
+            return std::nullopt;
+        range.left = std::move(left);
+        range.right = std::move(right);
+
         /// Same validation as the static min/max pruning path: self-contradictory statistics
         /// (`min_value > max_value`) must fail closed rather than become pruning input. We get here
         /// only for chunks proven to have no nulls, hence `can_be_null = false`.
@@ -436,12 +462,12 @@ bool Reader::topKShouldSkipRowGroup(const RowGroup & row_group) const
     /// tie-break into the heap on the remaining sort columns), matching `__topKFilter`.
     const Range & range = *row_group.top_k_sort_column_range;
     const Field & boundary = tracker.getDirection() == 1 ? range.left : range.right;
-    /// `decodeField` leaves a bound at the `Range` infinity sentinel when the statistic cannot be
-    /// turned into a usable value (`NaN`, a rescale overflow, a signed/unsigned mismatch, ...).
-    /// Those sentinels are `Null`-typed `Field`s, and `TopKThresholdTracker` compares any `Null` as
-    /// SQL `NULL` - ordered by `nulls_direction` - not as an infinity, so an unbounded side would
-    /// read as "beyond the threshold" and skip a row group that may hold the best rows. An
-    /// unbounded side can never prove exclusion.
+    /// `getTopKSortColumnRange` only hands out a range whose both bounds decoded into the output
+    /// block type's value space, so this is unreachable - but the cost of being wrong is a lost
+    /// row: the `Range` infinity sentinels are `Null`-typed `Field`s, which `TopKThresholdTracker`
+    /// compares as a SQL `NULL` - ordered by `nulls_direction` - rather than as an infinity, so an
+    /// unbounded side would read as "beyond the threshold" and skip the row group.
+    chassert(!boundary.isNull());
     if (boundary.isNull())
         return false;
     return !tracker.isValueInsideThreshold(boundary);
