@@ -833,14 +833,14 @@ SinkToStoragePtr StorageObjectStorage::write(
     /// prefix keep seeing the stale rows.
     if (settings.truncate_on_insert)
     {
-        const bool has_numbered_tail = paths.size() > 1;
-        paths.resize(1);
-        if (settings.split_on_write_by_size_bytes || has_numbered_tail)
+        if (settings.split_on_write_by_size_bytes || paths.size() > 1)
             removeStaleSplitObjects(
                 *object_storage,
                 paths.front().path,
                 getStartSequenceNumber(paths.front().path, 1),
                 settings.create_new_file_on_insert);
+
+        paths.resize(1);
     }
 
     if (auto new_key = checkAndGetNewFileOnInsertIfNeeded(

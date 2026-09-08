@@ -3224,14 +3224,17 @@ SinkToStoragePtr StorageFile::write(
     /// insert is split by size: a rewrite with `engine_file_split_on_write_by_size_bytes` turned back to 0
     /// has to drop the numbered tail of the previous split insert as well, otherwise both this table and
     /// the readers of the glob pattern over the directory keep seeing the stale rows.
+    ///
+    /// The removal happens before the list of the paths is truncated, so that a failure to delete a file
+    /// leaves the table with the whole tail still visible instead of silently hiding it until a restart.
     if (!use_table_fd && !paths.empty() && context->getSettingsRef()[Setting::engine_file_truncate_on_insert]
         && (split_on_write_by_size_bytes || paths.size() > 1))
     {
-        paths.resize(1);
         removeStaleSplitFiles(
             path,
             getStartSequenceNumber(path, 1),
             context->getSettingsRef()[Setting::engine_file_allow_create_multiple_files]);
+        paths.resize(1);
     }
 
     StorageFileSink::GetNextPathCallback get_next_path;
