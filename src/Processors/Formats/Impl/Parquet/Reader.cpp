@@ -10,6 +10,7 @@
 #include <Columns/ColumnsNumber.h>
 #include <Columns/ColumnTuple.h>
 #include <Columns/FilterDescription.h>
+#include <DataTypes/DataTypeLowCardinality.h>
 #include <DataTypes/DataTypeNullable.h>
 #include <Common/FieldAccurateComparison.h>
 #include <Common/checkStackSize.h>
@@ -400,6 +401,17 @@ std::optional<Range> Reader::getTopKSortColumnRange(const parq::RowGroup & meta)
         bool can_contain_float = isFloat(output_block_type_ptr);
         output_block_type_ptr->forEachChild([&](const IDataType & child) { can_contain_float = can_contain_float || isFloat(child); });
         if (can_contain_float)
+            return std::nullopt;
+
+        /// Parquet orders `UUID` statistics bytewise (parquet.thrift gives the `UUID` logical type
+        /// the `UNSIGNED` sort order, over the 16 big-endian bytes), while ClickHouse compares a
+        /// `UUID` as its two 64-bit halves in the opposite order. So the bytewise `min_value` /
+        /// `max_value` are not the extrema of the row group in the query's order - they can even
+        /// come out inverted - and cannot bound it
+        /// (https://github.com/ClickHouse/ClickHouse/issues/118371). This is the same situation as
+        /// a collated `ORDER BY`: only the statistics shortcut is unusable, the per-row
+        /// `__topKFilter` compares the decoded values and stays.
+        if (WhichDataType(removeNullable(removeLowCardinality(output_block_type_ptr))).isUUID())
             return std::nullopt;
 
         const IDataType & output_block_type = *output_block_type_ptr;
