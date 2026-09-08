@@ -81,8 +81,9 @@ private:
     /// The offset just past the last byte of the data that the read is expected to deliver.
     size_t getEndOfData() const;
 
-    /// The locally known size of the object, when it may be used as a hard end of the data.
-    std::optional<size_t> boundingObjectSize() const;
+    /// Whether the end of the data is known from local information rather than from the responses
+    /// of this read.
+    bool isEndOfDataKnownLocally() const { return read_until_position != 0 || known_object_size.has_value(); }
 
     /// Drops the current response and the bytes buffered from it, so that the next read reopens
     /// the download at the current position. Called when the right bound of the read changes.
@@ -112,10 +113,13 @@ private:
     size_t total_size{};
 
     /// The size of the object as it was known locally before the read started (from the `LIST` or
-    /// `HEAD` that produced the `StoredObject`). It does not come from the response that is being
-    /// validated, but it describes the generation of the object that the `LIST` or the `HEAD` saw,
-    /// so it decides where an unbounded read ends only when this read is pinned to that same
-    /// generation - see `boundingObjectSize`.
+    /// the `HEAD` that produced the `StoredObject`). It does not come from the response that is
+    /// being validated, so it is a hard end of the data of an unbounded read: every layer above
+    /// this buffer already treats it as the length of the file - `ReadBufferFromRemoteFSGather`
+    /// places the following object right behind it, `ReaderExecutor` clamps object reads to it, the
+    /// caches address the data within a file of that length, and `AsynchronousBoundedReadBuffer`
+    /// takes it as its own right bound - so a response that carries more data than that cannot have
+    /// the excess handed to the caller under offsets that belong to something else.
     std::optional<size_t> known_object_size;
 
     /// The `ETag` of the object generation selected at read setup. When it is not empty, every
@@ -130,6 +134,16 @@ private:
     /// that ends before it is a premature end of the response rather than the end of the file. It
     /// never decreases within one logical read and is reset by a seek.
     size_t reported_object_size = 0;
+
+    /// A download was freshly opened at the current offset in order to find out whether the object
+    /// really ends there, for a read that has no locally known end of data. Reset as soon as any
+    /// byte arrives, by a seek and by a change of the right bound.
+    bool end_of_object_probed = false;
+
+    /// The endpoint refused a range that starts at the current offset, which is it stating that the
+    /// object has no byte there. Only set for a read with no locally known end of data, and only at
+    /// an offset the responses of this read did not claim to be inside the object.
+    bool end_of_object_confirmed = false;
 
     bool initialized = false;
     char * data_ptr;

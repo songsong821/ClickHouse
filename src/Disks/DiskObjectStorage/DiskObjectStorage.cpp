@@ -840,50 +840,11 @@ void DiskObjectStorage::prepareRead(
         }
     }
 
-    StoredObjects storage_objects = metadata_storage->getStorageObjects(path);
+    const StoredObjects storage_objects = metadata_storage->getStorageObjects(path);
 
     auto read_settings = settings;
     auto global_context = Context::getGlobalContextInstance();
     auto storage = object_storages->takePointingTo(cluster->getLocalLocation());
-
-    /// The size that comes with the metadata is a statement about one generation of the blob, and it
-    /// is authoritative only for a read that is pinned to that same generation.
-    ///
-    /// `plain` and `plain_rewritable` address a blob by the path of the file, so a file rewritten in
-    /// place keeps its blob key, and their metadata records no `ETag`: the size comes from a `LIST`
-    /// or a `HEAD` (possibly a cached one) made before the read, and describes whichever generation
-    /// existed at that moment. On Azure the read buffer already refuses to end such an unpinned read
-    /// at that size (`ReadBufferFromAzureBlobStorage::boundingObjectSize`), because the blob may have
-    /// been overwritten with a larger one since; handing the stale size to the layers above would
-    /// reintroduce exactly the truncation the buffer avoids, since `ReaderExecutor` clamps object
-    /// reads to `StoredObject::bytes_size` and the caches take it as the length of the file. Report
-    /// the size as unknown instead: `ReadPipeline` then skips both caches and the executor for the
-    /// object, and the end of the data is left to the buffer that reads it. This mirrors what
-    /// `StorageObjectStorageSource::createReadBuffer` does for a table function read whose
-    /// generation is not pinned.
-    ///
-    /// Only Azure is treated this way, and for the same reason as there: `ReadBufferFromS3` learns
-    /// the size of the object from the endpoint during the read rather than from this pre-read
-    /// value, so for S3 the outer size is not a claim about a generation the read is not tied to.
-    /// The metadata storages that keep their own metadata (`local`, `keeper`) write every blob under
-    /// a fresh key, so the size they recorded describes a blob nobody overwrites.
-    if (storage->getType() == ObjectStorageType::Azure
-        && (metadata_storage->getType() == MetadataStorageType::Plain
-            || metadata_storage->getType() == MetadataStorageType::PlainRewritable))
-    {
-        for (auto & object : storage_objects)
-        {
-            if (object.etag.empty() && object.bytes_size != StoredObject::UnknownSize)
-            {
-                LOG_TEST(
-                    log,
-                    "Reading {} (blob {}) without the size measured before the read: the read is not "
-                    "pinned to the generation it was measured on",
-                    path, object.remote_path);
-                object.bytes_size = StoredObject::UnknownSize;
-            }
-        }
-    }
 
     /// Empty objects (zero-blob file) — set an empty source so `ReadPipeline::build`
     /// returns `ReadBufferFromEmptyFile`. No stages are needed below the source.

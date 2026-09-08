@@ -265,10 +265,9 @@ std::unique_ptr<ReadBufferFromFileBase> AzureObjectStorage::readObject( /// NOLI
         /// was never determined; it is not a real size, so it must not become an end-of-file bound.
         /// Any other value, zero included, is a real size: it was obtained from the `LIST` or `HEAD`
         /// that produced the `StoredObject` before the read started (every Azure carrier reports the
-        /// `BlobSize` of the listing or of the properties). It describes the generation of the object
-        /// that was measured, so the read ends there only when it is pinned to that generation - see
-        /// `ReadBufferFromAzureBlobStorage::boundingObjectSize`. An empty blob is the exception: it is
-        /// known to be empty, and no byte an endpoint hands out for it may be delivered.
+        /// `BlobSize` of the listing or of the properties). It is the length of the file for every
+        /// layer above the buffer, so the read ends there - see
+        /// `ReadBufferFromAzureBlobStorage::known_object_size`.
         object.bytes_size != StoredObject::UnknownSize ? std::optional<size_t>(object.bytes_size) : std::nullopt,
         /// Pin every request of this read to the generation of the blob seen at read setup, so an
         /// in-place overwrite cannot splice two generations into one logical read.

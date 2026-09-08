@@ -1817,47 +1817,12 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBuffer(
             "after it, but that generation is not known",
             object_info.getPath());
 
-    /// The size seen before the read is authoritative only for a read pinned to the generation it
-    /// was measured on. `ReadBufferFromAzureBlobStorage` already refuses to bound an unpinned read
-    /// by it (`boundingObjectSize`), because the blob may have been overwritten between the
-    /// `LIST`/`HEAD` and the `GET`; handing the stale size to the outer layers would reintroduce
-    /// exactly the truncation the buffer avoids, since `ReaderExecutor` clamps object reads to
-    /// `StoredObject::bytes_size` and the filesystem cache takes it as the file size and as the
-    /// `read_until_position` bound. Report the size as unknown instead, which makes those bounded
-    /// fast paths step aside and lets the buffer itself decide where the data ends.
-    ///
-    /// S3 is deliberately not treated this way: `ReadBufferFromS3` learns the object size from the
-    /// endpoint during the read rather than from this pre-read size, so for it the outer size is
-    /// not tied to the generation this read pins, and nothing here changes its behaviour.
-    const bool size_measured_before_the_read_is_authoritative
-        = !pinned_generation.empty() || object_storage->getType() != ObjectStorageType::Azure;
-
-    /// Both caches address the data by absolute offset within a file of a known length, so neither
-    /// can hold an object whose size is not authoritative. `ReadPipeline` skips their stages for
-    /// such an object in any case; deciding it here keeps the log honest as well.
-    if (!size_measured_before_the_read_is_authoritative)
-    {
-        use_filesystem_cache = false;
-        use_page_cache = false;
-    }
-
     // Create a read buffer that will prefetch the first ~1 MB of the file.
     // When reading lots of tiny files, this prefetching almost doubles the throughput.
     // For bigger files, parallel reading is more useful.
     const bool object_too_small = is_size_known
         && object_size <= 2 * context_->getSettingsRef()[Setting::max_download_buffer_size];
-
-    /// The prefetching wrapper is another consumer of the pre-read size: `AsynchronousBoundedReadBuffer`
-    /// takes `getFileSize` of the buffer it wraps in its constructor, and `setReadUntilEnd` (called
-    /// right after the pipeline is built) turns that value into the hard right bound of the whole
-    /// read. For an unpinned Azure read that size is a statement about a generation of the blob that
-    /// the read is not tied to - and asking the endpoint again would only measure one more generation
-    /// before the `GET` - so a blob grown between the measurement and the download would be cut back
-    /// to the stale size, which is exactly the truncation the size is reported as unknown to avoid.
-    /// Such a read is therefore served without the prefetch, by the buffer that knows where the data
-    /// of the generation it reads actually ends.
     const bool use_prefetch = object_too_small
-        && size_measured_before_the_read_is_authoritative
         && modified_read_settings.remote_fs_settings.method == RemoteFSReadMethod::threadpool
         && modified_read_settings.remote_fs_settings.prefetch;
 
@@ -1888,8 +1853,7 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBuffer(
     /// filename to `readWithDistributedCache` (it ends up in `getFileName()` and in
     /// `system.distributed_cache_log.filename`). Use the object path so the DC log
     /// shows a useful name rather than an empty string.
-    const auto stored_object_size
-        = is_size_known && size_measured_before_the_read_is_authoritative ? object_size : StoredObject::UnknownSize;
+    const auto stored_object_size = is_size_known ? object_size : StoredObject::UnknownSize;
     StoredObject stored_object(object_info.getPath(), object_info.getPath(), stored_object_size, object_info.read_source_index);
     stored_object.etag = pinned_generation;
     pipeline.setSource(object_storage, StoredObjects{stored_object}, modified_read_settings);

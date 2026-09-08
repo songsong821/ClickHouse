@@ -95,6 +95,13 @@ void checkReturnedETag(const Azure::Storage::Blobs::Models::DownloadBlobResult &
         path, expected_etag, response_etag);
 }
 
+/// A range that starts at or past the end of a blob is refused with `416 Range Not Satisfiable`,
+/// which is the endpoint stating that the object has no byte at the requested offset.
+bool isRangeRefused(const Azure::Core::RequestFailedException & e)
+{
+    return e.StatusCode == Azure::Core::Http::HttpStatusCode::RangeNotSatisfiable;
+}
+
 /// The `If-Match` precondition was evaluated by the endpoint and failed: the object is no longer
 /// the one the read started from. That is not a transient error, so it must not be retried.
 void rethrowIfObjectChanged(const Azure::Core::RequestFailedException & e, const String & expected_etag, const String & path)
@@ -178,10 +185,17 @@ void ReadBufferFromAzureBlobStorage::discardCurrentDownload()
         initialized = false;
     }
     reported_object_size = 0;
+    end_of_object_probed = false;
+    end_of_object_confirmed = false;
 }
 
 bool ReadBufferFromAzureBlobStorage::nextImpl()
 {
+    /// The endpoint has already stated that the object has no byte at this offset, and nothing
+    /// moved the read since - see `end_of_object_confirmed`.
+    if (end_of_object_confirmed)
+        return false;
+
     if (read_until_position)
     {
         if (read_until_position == offset)
@@ -192,7 +206,11 @@ bool ReadBufferFromAzureBlobStorage::nextImpl()
     }
 
     if (!initialized)
+    {
         initialize(/* attempt */ 0);
+        if (end_of_object_confirmed)
+            return false;
+    }
 
     if (use_external_buffer)
     {
@@ -206,7 +224,12 @@ bool ReadBufferFromAzureBlobStorage::nextImpl()
     size_t sleep_time_with_backoff_milliseconds = 100;
     ProfileEventTimeIncrement<Microseconds> watch(ProfileEvents::ReadBufferFromAzureMicroseconds);
 
-    for (size_t i = 0; i < max_single_read_retries; ++i)
+    /// The budget of attempts of this read. Confirming the end of an object whose size is not known
+    /// locally (see below) takes one request that is a normal part of the read rather than a retry
+    /// of a failed one, so it raises the budget by one instead of spending it.
+    size_t max_attempts = max_single_read_retries;
+
+    for (size_t i = 0; i < max_attempts; ++i)
     {
         bool premature_end_of_response = false;
         try
@@ -218,23 +241,54 @@ bool ReadBufferFromAzureBlobStorage::nextImpl()
                 read_settings.remote_throttler->throttle(bytes_read);
 
             if (bytes_read != 0)
+            {
+                /// Data arrived, so the object does not end where the previous response ended.
+                end_of_object_probed = false;
                 break;
+            }
 
             /// The body of the current response is exhausted. That is the end of the file only if
             /// the response delivered everything it was supposed to deliver - see `getEndOfData`.
             /// An endpoint that caps a request to a shorter response would otherwise silently
             /// truncate the file at the end of that response body.
             if (static_cast<size_t>(offset) >= getEndOfData())
-                break;
+            {
+                /// A locally known end of the data is authoritative, and so is one that a freshly
+                /// opened download has already confirmed.
+                if (isEndOfDataKnownLocally() || end_of_object_probed)
+                    break;
+
+                /// Nothing is known locally about where the data of this object ends, so the only
+                /// statement about it is the `Content-Range` total of a response of this very read,
+                /// and one response is not taken at its word: an endpoint that caps an open-ended
+                /// `GET` and reports the length of what it sent as the size of the whole object
+                /// would silently truncate the file exactly here. The end is accepted only after a
+                /// download freshly opened at this offset delivers nothing either, or the endpoint
+                /// refuses the range outright - which is how a real one answers a range past the
+                /// end of a blob, see `isRangeRefused`.
+                ///
+                /// This detects an endpoint that caps its responses, which is what a proxy or a
+                /// gateway in front of the storage does. An endpoint that answers the fresh request
+                /// short as well cannot be caught by any number of requests; only a locally known
+                /// size bounds a read against one of those.
+                end_of_object_probed = true;
+                initialized = false;
+                initialize(/* attempt */ i);
+                if (end_of_object_confirmed)
+                    break;
+
+                ++max_attempts;
+                continue;
+            }
 
             premature_end_of_response = true;
         }
         catch (const Azure::Core::RequestFailedException & e)
         {
             ProfileEvents::increment(ProfileEvents::ReadBufferFromAzureRequestsErrors);
-            LOG_DEBUG(log, "Exception caught during Azure Read for file {} at attempt {}/{}: {}", path, i + 1, max_single_read_retries, e.Message);
+            LOG_DEBUG(log, "Exception caught during Azure Read for file {} at attempt {}/{}: {}", path, i + 1, max_attempts, e.Message);
 
-            if (i + 1 == max_single_read_retries || !isRetryableAzureException(e))
+            if (i + 1 == max_attempts || !isRetryableAzureException(e))
                 throw;
 
             sleepForMilliseconds(sleep_time_with_backoff_milliseconds);
@@ -245,12 +299,12 @@ bool ReadBufferFromAzureBlobStorage::nextImpl()
         catch (...)
         {
             ProfileEvents::increment(ProfileEvents::ReadBufferFromAzureRequestsErrors);
-            LOG_DEBUG(log, "Exception caught during Azure Read for file {} at attempt {}/{}: {}", path, i + 1, max_single_read_retries, getCurrentExceptionMessage(false));
+            LOG_DEBUG(log, "Exception caught during Azure Read for file {} at attempt {}/{}: {}", path, i + 1, max_attempts, getCurrentExceptionMessage(false));
             /// It doesn't make sense to retry allocator errors
             if (getCurrentExceptionCode() == ErrorCodes::CANNOT_ALLOCATE_MEMORY)
                 throw;
 
-            if (i + 1 == max_single_read_retries)
+            if (i + 1 == max_attempts)
                 throw;
 
             sleepForMilliseconds(sleep_time_with_backoff_milliseconds);
@@ -269,9 +323,9 @@ bool ReadBufferFromAzureBlobStorage::nextImpl()
 
             ProfileEvents::increment(ProfileEvents::ReadBufferFromAzureRequestsErrors);
             LOG_DEBUG(log, "Premature end of the response at offset {} while reading until position {} for file {} at attempt {}/{}",
-                offset, end_of_data, path, i + 1, max_single_read_retries);
+                offset, end_of_data, path, i + 1, max_attempts);
 
-            if (i + 1 == max_single_read_retries)
+            if (i + 1 == max_attempts)
                 throw Exception(ErrorCodes::UNEXPECTED_END_OF_FILE,
                     "Premature end of the response from Azure Blob Storage at offset {} while reading until position {} of file {}",
                     offset, end_of_data, path);
@@ -345,8 +399,11 @@ off_t ReadBufferFromAzureBlobStorage::seek(off_t offset_, int whence)
     }
 
     /// A seek starts a new logical read, so the lower bound on the object size learnt from the
-    /// responses of the previous one does not carry over.
+    /// responses of the previous one does not carry over, and neither does anything the endpoint
+    /// said about where the object ends.
     reported_object_size = 0;
+    end_of_object_probed = false;
+    end_of_object_confirmed = false;
     offset = offset_;
     return offset;
 }
@@ -354,27 +411,6 @@ off_t ReadBufferFromAzureBlobStorage::seek(off_t offset_, int whence)
 off_t ReadBufferFromAzureBlobStorage::getPosition()
 {
     return offset - available();
-}
-
-std::optional<size_t> ReadBufferFromAzureBlobStorage::boundingObjectSize() const
-{
-    if (!known_object_size)
-        return {};
-
-    /// The size was measured on the generation of the object that the `LIST` or the `HEAD` saw. It
-    /// is a hard end of the data only if this read serves that very generation, which is what
-    /// `If-Match` guarantees. Without a generation to pin the read to, the caller asked to read
-    /// whatever generation exists now - only without protection against a torn read - and a blob
-    /// grown from 100 to 200 bytes between the measurement and the `GET` must not be cut back to
-    /// the stale 100 bytes. The size is then not used at all: `getEndOfData` falls back to the
-    /// lower bound reported by the responses of this read.
-    /// A size of zero is not an exception to this: an object that a listing showed as empty can
-    /// have been rewritten with data before the `GET`, and an unpinned read must hand that data
-    /// over instead of reporting the end of the file without ever making a request.
-    if (expected_etag.empty())
-        return {};
-
-    return known_object_size;
 }
 
 size_t ReadBufferFromAzureBlobStorage::getEndOfData() const
@@ -385,16 +421,18 @@ size_t ReadBufferFromAzureBlobStorage::getEndOfData() const
         return static_cast<size_t>(read_until_position);
 
     /// For an unbounded read the size that the object had when it was listed or headed - before
-    /// this read started - is the next best bound, as long as the download is pinned to that same
-    /// generation of the object with `If-Match`, so that the size and the data describe one and
-    /// the same generation.
-    if (const auto bounding_size = boundingObjectSize())
-        return *bounding_size;
+    /// this read started - is the next best bound, and it is authoritative in both directions for
+    /// the same reason: it is local information, and it is the length of the file as far as every
+    /// layer above this buffer is concerned - see `known_object_size`.
+    if (known_object_size)
+        return *known_object_size;
 
     /// Nothing is known locally. The size of the object advertised by the download response
     /// itself (`Content-Range`) is the only statement about where the data ends. It is remote
     /// data, so it is only used as a lower bound: a response that ends before it is treated as a
-    /// premature end of the response, while a response that goes past it is read to its real end.
+    /// premature end of the response, while a response that goes past it is read to its real end,
+    /// and reaching it is not the end of the file until a freshly opened download confirms that
+    /// there is nothing there - see `nextImpl`.
     return reported_object_size;
 }
 
@@ -478,6 +516,21 @@ void ReadBufferFromAzureBlobStorage::initialize(size_t attempt)
 
             rethrowIfObjectChanged(e, expected_etag, path);
 
+            /// The endpoint refuses to serve a range that begins here, and none of the responses of
+            /// this read claimed that the object reaches this far. For a read that has no locally
+            /// known end of the data that is the only positive statement about the end of the object
+            /// there is, and it is what `nextImpl` asks for when it reopens a download to find out
+            /// whether an exhausted response body was the end of the file. A refused range anywhere
+            /// else - inside a bound the caller set, inside a size that was measured locally, or
+            /// inside the object the endpoint itself advertised - is an error and is thrown.
+            if (isRangeRefused(e) && !isEndOfDataKnownLocally() && static_cast<size_t>(offset) >= reported_object_size)
+            {
+                LOG_DEBUG(log, "Azure Blob Storage refused a range starting at offset {} of file {}, which is the end of the object",
+                    offset, path);
+                end_of_object_confirmed = true;
+                return;
+            }
+
             if (i + 1 == max_single_download_retries || !isRetryableAzureException(e))
                 throw;
 
@@ -522,17 +575,17 @@ void ReadBufferFromAzureBlobStorage::initialize(size_t attempt)
     /// on a premature end of the response instead).
     ///
     /// The size that the object had when it was listed or headed is trustworthy for the same
-    /// reason, as long as the download is pinned to that generation with `If-Match` - see
-    /// `boundingObjectSize`.
+    /// reason - it is local information - see `known_object_size`.
     ///
     /// When neither is available, the `Content-Length` of the response, chosen by the remote
     /// endpoint, is deliberately not consulted: a length that under-reports the body would
     /// otherwise turn into a hard end of the file and silently truncate the data. The actual end
-    /// of the data is then wherever the response body actually ends.
+    /// of the data is then wherever the response body actually ends, confirmed by a request that
+    /// finds nothing there - see `nextImpl`.
     if (read_until_position)
         total_size = static_cast<size_t>(read_until_position);
-    else if (const auto bounding_size = boundingObjectSize())
-        total_size = *bounding_size;
+    else if (known_object_size)
+        total_size = *known_object_size;
     else
         total_size = std::numeric_limits<size_t>::max();
 
@@ -574,17 +627,16 @@ size_t copyFromAzureBodyStream(Azure::Core::IO::BodyStream & body_stream, char *
 size_t ReadBufferFromAzureBlobStorage::readBigAt(char * to, size_t n, size_t range_begin, const std::function<bool(size_t)> & /*progress_callback*/) const
 {
     /// The size the object had when it was listed or headed bounds a positioned read as much as a
-    /// sequential one, and under the same condition - the read has to be pinned to the generation
-    /// that size was measured on (see `getEndOfData` and `boundingObjectSize`). It is applied
-    /// before the request is made, so that an endpoint answering a range that crosses the end of
-    /// the object with more data than the object holds cannot have that data handed to the caller
-    /// under offsets past the end of the object. A read that starts at or past the end is the
-    /// documented end of file.
-    if (const auto bounding_size = boundingObjectSize())
+    /// sequential one (see `getEndOfData` and `known_object_size`). It is applied before the
+    /// request is made, so that an endpoint answering a range that crosses the end of the object
+    /// with more data than the object holds cannot have that data handed to the caller under
+    /// offsets past the end of the object. A read that starts at or past the end is the documented
+    /// end of file.
+    if (known_object_size)
     {
-        if (range_begin >= *bounding_size)
+        if (range_begin >= *known_object_size)
             return 0;
-        n = std::min(n, *bounding_size - range_begin);
+        n = std::min(n, *known_object_size - range_begin);
     }
 
     size_t initial_n = n;

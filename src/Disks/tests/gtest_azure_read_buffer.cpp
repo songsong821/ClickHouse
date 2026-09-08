@@ -57,6 +57,7 @@ namespace DB::ErrorCodes
     extern const int FILE_CHANGED_DURING_READ;
     extern const int BACKUP_DAMAGED;
     extern const int AZURE_BLOB_STORAGE_ERROR;
+    extern const int FILE_DOESNT_EXIST;
 }
 
 namespace
@@ -137,7 +138,11 @@ struct ETagBehaviour
 /// request with `200 OK` and the object from byte 0, the way an endpoint that does not support
 /// ranged requests does. With `blob_size_after_first`, the total advertised in `Content-Range`
 /// changes to that value from the second response on (an endpoint whose idea of the object size
-/// is not stable across the requests of one read).
+/// is not stable across the requests of one read). With `refuse_range_past_the_data`, a ranged
+/// request that begins at `served_size` or beyond is answered with `416 Range Not Satisfiable`, the
+/// way a real endpoint answers a range past the end of a blob, instead of with an empty body; with
+/// `blob_missing`, a `HEAD` is answered with `404 Not Found`, the way one for a blob that is not
+/// there is.
 class MisbehavingRangeTransport : public Azure::Core::Http::HttpTransport
 {
 public:
@@ -149,7 +154,9 @@ public:
         std::optional<int64_t> reported_length_ = {},
         bool ignore_range_ = false,
         ETagBehaviour etags_ = {},
-        std::optional<size_t> blob_size_after_first_ = {})
+        std::optional<size_t> blob_size_after_first_ = {},
+        bool refuse_range_past_the_data_ = false,
+        bool blob_missing_ = false)
         : max_response_size(max_response_size_)
         , served_size(served_size_)
         , blob_size(blob_size_)
@@ -158,6 +165,8 @@ public:
         , ignore_range(ignore_range_)
         , etags(std::move(etags_))
         , blob_size_after_first(blob_size_after_first_)
+        , refuse_range_past_the_data(refuse_range_past_the_data_)
+        , blob_missing(blob_missing_)
     {
     }
 
@@ -229,6 +238,8 @@ public:
         if (request.GetMethod() == Azure::Core::Http::HttpMethod::Head)
         {
             ++head_requests;
+            if (blob_missing)
+                return notFound();
             auto properties = std::make_unique<Azure::Core::Http::RawResponse>(1, 1, Azure::Core::Http::HttpStatusCode::Ok, "OK");
             properties->SetHeader("Content-Length", std::to_string(blob_size));
             if (send_etag)
@@ -289,6 +300,13 @@ public:
         const size_t response_size = range_start < served_size
             ? std::min(max_response_size, served_size - range_start)
             : 0;
+
+        /// A real endpoint refuses a range that begins where it has nothing to serve, rather than
+        /// answering with an empty body. That refusal is the only positive statement about the end
+        /// of an object whose size the reader does not know locally.
+        if (refuse_range_past_the_data && !ignore_range && range_start >= served_size)
+            return rangeNotSatisfiable();
+
         const size_t range_end = range_start + (response_size == 0 ? 0 : response_size - 1);
 
         auto response = ignore_range
@@ -346,6 +364,24 @@ private:
         return failure;
     }
 
+    static std::unique_ptr<Azure::Core::Http::RawResponse> rangeNotSatisfiable()
+    {
+        auto failure = std::make_unique<Azure::Core::Http::RawResponse>(
+            1, 1, Azure::Core::Http::HttpStatusCode::RangeNotSatisfiable, "The range specified is invalid for the current size of the resource.");
+        failure->SetHeader("Content-Length", "0");
+        failure->SetBodyStream(std::make_unique<LyingBodyStream>(std::vector<uint8_t>{}, 0));
+        return failure;
+    }
+
+    static std::unique_ptr<Azure::Core::Http::RawResponse> notFound()
+    {
+        auto failure = std::make_unique<Azure::Core::Http::RawResponse>(
+            1, 1, Azure::Core::Http::HttpStatusCode::NotFound, "The specified blob does not exist.");
+        failure->SetHeader("Content-Length", "0");
+        failure->SetBodyStream(std::make_unique<LyingBodyStream>(std::vector<uint8_t>{}, 0));
+        return failure;
+    }
+
     size_t max_response_size;
     size_t served_size;
     size_t blob_size;
@@ -354,6 +390,8 @@ private:
     bool ignore_range;
     ETagBehaviour etags;
     std::optional<size_t> blob_size_after_first;
+    bool refuse_range_past_the_data;
+    bool blob_missing;
     size_t responses_sent = 0;
     std::string uploaded;
     std::vector<std::string> natively_copied_generations;
@@ -415,13 +453,14 @@ std::string readWithoutRightBound(
     std::optional<size_t> served_size = {},
     std::optional<size_t> known_object_size = {},
     std::optional<size_t> blob_size_after_first = {},
-    const std::string & expected_etag = {})
+    const std::string & expected_etag = {},
+    bool refuse_range_past_the_data = false)
 {
     Azure::Storage::Blobs::BlobClientOptions client_options;
     client_options.Retry.MaxRetries = 0;
     client_options.Transport.Transport = std::make_shared<MisbehavingRangeTransport>(
         max_response_size, served_size.value_or(blob_size), blob_size, /* send_etag */ true, reported_length,
-        /* ignore_range */ false, ETagBehaviour{}, blob_size_after_first);
+        /* ignore_range */ false, ETagBehaviour{}, blob_size_after_first, refuse_range_past_the_data);
 
     auto container_client = std::make_shared<const DB::AzureBlobStorage::ContainerClient>(
         Azure::Storage::Blobs::BlobContainerClient("http://azure.invalid/container", client_options), /* blob_prefix */ "");
@@ -857,12 +896,14 @@ struct PlainRewritableMoveOutcome
 /// somebody else overwrites the source blob after the copy and before the delete. With `pin`
 /// disabled, the copy and the delete address the blob by path only, the way the operation did
 /// before it pinned them - the endpoint holds `send_etag` and honours `If-Match` in both cases.
+/// With `blob_missing`, the endpoint answers the `HEAD` that names the generation with `404`.
 PlainRewritableMoveOutcome movePlainRewritableFile(
-    bool overwrite_between_copy_and_delete, bool pin = true, bool send_etag = true)
+    bool overwrite_between_copy_and_delete, bool pin = true, bool send_etag = true, bool blob_missing = false)
 {
     auto transport = std::make_shared<MisbehavingRangeTransport>(
         100, 100, 100, send_etag, /* reported_length */ std::nullopt, /* ignore_range */ false,
-        ETagBehaviour{.etag = ETagBehaviour::first_generation, .etag_after_first = "", .honour_if_match = true});
+        ETagBehaviour{.etag = ETagBehaviour::first_generation, .etag_after_first = "", .honour_if_match = true},
+        /* blob_size_after_first */ std::nullopt, /* refuse_range_past_the_data */ false, blob_missing);
     auto object_storage = objectStorageOver(transport);
 
     std::optional<int> error_code;
@@ -1031,11 +1072,10 @@ TEST(AzureReadBigAt, OnFreshBuffer)
     assertCountsUpFromZero(destination);
 }
 
-/// The object is known locally to be 100 bytes long and the read is pinned to the generation that
-/// size was measured on, but the endpoint holds 128 bytes and answers a positioned read of bytes
-/// 96..111 with all 16 of them (`206 bytes 96-111/128`). Only the 4 bytes before the locally known
-/// end of the object exist, so only those may reach the caller: for a pinned read the local size
-/// bounds a positioned read as much as a sequential one.
+/// The object is known locally to be 100 bytes long, but the endpoint holds 128 bytes and answers
+/// a positioned read of bytes 96..111 with all 16 of them (`206 bytes 96-111/128`). Only the 4
+/// bytes before the locally known end of the object exist, so only those may reach the caller: the
+/// local size bounds a positioned read as much as a sequential one.
 TEST(AzureReadBigAt, OverlongResponseCrossingKnownEndOfObject)
 {
     auto buffer = makeFreshBuffer(
@@ -1054,8 +1094,8 @@ TEST(AzureReadBigAt, OverlongResponseCrossingKnownEndOfObject)
         ASSERT_EQ(static_cast<uint8_t>(destination[i]), 0xAB) << "at position " << i;
 }
 
-/// A positioned pinned read that starts at or past the locally known end of the object is the end
-/// of the file, whatever the endpoint would be willing to serve there.
+/// A positioned read that starts at or past the locally known end of the object is the end of the
+/// file, whatever the endpoint would be willing to serve there.
 TEST(AzureReadBigAt, StartsPastKnownEndOfObject)
 {
     auto buffer = makeFreshBuffer(
@@ -1181,6 +1221,70 @@ TEST(AzureReadWithoutRightBound, ShrinkingReportedObjectSize)
     }
 }
 
+/// The endpoint caps every open-ended request to 40 bytes and reports the object as 40 bytes long
+/// in the `Content-Range` of that very response, while it does hold - and will serve, when asked
+/// again - all 100 bytes. The total advertised by one response is not the end of the file: the read
+/// must reopen the download at the offset it reached and reassemble the whole object. The retry
+/// budget is left at one to pin down that confirming the end of the object is a normal request and
+/// does not spend it.
+TEST(AzureReadWithoutRightBound, UnderReportedObjectSize)
+{
+    std::string data;
+    ASSERT_NO_THROW(data = readWithoutRightBound(
+        /* max_response_size */ 40, /* blob_size */ 40, /* buffer_size */ 64, /* reported_length */ 40,
+        /* max_read_retries */ 1, /* served_size */ 100));
+
+    ASSERT_EQ(data.size(), static_cast<size_t>(100));
+    assertCountsUpFromZero(data);
+}
+
+/// The same read against an endpoint that answers a range past the end of the blob the way a real
+/// one does, with `416 Range Not Satisfiable`. That refusal is the endpoint stating that the object
+/// has no byte at that offset, so it ends the read instead of failing it.
+TEST(AzureReadWithoutRightBound, RangePastTheObjectRefused)
+{
+    std::string data;
+    ASSERT_NO_THROW(data = readWithoutRightBound(
+        /* max_response_size */ 40, /* blob_size */ 100, /* buffer_size */ 64, /* reported_length */ 40,
+        /* max_read_retries */ 4, /* served_size */ 100, /* known_object_size */ std::nullopt,
+        /* blob_size_after_first */ std::nullopt, /* expected_etag */ {}, /* refuse_range_past_the_data */ true));
+
+    ASSERT_EQ(data.size(), static_cast<size_t>(100));
+    assertCountsUpFromZero(data);
+}
+
+/// An empty blob whose size is not known locally: the first request is already a range past the end
+/// of the object and is refused, which is the end of the file rather than an error.
+TEST(AzureReadWithoutRightBound, EmptyObjectOfUnknownSize)
+{
+    std::string data;
+    ASSERT_NO_THROW(data = readWithoutRightBound(
+        /* max_response_size */ 100, /* blob_size */ 0, /* buffer_size */ 64, /* reported_length */ 0,
+        /* max_read_retries */ 1, /* served_size */ 0, /* known_object_size */ std::nullopt,
+        /* blob_size_after_first */ std::nullopt, /* expected_etag */ {}, /* refuse_range_past_the_data */ true));
+
+    ASSERT_TRUE(data.empty());
+}
+
+/// A refused range inside the object the endpoint itself advertised is not the end of the file: the
+/// endpoint claims a 100-byte object and refuses a range at byte 40, so the read must fail instead
+/// of accepting the refusal as the end of a 40-byte file.
+TEST(AzureReadWithoutRightBound, RangeInsideTheObjectRefused)
+{
+    try
+    {
+        readWithoutRightBound(
+            /* max_response_size */ 40, /* blob_size */ 100, /* buffer_size */ 64, /* reported_length */ 40,
+            /* max_read_retries */ 3, /* served_size */ 40, /* known_object_size */ std::nullopt,
+            /* blob_size_after_first */ std::nullopt, /* expected_etag */ {}, /* refuse_range_past_the_data */ true);
+        FAIL() << "Expected an exception on a refused range inside the advertised size of the object";
+    }
+    catch (const Azure::Core::RequestFailedException & e)
+    {
+        ASSERT_EQ(e.StatusCode, Azure::Core::Http::HttpStatusCode::RangeNotSatisfiable);
+    }
+}
+
 /// `readBigAt` asks for bytes 40..55, but the endpoint ignores the range and answers `200 OK` with
 /// the whole object from byte 0. Consuming that body would hand the caller bytes 0..15 under the
 /// offsets 40..55, so the read must fail instead.
@@ -1253,9 +1357,8 @@ TEST(AzureReadUntilPosition, RangeIgnoredOnReopen)
 }
 
 /// The size of the object is known locally, from the `LIST` or `HEAD` that produced the
-/// `StoredObject`, and the read is pinned to the generation it was measured on, while the endpoint
-/// caps every open-ended request to 40 bytes and claims in its `Content-Range` that the whole
-/// object is 40 bytes long. The locally known size wins: the reader
+/// `StoredObject`, while the endpoint caps every open-ended request to 40 bytes and claims in its
+/// `Content-Range` that the whole object is 40 bytes long. The locally known size wins: the reader
 /// must reopen the download and reassemble all 100 bytes instead of accepting the size that the
 /// very response it is validating advertises.
 TEST(AzureReadWithoutRightBound, KnownSizeShortFirstResponse)
@@ -1868,13 +1971,13 @@ TEST(AzureReadWithoutRightBound, ObjectOfUnknownSize)
 }
 
 /// A size measured before the read - by the `LIST` or the `HEAD` that produced the `StoredObject` -
-/// describes the generation of the object that was measured. It may end the read only when the read
-/// is pinned to that same generation with `If-Match`. A caller that deliberately leaves the read
-/// unpinned (a plain object-storage read with `s3_validate_etag_on_read = 0`) asked to read whatever
-/// generation exists now, only without protection against a torn read, so a blob that grew from 100
-/// to 200 bytes between the measurement and the `GET` must be delivered whole and not cut back to
-/// the stale 100 bytes.
-TEST(AzureStaleSizeWithoutPinning, UnpinnedReadIsNotCutBackToTheStaleSize)
+/// is local information, and it is the length of the file for every layer above this buffer, so it
+/// is a hard end of the data whether or not the read is pinned to a generation. An endpoint that
+/// answers with more data than that - because the blob was overwritten with a larger one, or because
+/// it is simply not answering the request that was made - must not have the excess handed to the
+/// caller under offsets that belong to the next object of a gather, to a cache entry, or to nothing
+/// at all.
+TEST(AzureKnownObjectSize, UnpinnedReadStopsAtTheKnownSize)
 {
     auto transport = std::make_shared<MisbehavingRangeTransport>(
         /* max_response_size */ 200, /* served_size */ 200, /* blob_size */ 200, /* send_etag */ true);
@@ -1886,13 +1989,13 @@ TEST(AzureStaleSizeWithoutPinning, UnpinnedReadIsNotCutBackToTheStaleSize)
 
     std::string data;
     ASSERT_NO_THROW(DB::readStringUntilEOF(data, *buffer));
-    ASSERT_EQ(data.size(), static_cast<size_t>(200));
+    ASSERT_EQ(data.size(), static_cast<size_t>(100));
     assertCountsUpFromZero(data);
 }
 
-/// The same for a positioned read: the bytes past the stale size belong to the object the endpoint
-/// holds now, and the read that is not pinned to the older generation must get them.
-TEST(AzureStaleSizeWithoutPinning, UnpinnedPositionedReadPastTheStaleSize)
+/// The same for a positioned read: a range that begins past the known end of the object is the
+/// documented end of file and is answered without a request at all.
+TEST(AzureKnownObjectSize, UnpinnedPositionedReadPastTheKnownSize)
 {
     auto transport = std::make_shared<MisbehavingRangeTransport>(
         /* max_response_size */ 200, /* served_size */ 200, /* blob_size */ 200, /* send_etag */ true);
@@ -1902,16 +2005,13 @@ TEST(AzureStaleSizeWithoutPinning, UnpinnedPositionedReadPastTheStaleSize)
     auto buffer = object_storage->readObject(object, DB::ReadSettings{});
 
     std::string data(50, '\0');
-    ASSERT_EQ(buffer->readBigAt(data.data(), data.size(), /* range_begin */ 150, /* progress_callback */ nullptr), static_cast<size_t>(50));
-    for (size_t i = 0; i < data.size(); ++i)
-        ASSERT_EQ(static_cast<unsigned char>(data[i]), static_cast<unsigned char>((150 + i) % 256)) << "at " << i;
+    ASSERT_EQ(buffer->readBigAt(data.data(), data.size(), /* range_begin */ 150, /* progress_callback */ nullptr), static_cast<size_t>(0));
 }
 
-/// A size of zero is not an exception to that rule. A blob listed as empty without an `ETag` and
-/// rewritten with data before the `GET` must be delivered, sequentially and through `readBigAt`:
-/// treating the stale zero as a hard end of the data would report the end of the file without ever
-/// making a request, and the query would silently skip the object.
-TEST(AzureStaleSizeWithoutPinning, UnpinnedReadOfAnObjectListedAsEmpty)
+/// A size of zero is a size like any other: an object that was listed as empty is read as empty,
+/// sequentially and through `readBigAt`, whatever the endpoint is willing to serve for it. Only the
+/// `StoredObject::UnknownSize` sentinel means that nothing is known - see `ObjectOfUnknownSize`.
+TEST(AzureKnownObjectSize, ReadOfAnObjectListedAsEmpty)
 {
     auto transport = std::make_shared<MisbehavingRangeTransport>(
         /* max_response_size */ 100, /* served_size */ 100, /* blob_size */ 100, /* send_etag */ true);
@@ -1923,22 +2023,16 @@ TEST(AzureStaleSizeWithoutPinning, UnpinnedReadOfAnObjectListedAsEmpty)
     auto buffer = object_storage->readObject(object, DB::ReadSettings{});
     std::string data;
     ASSERT_NO_THROW(DB::readStringUntilEOF(data, *buffer));
-    ASSERT_EQ(data.size(), static_cast<size_t>(100));
-    assertCountsUpFromZero(data);
+    ASSERT_TRUE(data.empty());
 
     auto positioned_buffer = object_storage->readObject(object, DB::ReadSettings{});
-    std::string tail(10, '\0');
-    ASSERT_EQ(
-        positioned_buffer->readBigAt(tail.data(), tail.size(), /* range_begin */ 90, /* progress_callback */ nullptr),
-        static_cast<size_t>(10));
-    for (size_t i = 0; i < tail.size(); ++i)
-        ASSERT_EQ(static_cast<unsigned char>(tail[i]), static_cast<unsigned char>(90 + i)) << "at " << i;
+    char byte = 0;
+    ASSERT_EQ(positioned_buffer->readBigAt(&byte, 1, /* range_begin */ 0, /* progress_callback */ nullptr), static_cast<size_t>(0));
 }
 
-/// A read that is pinned to the generation the size was measured on keeps the size as a hard end of
-/// the data: an endpoint answering with more data than that generation holds cannot push bytes past
-/// the end of the object to the caller.
-TEST(AzureStaleSizeWithoutPinning, PinnedReadStopsAtTheSizeOfItsGeneration)
+/// A read that is pinned to the generation the size was measured on stops there as well, and the
+/// `If-Match` of the requests does not get in the way of it.
+TEST(AzureKnownObjectSize, PinnedReadStopsAtTheSizeOfItsGeneration)
 {
     auto transport = std::make_shared<MisbehavingRangeTransport>(
         /* max_response_size */ 200, /* served_size */ 200, /* blob_size */ 200, /* send_etag */ true,
@@ -2495,17 +2589,16 @@ TEST(AzureQueueReadPinning, PlainReadIsNotPinnedWhenTheSettingIsDisabled)
     ASSERT_EQ(data.size(), 100u);
 }
 
-/// The pre-read size does not only reach `ReadBufferFromAzureBlobStorage`: `createReadBuffer` also
-/// exports it to the outer layers of the read as `StoredObject::bytes_size`, where the bounded fast
-/// paths take it as the end of the data - `ReaderExecutor` clamps its object reads to it, and the
-/// filesystem cache takes it as the file size and as the `read_until_position` bound. For a read the
-/// caller deliberately leaves unpinned these layers must not cut the object back to a size measured
-/// on an older generation, or the buffer's own refusal to trust that size would be bypassed and the
-/// query would silently truncate the object that exists now. Both tests list the blob as 100 bytes
-/// while the endpoint holds 200.
+/// The size seen before the read does not only reach `ReadBufferFromAzureBlobStorage`:
+/// `createReadBuffer` also exports it to the outer layers of the read as `StoredObject::bytes_size`,
+/// where the bounded fast paths take it as the end of the data - `ReaderExecutor` clamps its object
+/// reads to it, `AsynchronousBoundedReadBuffer` takes it as its right bound, and the filesystem
+/// cache takes it as the file size. The buffer and those layers must agree on where the file ends,
+/// whether or not the read is pinned to a generation, so all of these tests list the blob as 100
+/// bytes while the endpoint holds 200 and expect exactly the listed 100 bytes.
 
 /// The `ReaderExecutor` path (`use_reader_executor`).
-TEST(AzureStaleSizeThroughCreateReadBuffer, ReaderExecutorDoesNotCutBackAnUnpinnedRead)
+TEST(AzureListedSizeThroughCreateReadBuffer, ReaderExecutorBoundsAnUnpinnedRead)
 {
     auto transport = std::make_shared<MisbehavingRangeTransport>(
         /* max_response_size */ 200, /* served_size */ 200, /* blob_size */ 200, /* send_etag */ true);
@@ -2523,22 +2616,22 @@ TEST(AzureStaleSizeThroughCreateReadBuffer, ReaderExecutorDoesNotCutBackAnUnpinn
 
     auto entry = listingEntry(ETagBehaviour::first_generation_bare);
     auto buffer = DB::createReadBuffer(
-        entry, object_storage, context, getLogger("AzureStaleSizeThroughCreateReadBuffer"), read_settings);
+        entry, object_storage, context, getLogger("AzureListedSizeThroughCreateReadBuffer"), read_settings);
 
     std::string data;
     ASSERT_NO_THROW(DB::readStringUntilEOF(data, *buffer));
-    ASSERT_EQ(data.size(), static_cast<size_t>(200));
+    ASSERT_EQ(data.size(), static_cast<size_t>(100));
     assertCountsUpFromZero(data);
 }
 
 /// The async prefetch path (`use_prefetch` / `needAsyncPrefetch`). `AsynchronousBoundedReadBuffer`
 /// takes the size of the buffer it wraps in its constructor and `setReadUntilEnd` makes it the hard
-/// right bound of the read, so before the fix the prefetching wrapper cut the object back to the
-/// stale size even though the buffer underneath it was willing to read on.
-TEST(AzureStaleSizeThroughCreateReadBuffer, AsyncPrefetchDoesNotCutBackAnUnpinnedRead)
+/// right bound of the read; the buffer underneath reports the listed size as that size, so the two
+/// bound the read at the same offset and the small-object fast path is kept for an unpinned read.
+TEST(AzureListedSizeThroughCreateReadBuffer, AsyncPrefetchBoundsAnUnpinnedRead)
 {
-    /// The endpoint answers the size probe of the wrapper with the stale 100 bytes and then serves
-    /// the 200 bytes the blob holds now, which is the window the wrapper must not bound the read by.
+    /// The endpoint reports the 100 bytes of the listing when the prefetching wrapper asks for the
+    /// size of the file, and then serves 200 bytes for an open-ended request.
     auto transport = std::make_shared<MisbehavingRangeTransport>(
         /* max_response_size */ 200, /* served_size */ 200, /* blob_size */ 100, /* send_etag */ true);
     DB::ObjectStoragePtr object_storage = objectStorageOver(transport);
@@ -2552,21 +2645,22 @@ TEST(AzureStaleSizeThroughCreateReadBuffer, AsyncPrefetchDoesNotCutBackAnUnpinne
 
     auto entry = listingEntry(ETagBehaviour::first_generation_bare);
     auto buffer = DB::createReadBuffer(
-        entry, object_storage, context, getLogger("AzureStaleSizeThroughCreateReadBuffer"), read_settings);
+        entry, object_storage, context, getLogger("AzureListedSizeThroughCreateReadBuffer"), read_settings);
+    ASSERT_NE(typeid_cast<DB::AsynchronousBoundedReadBuffer *>(buffer.get()), nullptr);
 
     std::string data;
     ASSERT_NO_THROW(DB::readStringUntilEOF(data, *buffer));
-    ASSERT_EQ(data.size(), static_cast<size_t>(200));
+    ASSERT_EQ(data.size(), static_cast<size_t>(100));
     assertCountsUpFromZero(data);
 }
 
-/// A read that is pinned to the generation the size was measured on keeps the prefetch: the size
-/// then describes the very generation the `GET` serves, so bounding the read by it is correct and
-/// the small-object fast path must not be given up for it.
-TEST(AzureStaleSizeThroughCreateReadBuffer, PinnedReadKeepsTheAsyncPrefetch)
+/// The same on the pinned read, where the `If-Match` of every request is in play as well.
+TEST(AzureListedSizeThroughCreateReadBuffer, AsyncPrefetchBoundsAPinnedRead)
 {
     auto transport = std::make_shared<MisbehavingRangeTransport>(
-        /* max_response_size */ 100, /* served_size */ 100, /* blob_size */ 100, /* send_etag */ true);
+        /* max_response_size */ 200, /* served_size */ 200, /* blob_size */ 100, /* send_etag */ true,
+        /* reported_length */ std::nullopt, /* ignore_range */ false,
+        ETagBehaviour{.etag = ETagBehaviour::first_generation, .etag_after_first = "", .honour_if_match = true});
     DB::ObjectStoragePtr object_storage = objectStorageOver(transport);
 
     auto context = DB::Context::createCopy(getContext().context);
@@ -2577,7 +2671,7 @@ TEST(AzureStaleSizeThroughCreateReadBuffer, PinnedReadKeepsTheAsyncPrefetch)
 
     auto entry = listingEntry(ETagBehaviour::first_generation_bare);
     auto buffer = DB::createReadBuffer(
-        entry, object_storage, context, getLogger("AzureStaleSizeThroughCreateReadBuffer"), read_settings);
+        entry, object_storage, context, getLogger("AzureListedSizeThroughCreateReadBuffer"), read_settings);
     ASSERT_NE(typeid_cast<DB::AsynchronousBoundedReadBuffer *>(buffer.get()), nullptr);
 
     std::string data;
@@ -2587,11 +2681,11 @@ TEST(AzureStaleSizeThroughCreateReadBuffer, PinnedReadKeepsTheAsyncPrefetch)
 }
 
 /// The filesystem cache path (`filesystem_cache_name` with `enable_filesystem_cache`). The listed
-/// `ETag` is a usable cache key here, so before the fix the object was cached - and served - as a
-/// 100-byte file.
-TEST(AzureStaleSizeThroughCreateReadBuffer, FilesystemCacheDoesNotCutBackAnUnpinnedRead)
+/// `ETag` is a usable cache key here, so the object is cached - and served - as the 100-byte file
+/// the listing described.
+TEST(AzureListedSizeThroughCreateReadBuffer, FilesystemCacheBoundsAnUnpinnedRead)
 {
-    const std::string cache_name = "azure_stale_size_without_pinning";
+    const std::string cache_name = "azure_listed_size_through_create_read_buffer";
     const auto cache_path = std::filesystem::current_path() / (cache_name + "_cache");
     std::filesystem::remove_all(cache_path);
     std::filesystem::create_directories(cache_path);
@@ -2625,11 +2719,11 @@ TEST(AzureStaleSizeThroughCreateReadBuffer, FilesystemCacheDoesNotCutBackAnUnpin
 
     auto entry = listingEntry(ETagBehaviour::first_generation_bare);
     auto buffer = DB::createReadBuffer(
-        entry, object_storage, context, getLogger("AzureStaleSizeThroughCreateReadBuffer"), read_settings);
+        entry, object_storage, context, getLogger("AzureListedSizeThroughCreateReadBuffer"), read_settings);
 
     std::string data;
     ASSERT_NO_THROW(DB::readStringUntilEOF(data, *buffer));
-    ASSERT_EQ(data.size(), static_cast<size_t>(200));
+    ASSERT_EQ(data.size(), static_cast<size_t>(100));
     assertCountsUpFromZero(data);
 }
 
@@ -2680,6 +2774,22 @@ TEST(AzurePlainRewritableMove, ASourceWithoutAnETagIsRefused)
 
     ASSERT_TRUE(outcome.error_code.has_value());
     ASSERT_EQ(*outcome.error_code, DB::ErrorCodes::AZURE_BLOB_STORAGE_ERROR);
+    ASSERT_TRUE(outcome.copied.empty());
+    ASSERT_TRUE(outcome.deleted_generations.empty());
+}
+
+/// The blob of a file the metadata says exists is not there when the generation is named. Returning
+/// an unpinned object here would not stop the move: `copyObject` makes a `HEAD` of its own for a
+/// source without an `ETag` and would pin the copy to a blob recreated in between, while the delete
+/// that follows would still address the blob by path alone and take away whatever is there by then.
+/// The move is refused before either request is made.
+TEST(AzurePlainRewritableMove, AMissingSourceIsRefused)
+{
+    const auto outcome = movePlainRewritableFile(
+        /* overwrite_between_copy_and_delete */ false, /* pin */ true, /* send_etag */ true, /* blob_missing */ true);
+
+    ASSERT_TRUE(outcome.error_code.has_value());
+    ASSERT_EQ(*outcome.error_code, DB::ErrorCodes::FILE_DOESNT_EXIST);
     ASSERT_TRUE(outcome.copied.empty());
     ASSERT_TRUE(outcome.deleted_generations.empty());
 }
