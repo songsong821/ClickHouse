@@ -833,12 +833,26 @@ SinkToStoragePtr StorageObjectStorage::write(
     /// prefix keep seeing the stale rows.
     if (settings.truncate_on_insert)
     {
-        if (settings.split_on_write_by_size_bytes || paths.size() > 1)
-            removeStaleSplitObjects(
+        if (paths.size() > 1)
+        {
+            /// These objects were written by this table, and are deleted whatever their keys are.
+            std::vector<String> stale_keys;
+            stale_keys.reserve(paths.size() - 1);
+            for (auto it = paths.begin() + 1; it != paths.end(); ++it)
+                stale_keys.push_back(it->path);
+
+            removeStaleSplitObjects(*object_storage, stale_keys);
+        }
+        else if (settings.split_on_write_by_size_bytes)
+        {
+            /// The table has no numbered tail of its own to delete - it either never had one, or lost it
+            /// on a reload. Only a truncating insert that is split by size claims the numbered sequence.
+            removeStaleSplitObjectsByNumber(
                 *object_storage,
                 paths.front().path,
                 getStartSequenceNumber(paths.front().path, 1),
                 settings.create_new_file_on_insert);
+        }
 
         paths.resize(1);
     }

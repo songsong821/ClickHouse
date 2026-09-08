@@ -236,8 +236,11 @@ SinkPtr PartitionedStorageObjectStorageSink::createSinkForPartition(const String
     StorageObjectStorageSink::GetNextPathCallback get_next_path;
     if (query_settings.split_on_write_by_size_bytes)
     {
+        /// A partitioned sink keeps no list of the objects it has written, so there is nothing to attribute
+        /// the numbered keys of a previous insert to, and the removal is done only for a truncating insert
+        /// that is split by size and therefore claims the whole sequence.
         if (query_settings.truncate_on_insert)
-            removeStaleSplitObjects(
+            removeStaleSplitObjectsByNumber(
                 *object_storage,
                 key_for_splitting,
                 getStartSequenceNumber(key_for_splitting, 1),

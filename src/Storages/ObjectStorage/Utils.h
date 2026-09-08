@@ -29,9 +29,17 @@ std::string getNextKeyForSplittingBySize(
 /// A truncating insert overwrites the whole dataset of the table. If the previous insert has produced
 /// more objects than the current one, the leftovers have to be deleted - otherwise the stale data will be
 /// still visible both for the readers of this table and for the readers of the glob pattern over the prefix.
-/// The objects are written with consecutive numbers, so the removal stops at the first missing number.
+///
+/// This is the precise variant, for a table that has written these objects itself and still remembers them:
+/// exactly they are deleted, even if the previous insert had to skip some of the numbers because the keys
+/// were taken by someone else.
+void removeStaleSplitObjects(IObjectStorage & object_storage, const std::vector<std::string> & stale_keys);
+
+/// The same for a table that does not know the keys of the objects of the previous insert - an `INSERT` into
+/// a table function, or a table that was reloaded since then. The objects are written with consecutive numbers,
+/// so the removal stops at the first missing number.
 /// Nothing is removed if `create_new_file_on_insert` is enabled - see the comment in the implementation.
-void removeStaleSplitObjects(
+void removeStaleSplitObjectsByNumber(
     IObjectStorage & object_storage,
     const std::string & key,
     size_t sequence_number,

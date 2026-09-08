@@ -2753,14 +2753,34 @@ static String getNextPathForSplittingBySize(
 /// A truncating insert overwrites the whole dataset of the table. If the previous insert has produced
 /// more files than the current one, the leftovers have to be deleted - otherwise the stale data will be
 /// still visible both for the readers of this table and for the readers of the glob pattern over the directory.
-/// The files are written with consecutive numbers, so the removal stops at the first missing number.
 ///
-/// The numbered names are not attributed to a particular table - the engine keeps no metadata about the files
+/// This is the precise variant, for a table that has written these files itself and still remembers them:
+/// exactly they are deleted, even if the previous insert had to skip some of the numbers because the names
+/// were taken by someone else.
+static void removeStaleSplitFiles(const Strings & stale_paths)
+{
+    for (const auto & stale_path : stale_paths)
+    {
+        /// A file that is already gone is not an error, a file that cannot be deleted is:
+        /// otherwise the truncating insert would succeed with the stale data still visible.
+        std::error_code error;
+        fs::remove(stale_path, error);
+        if (error)
+            throw Exception(ErrorCodes::CANNOT_UNLINK, "Cannot remove the stale file {}: {}", stale_path, error.message());
+    }
+}
+
+
+/// The same for a table that does not know the names of the files of the previous insert - an `INSERT` into
+/// the `file` table function, or a table that was reloaded since then. The files are written with consecutive
+/// numbers, so the removal stops at the first missing number.
+///
+/// Such numbered names are not attributed to a particular table - the engine keeps no metadata about the files
 /// it has written. The removal is done only when the numbered names are unambiguously overwritten by this insert
-/// anyway: `engine_file_truncate_on_insert` claims the whole numbered sequence of the path, while
+/// anyway: a truncating insert that is split by size claims the whole numbered sequence of the path, while
 /// `engine_file_allow_create_multiple_files` lets an insert step over the names taken by someone else,
 /// and then it is not known which of the files belong to this table - nothing is deleted in that case.
-static void removeStaleSplitFiles(const String & path, size_t sequence_number, bool allow_create_multiple_files)
+static void removeStaleSplitFilesByNumber(const String & path, size_t sequence_number, bool allow_create_multiple_files)
 {
     if (allow_create_multiple_files)
         return;
@@ -3078,8 +3098,11 @@ public:
         StorageFileSink::GetNextPathCallback get_next_path;
         if (split_on_write_by_size_bytes)
         {
+            /// A partitioned sink keeps no list of the files it has written, so there is nothing
+            /// to attribute the numbered names of a previous insert to, and the removal is done only
+            /// for a truncating insert that is split by size and therefore claims the whole sequence.
             if (settings[Setting::engine_file_truncate_on_insert])
-                removeStaleSplitFiles(
+                removeStaleSplitFilesByNumber(
                     filepath,
                     getStartSequenceNumber(filepath, 1),
                     settings[Setting::engine_file_allow_create_multiple_files]);
@@ -3227,14 +3250,23 @@ SinkToStoragePtr StorageFile::write(
     ///
     /// The removal happens before the list of the paths is truncated, so that a failure to delete a file
     /// leaves the table with the whole tail still visible instead of silently hiding it until a restart.
-    if (!use_table_fd && !paths.empty() && context->getSettingsRef()[Setting::engine_file_truncate_on_insert]
-        && (split_on_write_by_size_bytes || paths.size() > 1))
+    if (!use_table_fd && !paths.empty() && context->getSettingsRef()[Setting::engine_file_truncate_on_insert])
     {
-        removeStaleSplitFiles(
-            path,
-            getStartSequenceNumber(path, 1),
-            context->getSettingsRef()[Setting::engine_file_allow_create_multiple_files]);
-        paths.resize(1);
+        if (paths.size() > 1)
+        {
+            /// These files were written by this table, and are deleted whatever their names are.
+            removeStaleSplitFiles(Strings(paths.begin() + 1, paths.end()));
+            paths.resize(1);
+        }
+        else if (split_on_write_by_size_bytes)
+        {
+            /// The table has no numbered tail of its own to delete - it either never had one, or lost it
+            /// on a reload. Only a truncating insert that is split by size claims the numbered sequence.
+            removeStaleSplitFilesByNumber(
+                path,
+                getStartSequenceNumber(path, 1),
+                context->getSettingsRef()[Setting::engine_file_allow_create_multiple_files]);
+        }
     }
 
     StorageFileSink::GetNextPathCallback get_next_path;
