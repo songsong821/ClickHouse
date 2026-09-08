@@ -222,3 +222,77 @@ for query in "${tuple_queries[@]}"; do
         <("${LOCAL[@]}" "${OFF[@]}" --query "${query}") \
         && echo "OK"
 done
+
+echo "-- a narrowing type hint decodes the statistics and the values in different value spaces:"
+echo "-- castColumn wraps the values around while the min/max Fields keep the raw physical value"
+echo "-- (issue #118383), so the row group must not be skipped by a bound the output type cannot"
+echo "-- even hold. narrow2 stores Int32 65541 and 70000, which read as UInt16 5 and 4464"
+"${LOCAL[@]}" --query "
+    INSERT INTO FUNCTION file('${DIR}/narrow1.parquet', Parquet)
+    SELECT toInt32(1000 + number) AS x FROM numbers(1000)
+    SETTINGS output_format_parquet_row_group_size = 1000, engine_file_truncate_on_insert = 1;
+
+    INSERT INTO FUNCTION file('${DIR}/narrow2.parquet', Parquet)
+    SELECT arrayJoin([toInt32(65541), toInt32(70000)]) AS x
+    SETTINGS engine_file_truncate_on_insert = 1;
+"
+echo "-- and when only one of the two bounds is unrepresentable the other one stops bounding the"
+echo "-- row group as well: narrow4 stores Int32 3 and 65537, which read as UInt16 3 and 1, so its"
+echo "-- decodable min of 3 would skip the group that holds the answer 1"
+"${LOCAL[@]}" --query "
+    INSERT INTO FUNCTION file('${DIR}/narrow3.parquet', Parquet)
+    SELECT toInt32(2) AS x FROM numbers(1000)
+    SETTINGS output_format_parquet_row_group_size = 1000, engine_file_truncate_on_insert = 1;
+
+    INSERT INTO FUNCTION file('${DIR}/narrow4.parquet', Parquet)
+    SELECT arrayJoin([toInt32(3), toInt32(65537)]) AS x
+    SETTINGS engine_file_truncate_on_insert = 1;
+"
+narrow_queries=(
+    "SELECT x FROM file('${DIR}/narrow{1,2}.parquet', Parquet, 'x UInt16') ORDER BY x LIMIT 3"
+    "SELECT x FROM file('${DIR}/narrow{1,2}.parquet', Parquet, 'x UInt16') ORDER BY x DESC LIMIT 3"
+    "SELECT x FROM file('${DIR}/narrow{3,4}.parquet', Parquet, 'x UInt16') ORDER BY x LIMIT 3"
+)
+for query in "${narrow_queries[@]}"; do
+    "${LOCAL[@]}" "${ON[@]}" --query "${query}"
+    diff \
+        <("${LOCAL[@]}" "${ON[@]}" --query "${query}") \
+        <("${LOCAL[@]}" "${OFF[@]}" --query "${query}") \
+        && echo "OK"
+done
+
+echo "-- a UUID sort key: Parquet orders UUID statistics bytewise while ClickHouse compares the two"
+echo "-- 64-bit halves in the opposite order (issue #118371), so the bytewise min/max neither bound"
+echo "-- the row group nor even stay in order. uuid2 holds the true top-1 behind its bytewise min"
+"${LOCAL[@]}" --query "
+    INSERT INTO FUNCTION file('${DIR}/uuid1.parquet', Parquet)
+    SELECT '00000000-0000-0000-0000-00000000000a'::UUID AS u FROM numbers(1000)
+    SETTINGS output_format_parquet_row_group_size = 1000, engine_file_truncate_on_insert = 1;
+
+    INSERT INTO FUNCTION file('${DIR}/uuid2.parquet', Parquet)
+    SELECT arrayJoin([
+        '00000000-0000-0001-0000-000000000014'::UUID,
+        '00000000-0000-0002-0000-000000000005'::UUID,
+        '00000000-0000-0003-0000-00000000001e'::UUID]) AS u
+    SETTINGS engine_file_truncate_on_insert = 1;
+
+    INSERT INTO FUNCTION file('${DIR}/uuid3.parquet', Parquet)
+    SELECT arrayJoin([
+        '00000000-0000-0000-ffff-ffffffffffff'::UUID,
+        'ffffffff-ffff-ffff-0000-000000000001'::UUID]) AS u
+    SETTINGS engine_file_truncate_on_insert = 1;
+"
+echo "-- uuid3 is the same mismatch seen from the other side: its bytewise min is above its bytewise"
+echo "-- max in ClickHouse order, which would be rejected as self-contradictory statistics"
+uuid_queries=(
+    "SELECT u FROM file('${DIR}/uuid{1,2}.parquet', Parquet) ORDER BY u LIMIT 3"
+    "SELECT u FROM file('${DIR}/uuid{1,2}.parquet', Parquet) ORDER BY u DESC LIMIT 3"
+    "SELECT u FROM file('${DIR}/uuid3.parquet', Parquet) ORDER BY u LIMIT 2"
+)
+for query in "${uuid_queries[@]}"; do
+    "${LOCAL[@]}" "${ON[@]}" --query "${query}"
+    diff \
+        <("${LOCAL[@]}" "${ON[@]}" --query "${query}") \
+        <("${LOCAL[@]}" "${OFF[@]}" --query "${query}") \
+        && echo "OK"
+done
