@@ -502,9 +502,24 @@ def test_result_equality_nested_joins(started_cluster):
     # vacuously and the test would pass with no filter transported at all.
     trees = {t["task"].rsplit("_", 1)[0] for t in tasks if t["task"].startswith("rf_merge_")}
     assert len(trees) == 2, tasks
-    # Bounded for the same reason as in `_check_topology`: the root may skip a broadcast whose
-    # destinations have all finished. The two trees above are what pins the shape.
-    assert sum(t["states_sent"] for t in tasks) <= 2 * (4 + 4), tasks
+
+    # The build leg, pinned exactly, is what separates a tree from all-to-all here: each of the
+    # two trees has its four build tasks serialize their partial once, for their one merge parent,
+    # where all-to-all would serialize once per destination. Asserted per task and in total, so
+    # neither a second serialization nor a missing one passes.
+    build_tasks = [t for t in tasks if not t["task"].startswith("rf_merge_")]
+    assert all(t["states_sent"] <= 1 for t in build_tasks), tasks
+    assert sum(t["states_sent"] for t in build_tasks) == 2 * 4, tasks
+
+    # The broadcast leg is deliberately not counted. How many stages a filter is delivered to is
+    # the planner's to choose: here `bid = s1.sid` and `bid = concat(s2.sid, '')` make `s1.sid`
+    # equi-joined with `big.bid`, so the second filter may also be applied to the first join's
+    # build side, and a read path that finds that site delivers to four more tasks than one that
+    # does not. Both are correct and the extra delivery prunes strictly more, so pinning a
+    # destination count here would only encode one planner's choice.
+    total_sent = sum(t["states_sent"] for t in tasks)
+    total_received = sum(t["states_received"] for t in tasks)
+    assert total_received <= total_sent, tasks
 
 
 def test_early_close_stays_correct(started_cluster):
