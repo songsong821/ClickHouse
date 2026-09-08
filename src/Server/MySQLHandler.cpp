@@ -67,7 +67,6 @@ namespace ErrorCodes
     extern const int SUPPORT_IS_DISABLED;
     extern const int UNSUPPORTED_METHOD;
     extern const int OPENSSL_ERROR;
-    extern const int SYNTAX_ERROR;
     extern const int UNKNOWN_PACKET_FROM_CLIENT;
 }
 
