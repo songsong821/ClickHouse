@@ -131,13 +131,22 @@ struct BitShiftRightImpl
     }
 
 #if USE_EMBEDDED_COMPILER
-    static constexpr bool compilable = true;
+    /// `apply` above refuses a big-integer shift amount and a negative one. The compiled body cannot
+    /// throw, so it must not answer for those at all: otherwise the same query raises an exception
+    /// until the expression gets compiled and then silently returns a value.
+    static constexpr bool compilable = !is_big_int_v<B> && is_unsigned_v<B>;
 
     static llvm::Value * compile(llvm::IRBuilder<> & b, llvm::Value * left, llvm::Value * right, bool is_signed)
     {
         if (!left->getType()->isIntegerTy())
             throw Exception(ErrorCodes::LOGICAL_ERROR, "BitShiftRightImpl expected an integral type");
-        return is_signed ? b.CreateAShr(left, right) : b.CreateLShr(left, right);
+
+        /// A shift by the width or more is zero above, while a shift by such an amount is poison. A
+        /// negative value shifted arithmetically that far answers zero too, since a negative shift
+        /// amount is rejected and only unsigned amounts reach the compiled body.
+        auto * width = llvm::ConstantInt::get(left->getType(), left->getType()->getIntegerBitWidth());
+        auto * shifted = is_signed ? b.CreateAShr(left, right) : b.CreateLShr(left, right);
+        return b.CreateSelect(b.CreateICmpULT(right, width), shifted, llvm::ConstantInt::get(left->getType(), 0));
     }
 #endif
 };
