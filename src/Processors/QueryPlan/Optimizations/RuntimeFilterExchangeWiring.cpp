@@ -17,6 +17,9 @@
 #include <Processors/QueryPlan/RuntimeFilterGeometry.h>
 #include <Processors/QueryPlan/RuntimeFilterLookup.h>
 #include <Processors/QueryPlan/SourceStepWithFilter.h>
+#if CLICKHOUSE_CLOUD
+#include <Processors/QueryPlan/ReadFromMergeTreeAtWorker.h>
+#endif
 #include <Common/logger_useful.h>
 #include <Common/typeid_cast.h>
 
@@ -108,15 +111,27 @@ void collectRuntimeFilterApplications(const ActionsDAG & dag, std::vector<Runtim
     }
 }
 
-/// FilterStep predicates and scan PREWHEREs are where pushdown leaves the applications
-/// (SourceStepWithFilter covers ReadFromMergeTreeAtWorker as well).
+/// FilterStep predicates and scan PREWHEREs are where pushdown leaves the applications.
 void collectStepApplications(const IQueryPlanStep & step, std::vector<RuntimeFilterApplication> & out)
 {
     if (const auto * filter_step = typeid_cast<const FilterStep *>(&step))
         collectRuntimeFilterApplications(filter_step->getExpression(), out);
     else if (const auto * source = dynamic_cast<const SourceStepWithFilter *>(&step))
+    {
         if (const auto & prewhere_info = source->getPrewhereInfo(); prewhere_info)
             collectRuntimeFilterApplications(prewhere_info->prewhere_actions, out);
+    }
+#if CLICKHOUSE_CLOUD
+    /// The worker scan is an `ISourceStep`, not a `SourceStepWithFilter`, so the cast above never
+    /// matches it. It still carries the pushed-down PREWHERE, and that is where a multi-key join
+    /// leaves its apply sites. Miss them and the filter has no consumer to deliver to, so the
+    /// transport is skipped as if the probe side had never applied it.
+    else if (const auto * worker_scan = typeid_cast<const ReadFromMergeTreeAtWorker *>(&step))
+    {
+        if (const auto & prewhere_info = worker_scan->getQueryInfo().prewhere_info; prewhere_info)
+            collectRuntimeFilterApplications(prewhere_info->prewhere_actions, out);
+    }
+#endif
 }
 
 struct FilterProducer
