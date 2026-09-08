@@ -18,6 +18,10 @@ from ci.praktika.utils import MetaClasses, Shell, Utils
 
 temp_dir = f"{Utils.cwd()}/ci/tmp"
 
+# Substrings identifying a sanitizer build in a build type ("amd_asan_ubsan"), a
+# job parameter string ("amd_asan_ubsan, distributed plan, parallel"), or a job
+# name.
+SANITIZERS = ("asan", "tsan", "msan", "ubsan")
 
 
 def stateless_memory_limit(source):
